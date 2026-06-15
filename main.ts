@@ -618,6 +618,7 @@ class MobileWebviewerView extends ItemView {
   subtitleEl!: HTMLElement;
   tabStripEl!: HTMLElement;
   findPanelEl?: HTMLElement;
+  morePanelEl?: HTMLElement;
   drawerEl!: HTMLElement;
   listEl!: HTMLElement;
   bookmarksTabEl!: HTMLButtonElement;
@@ -986,6 +987,19 @@ class MobileWebviewerView extends ItemView {
       progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
       item.createDiv({ cls: "mwv-download-list-url", text: entry.url });
       item.createDiv({ cls: "mwv-download-list-path", text: entry.path || entry.message });
+      const row = item.createDiv({ cls: "mwv-download-list-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      open.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.openDownloadEntry(entry);
+      });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      copy.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.copyDownloadPath(entry);
+      });
     }
   }
 
@@ -1053,12 +1067,18 @@ class MobileWebviewerView extends ItemView {
   }
 
   openDrawer(kind: "bookmarks" | "history" | "reading" | "downloads" | "console"): void {
+    this.closeMorePanel();
     this.drawerEl.addClass("is-open");
     this.renderDrawer(kind);
   }
 
   closeDrawer(): void {
     this.drawerEl.removeClass("is-open");
+  }
+
+  closeMorePanel(): void {
+    this.morePanelEl?.remove();
+    this.morePanelEl = undefined;
   }
 
   navigate(url: string, pushHistory: boolean): void {
@@ -1336,311 +1356,173 @@ class MobileWebviewerView extends ItemView {
   openMoreMenu(anchor: HTMLElement): void {
     const url = this.currentUrl || this.plugin.settings.homeUrl;
     const title = this.currentTitle || hostName(url);
-    const menu = new Menu();
+    if (this.morePanelEl) {
+      this.closeMorePanel();
+      return;
+    }
+    this.closeDrawer();
 
-    menu.addItem((item) => {
-      item
-        .setTitle("用浏览器打开")
-        .setIcon("external-link")
-        .onClick(() => window.open(url, "_blank"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Copy link")
-        .setIcon("copy")
-        .onClick(async () => {
-          await navigator.clipboard.writeText(`[${title}](${url})`);
-          new Notice("Copied link");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Share")
-        .setIcon("share-2")
-        .onClick(() => void this.plugin.sharePage(url, title));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("New tab")
-        .setIcon("plus")
-        .onClick(() => void this.newBrowserTab());
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Find in page")
-        .setIcon("search")
-        .onClick(() => this.toggleFindPanel());
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Zoom in (${this.plugin.settings.pageZoom}%)`)
-        .setIcon("zoom-in")
-        .onClick(() => void this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Zoom out")
-        .setIcon("zoom-out")
-        .onClick(() => void this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.desktopMode ? "Mobile view" : "Desktop view")
-        .setIcon("monitor-smartphone")
-        .onClick(() => void this.plugin.toggleDesktopMode(this.containerEl));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.nightMode ? "Light mode" : "Night mode")
-        .setIcon("moon")
-        .onClick(() => void this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.noImageMode ? "Images on" : "No images")
-        .setIcon("image-off")
-        .onClick(async () => {
-          await this.plugin.toggleBooleanMode("noImageMode", this.containerEl, "No image mode");
-          this.reload();
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.eyeProtectionMode ? "Eye mode off" : "Eye mode")
-        .setIcon("eye")
-        .onClick(() => void this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.adBlockEnabled ? "Ad block off" : "Ad block")
-        .setIcon("shield-check")
-        .onClick(async () => {
-          await this.plugin.toggleBooleanMode("adBlockEnabled", this.containerEl, "Ad block");
-          this.reload();
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.incognitoMode ? "Incognito off" : "Incognito")
-        .setIcon("glasses")
-        .onClick(() => void this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.fullScreenMode ? "Exit fullscreen" : "Fullscreen")
-        .setIcon("maximize")
-        .onClick(() => void this.plugin.toggleFullscreen(this.containerEl));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.jsDisabled ? "Enable JS" : "Disable JS")
-        .setIcon("file-x")
-        .onClick(async () => {
-          await this.plugin.toggleBooleanMode("jsDisabled", this.containerEl, "JavaScript");
-          this.reload();
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Switch UA (${this.plugin.settings.userAgentMode})`)
-        .setIcon("smartphone")
-        .onClick(async () => {
-          await this.plugin.toggleUserAgent(this.containerEl);
-          this.reload();
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(this.plugin.settings.rotatedMode ? "Rotate off" : "Rotate")
-        .setIcon("rotate-cw")
-        .onClick(() => void this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Font ${this.plugin.settings.readerFontScale}%`)
-        .setIcon("type")
-        .onClick(() => void this.plugin.adjustReaderFont(10, this.containerEl));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Download file")
-        .setIcon("download")
-        .onClick(async () => {
-          await this.plugin.downloadUrlFile(url);
-          this.openDrawer("downloads");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Save HTML")
-        .setIcon("file-code")
-        .onClick(async () => {
-          await this.plugin.downloadCurrentPageHtml(url, title);
-          this.openDrawer("downloads");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Save MHT")
-        .setIcon("archive")
-        .onClick(async () => {
-          await this.plugin.downloadCurrentPageMhtml(url, title);
-          this.openDrawer("downloads");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Offline page")
-        .setIcon("file-down")
-        .onClick(async () => {
-          await this.plugin.saveOfflinePage(url, title);
-          this.openDrawer("downloads");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Add desktop shortcut")
-        .setIcon("external-link")
-        .onClick(async () => {
-          const path = await this.plugin.createShortcutFile(url, title);
-          new Notice(`Saved ${path}`);
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Autofill page")
-        .setIcon("text-cursor-input")
-        .onClick(() => void this.autofillCurrentPage());
-    });
-    menu.addSeparator();
-    menu.addItem((item) => {
-      const exists = this.plugin.settings.bookmarks.some((entry) => entry.url === url);
-      item
-        .setTitle(exists ? "Remove bookmark" : "Add bookmark")
-        .setIcon("star")
-        .onClick(() => void this.toggleBookmark());
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Add to reading list")
-        .setIcon("book-open")
-        .onClick(async () => {
-          await this.plugin.addReadingList({ title, url, time: Date.now() });
-          this.renderDrawer(this.currentDrawer);
-          new Notice("Added to reading list");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Reading list (${this.plugin.settings.readingList.length})`)
-        .setIcon("library")
-        .onClick(() => this.openDrawer("reading"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Downloads (${this.plugin.settings.downloads.length})`)
-        .setIcon("download")
-        .onClick(() => this.openDrawer("downloads"));
-    });
-    menu.addSeparator();
-    menu.addItem((item) => {
-      item
-        .setTitle(`Console (${this.plugin.settings.consoleEntries.length})`)
-        .setIcon("terminal")
-        .onClick(() => this.openDrawer("console"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`User scripts (${this.plugin.getActiveUserScriptRules(url).length})`)
-        .setIcon("wand-sparkles")
-        .onClick(() => this.plugin.openSettings());
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Sniff media")
-        .setIcon("radio")
-        .onClick(async () => {
-          const assets = await this.plugin.extractPageAssets(url);
-          await navigator.clipboard.writeText(assets.media.join("\n"));
-          new Notice(`Media copied: ${assets.media.length}`);
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Page resources")
-        .setIcon("layers")
-        .onClick(async () => {
-          const assets = await this.plugin.extractPageAssets(url);
-          await navigator.clipboard.writeText([...assets.links, ...assets.media, ...assets.scripts, ...assets.styles].join("\n"));
-          new Notice("Resources copied");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("View source")
-        .setIcon("code-2")
-        .onClick(async () => {
-          const assets = await this.plugin.extractPageAssets(url);
-          await navigator.clipboard.writeText(assets.html);
-          new Notice("Source copied");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Translate (${translateModeLabel(this.plugin.settings.translateTarget)})`)
-        .setIcon("languages")
-        .onClick(() => {
-          new TranslateLanguageModal(this.app, this.plugin, url, (translateUrl) => this.navigate(translateUrl, true)).open();
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Read aloud")
-        .setIcon("volume-2")
-        .onClick(() => void this.plugin.readPageAloud(url));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("QR code")
-        .setIcon("qr-code")
-        .onClick(() => window.open(`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}`, "_blank"));
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Report URL")
-        .setIcon("shield-alert")
-        .onClick(async () => {
-          await navigator.clipboard.writeText(`Report URL\n${url}`);
-          new Notice("Report copied");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Copy console")
-        .setIcon("copy")
-        .onClick(async () => {
-          await navigator.clipboard.writeText(this.plugin.formatConsoleEntries());
-          new Notice("Console copied");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle(`Clear cache (${this.plugin.settings.pageCache.length})`)
-        .setIcon("trash")
-        .onClick(async () => {
-          await this.plugin.clearCache();
-          new Notice("Cache cleared");
-        });
-    });
-    menu.addItem((item) => {
-      item
-        .setTitle("Settings")
-        .setIcon("settings")
-        .onClick(() => this.plugin.openSettings());
-    });
+    const root = this.containerEl.children[1] as HTMLElement;
+    const panel = root.createDiv({ cls: "mwv-more-panel" });
+    this.morePanelEl = panel;
 
-    const rect = anchor.getBoundingClientRect();
-    menu.showAtPosition({ x: rect.right, y: rect.bottom, left: true }, anchor.ownerDocument);
+    const head = panel.createDiv({ cls: "mwv-more-head" });
+    head.createDiv({ cls: "mwv-more-title", text: "More" });
+    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": "Close More" } });
+    setIcon(close, "x");
+    close.addEventListener("click", () => this.closeMorePanel());
+
+    const feedback = panel.createDiv({
+      cls: "mwv-more-feedback",
+      text: `下载保存到: ${this.plugin.normalizeDownloadFolder()}`
+    });
+    const actions = panel.createDiv({ cls: "mwv-more-actions" });
+    const setFeedback = (message: string, isError = false) => {
+      feedback.setText(message);
+      feedback.toggleClass("is-error", isError);
+    };
+    const addAction = (icon: string, label: string, onClick: () => void | Promise<void>): HTMLButtonElement => {
+      const button = actions.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
+      setIcon(button, icon);
+      button.createSpan({ text: label });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        button.disabled = true;
+        setFeedback(`正在执行: ${label}`);
+        Promise.resolve(onClick())
+          .then(() => setFeedback(`已完成: ${label}`))
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setFeedback(`${label} 失败: ${message}`, true);
+            void this.plugin.addConsole("error", `${label} failed: ${message}`, url);
+            new Notice(`${label} failed`);
+          })
+          .finally(() => {
+            button.disabled = false;
+          });
+      });
+      return button;
+    };
+
+    addAction("download", `下载页 (${this.plugin.settings.downloads.length})`, () => {
+      this.closeMorePanel();
+      this.openDrawer("downloads");
+    });
+    addAction("external-link", "用浏览器打开", () => {
+      window.open(url, "_blank");
+    });
+    addAction("copy", "复制链接", async () => {
+      await navigator.clipboard.writeText(`[${title}](${url})`);
+      new Notice("Copied link");
+    });
+    addAction("share-2", "分享", () => this.plugin.sharePage(url, title));
+    addAction("plus", "新标签", () => this.newBrowserTab());
+    addAction("search", "页内查找", () => this.toggleFindPanel());
+    addAction("zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
+    addAction("zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
+    addAction("monitor-smartphone", this.plugin.settings.desktopMode ? "手机版" : "桌面版", () => this.plugin.toggleDesktopMode(this.containerEl));
+    addAction("moon", this.plugin.settings.nightMode ? "日间模式" : "夜间模式", () => this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
+    addAction("image-off", this.plugin.settings.noImageMode ? "显示图片" : "无图模式", async () => {
+      await this.plugin.toggleBooleanMode("noImageMode", this.containerEl, "No image mode");
+      this.reload();
+    });
+    addAction("eye", this.plugin.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", () => this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
+    addAction("shield-check", this.plugin.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
+      await this.plugin.toggleBooleanMode("adBlockEnabled", this.containerEl, "Ad block");
+      this.reload();
+    });
+    addAction("glasses", this.plugin.settings.incognitoMode ? "关闭无痕" : "无痕", () => this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
+    addAction("maximize", this.plugin.settings.fullScreenMode ? "退出全屏" : "全屏", () => this.plugin.toggleFullscreen(this.containerEl));
+    addAction("file-x", this.plugin.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
+      await this.plugin.toggleBooleanMode("jsDisabled", this.containerEl, "JavaScript");
+      this.reload();
+    });
+    addAction("smartphone", `UA: ${this.plugin.settings.userAgentMode}`, async () => {
+      await this.plugin.toggleUserAgent(this.containerEl);
+      this.reload();
+    });
+    addAction("rotate-cw", this.plugin.settings.rotatedMode ? "关闭横屏" : "横屏", () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
+    addAction("type", `字号 ${this.plugin.settings.readerFontScale}%`, () => this.plugin.adjustReaderFont(10, this.containerEl));
+    addAction("download", "下载文件", async () => {
+      const entry = await this.plugin.downloadUrlFile(url);
+      setFeedback(`下载完成: ${entry.path || entry.message}`);
+      this.closeMorePanel();
+      this.openDrawer("downloads");
+    });
+    addAction("file-code", "保存 HTML", async () => {
+      const entry = await this.plugin.downloadCurrentPageHtml(url, title);
+      setFeedback(`已保存: ${entry.path || entry.message}`);
+      this.closeMorePanel();
+      this.openDrawer("downloads");
+    });
+    addAction("archive", "保存 MHT", async () => {
+      const entry = await this.plugin.downloadCurrentPageMhtml(url, title);
+      setFeedback(`已保存: ${entry.path || entry.message}`);
+      this.closeMorePanel();
+      this.openDrawer("downloads");
+    });
+    addAction("file-down", "离线页面", async () => {
+      await this.plugin.saveOfflinePage(url, title);
+      this.closeMorePanel();
+      this.openDrawer("downloads");
+    });
+    addAction("external-link", "桌面快捷方式", async () => {
+      const path = await this.plugin.createShortcutFile(url, title);
+      setFeedback(`已保存: ${path}`);
+      new Notice(`Saved ${path}`);
+    });
+    addAction("text-cursor-input", "自动填表", () => this.autofillCurrentPage());
+    addAction("star", this.plugin.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签", () => this.toggleBookmark());
+    addAction("book-open", "加入稍后读", async () => {
+      await this.plugin.addReadingList({ title, url, time: Date.now() });
+      this.renderDrawer(this.currentDrawer);
+      new Notice("Added to reading list");
+    });
+    addAction("library", `稍后读 (${this.plugin.settings.readingList.length})`, () => {
+      this.closeMorePanel();
+      this.openDrawer("reading");
+    });
+    addAction("terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => {
+      this.closeMorePanel();
+      this.openDrawer("console");
+    });
+    addAction("wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => this.plugin.openSettings());
+    addAction("radio", "媒体嗅探", async () => {
+      const assets = await this.plugin.extractPageAssets(url);
+      await navigator.clipboard.writeText(assets.media.join("\n"));
+      new Notice(`Media copied: ${assets.media.length}`);
+    });
+    addAction("layers", "页面资源", async () => {
+      const assets = await this.plugin.extractPageAssets(url);
+      await navigator.clipboard.writeText([...assets.links, ...assets.media, ...assets.scripts, ...assets.styles].join("\n"));
+      new Notice("Resources copied");
+    });
+    addAction("code-2", "复制源码", async () => {
+      const assets = await this.plugin.extractPageAssets(url);
+      await navigator.clipboard.writeText(assets.html);
+      new Notice("Source copied");
+    });
+    addAction("languages", `翻译 (${translateModeLabel(this.plugin.settings.translateTarget)})`, () => {
+      new TranslateLanguageModal(this.app, this.plugin, url, (translateUrl) => this.navigate(translateUrl, true)).open();
+    });
+    addAction("volume-2", "朗读", () => this.plugin.readPageAloud(url));
+    addAction("qr-code", "二维码", () => {
+      window.open(`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}`, "_blank");
+    });
+    addAction("shield-alert", "复制报告", async () => {
+      await navigator.clipboard.writeText(`Report URL\n${url}`);
+      new Notice("Report copied");
+    });
+    addAction("copy", "复制日志", async () => {
+      await navigator.clipboard.writeText(this.plugin.formatConsoleEntries());
+      new Notice("Console copied");
+    });
+    addAction("trash", `清缓存 (${this.plugin.settings.pageCache.length})`, async () => {
+      await this.plugin.clearCache();
+      new Notice("Cache cleared");
+    });
+    addAction("settings", "设置", () => this.plugin.openSettings());
   }
 
   async autofillCurrentPage(): Promise<void> {
@@ -2449,27 +2331,55 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const panel = embed.createDiv({ cls: "mwv-extension-panel" });
     const activeScripts = this.getActiveUserScriptRules(url);
-    panel.createDiv({ cls: "mwv-extension-title", text: "More" });
+    const head = panel.createDiv({ cls: "mwv-more-head" });
+    head.createDiv({ cls: "mwv-extension-title", text: "More" });
+    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": "Close More" } });
+    setIcon(close, "x");
+    close.addEventListener("click", () => panel.remove());
+    const feedback = panel.createDiv({
+      cls: "mwv-more-feedback",
+      text: `下载保存到: ${this.normalizeDownloadFolder()}`
+    });
     const actions = panel.createDiv({ cls: "mwv-more-actions" });
+    const setFeedback = (message: string, isError = false) => {
+      feedback.setText(message);
+      feedback.toggleClass("is-error", isError);
+    };
     const addAction = (
       icon: string,
       label: string,
       onClick: () => void | Promise<void>,
-      closePanel = true
+      closePanel = false
     ): HTMLButtonElement => {
-      const button = actions.createEl("button", { cls: "mwv-more-action", attr: { type: "button" } });
+      const button = actions.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
       setIcon(button, icon);
       button.createSpan({ text: label });
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        void Promise.resolve(onClick()).then(() => {
-          if (closePanel) panel.remove();
-        });
+        button.disabled = true;
+        setFeedback(`正在执行: ${label}`);
+        void Promise.resolve(onClick())
+          .then(() => {
+            setFeedback(`已完成: ${label}`);
+            if (closePanel) panel.remove();
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setFeedback(`${label} 失败: ${message}`, true);
+            void this.addConsole("error", `${label} failed: ${message}`, url);
+            new Notice(`${label} failed`);
+          })
+          .finally(() => {
+            button.disabled = false;
+          });
       });
       return button;
     };
 
+    addAction("download", `下载页 (${this.settings.downloads.length})`, () => {
+      this.toggleDownloadsPanel(panel);
+    });
     addAction("external-link", "用浏览器打开", () => {
       window.open(url, "_blank");
     });
@@ -2781,6 +2691,19 @@ export default class MobileWebviewerPlugin extends Plugin {
       progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
       item.createDiv({ cls: "mwv-download-item-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()}` });
       item.createDiv({ cls: "mwv-download-item-path", text: entry.path || entry.message || entry.url });
+      const row = item.createDiv({ cls: "mwv-download-list-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      open.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.openDownloadEntry(entry);
+      });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      copy.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.copyDownloadPath(entry);
+      });
     }
   }
 
@@ -3309,6 +3232,30 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  async copyDownloadPath(entry: DownloadEntry): Promise<void> {
+    const path = entry.path || entry.message || entry.url;
+    await navigator.clipboard.writeText(path);
+    new Notice(`Path copied: ${path}`);
+    await this.addConsole("info", `Copied download path: ${path}`, entry.url);
+  }
+
+  async openDownloadEntry(entry: DownloadEntry): Promise<void> {
+    if (!entry.path) {
+      await this.copyDownloadPath(entry);
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(entry.path);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf(true).openFile(file);
+      new Notice(`Opened ${entry.fileName || entry.path}`);
+      await this.addConsole("info", `Opened download: ${entry.path}`, entry.url);
+      return;
+    }
+    await this.copyDownloadPath(entry);
+    new Notice("File not found in vault; path copied");
+    await this.addConsole("warn", `Download file not found: ${entry.path}`, entry.url);
+  }
+
   async downloadCurrentPageHtml(url: string, title: string): Promise<DownloadEntry> {
     const folder = this.normalizeDownloadFolder();
     await this.ensureVaultFolder(folder);
@@ -3333,7 +3280,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         message: "HTML saved"
       });
       await this.addConsole("info", `Saved HTML: ${path}`, url);
-      new Notice("HTML saved");
+      new Notice(`HTML saved: ${path}`);
       return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3364,7 +3311,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         message: "MHT saved"
       });
       await this.addConsole("info", `Saved MHT: ${path}`, url);
-      new Notice("MHT saved");
+      new Notice(`MHT saved: ${path}`);
       return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3514,8 +3461,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       } else {
         await this.downloadSingle(entry);
       }
-      new Notice("Download complete");
-      return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
+      const finalEntry = this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
+      new Notice(`Download complete: ${finalEntry.path || entry.path}`);
+      return finalEntry;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.updateDownload(entry.id, { status: "error", message });
