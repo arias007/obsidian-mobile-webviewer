@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-mobile-webviewer",
+  "version": "0.1.0",
+  "description": "A lightweight mobile-first web viewer for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "mobile",
+    "webviewer"
+  ],
+  "author": "Murat / Codex",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.25.5",
+    "obsidian": "^1.8.7",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.5"
+  }
+}
