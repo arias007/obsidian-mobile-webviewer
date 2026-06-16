@@ -167,11 +167,12 @@
 
 .mwv-tab-strip {
   display: flex;
-  gap: 6px;
+  gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
   min-width: 0;
-  padding: 0 2px 2px;
+  padding: 2px 2px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--mwv-border) 72%, transparent);
   scrollbar-width: none;
 }
 
@@ -186,23 +187,26 @@
   justify-content: center;
   flex: 0 0 auto;
   min-width: 0;
-  height: 30px;
+  height: 34px;
   border: 1px solid color-mix(in srgb, var(--mwv-border) 80%, transparent);
-  border-radius: 999px;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
   background: var(--background-secondary);
   color: var(--text-muted);
 }
 
 .mwv-browser-tab {
   gap: 6px;
-  max-width: 178px;
-  padding: 0 8px 0 11px;
+  max-width: 210px;
+  margin-right: -1px;
+  padding: 0 8px 0 12px;
 }
 
 .mwv-browser-tab.is-active {
   border-color: color-mix(in srgb, var(--mwv-accent) 42%, var(--mwv-border));
-  background: color-mix(in srgb, var(--background-primary) 82%, var(--mwv-accent));
+  background: var(--background-primary);
   color: var(--text-normal);
+  box-shadow: 0 -1px 0 var(--background-primary) inset;
 }
 
 .mwv-browser-tab-title {
@@ -234,8 +238,9 @@
 }
 
 .mwv-browser-tab-add {
-  width: 30px;
+  width: 36px;
   padding: 0;
+  margin-left: 6px;
 }
 
 .mwv-browser-tab-add svg {
@@ -1859,6 +1864,11 @@
   background: var(--background-secondary);
 }
 
+.mwv-more-wide-panel {
+  grid-column: 1 / -1;
+  max-height: min(42vh, 340px);
+}
+
 .mwv-console-title {
   color: var(--text-muted);
   font-size: 12px;
@@ -1892,6 +1902,13 @@
 .mwv-console-empty {
   min-width: 0;
   color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+
+.mwv-console-url {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
   overflow-wrap: anywhere;
 }
 

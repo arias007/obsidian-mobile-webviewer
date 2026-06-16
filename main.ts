@@ -628,6 +628,7 @@ class MobileWebviewerView extends ItemView {
   consoleTabEl!: HTMLButtonElement;
   currentUrl = "";
   currentTitle = "";
+  activeBrowserTabId = "";
   backStack: string[] = [];
   forwardStack: string[] = [];
   lastQuery = "";
@@ -652,7 +653,8 @@ class MobileWebviewerView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.build();
-    const tab = this.plugin.ensureBrowserTab(this.plugin.settings.activeBrowserTabId);
+    const tab = this.plugin.ensureBrowserTab(this.activeBrowserTabId || this.plugin.settings.activeBrowserTabId);
+    this.activeBrowserTabId = tab.id;
     this.applyBrowserTab(tab);
     this.renderTabStrip();
     this.navigate(tab.url || this.plugin.settings.homeUrl, false);
@@ -825,7 +827,7 @@ class MobileWebviewerView extends ItemView {
 
     for (const tab of tabs.slice(0, MAX_BROWSER_TABS)) {
       const item = this.tabStripEl.createEl("button", {
-        cls: tab.id === this.plugin.settings.activeBrowserTabId ? "mwv-browser-tab is-active" : "mwv-browser-tab",
+        cls: tab.id === this.activeBrowserTabId ? "mwv-browser-tab is-active" : "mwv-browser-tab",
         attr: { type: "button", title: tab.url }
       });
       item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
@@ -845,7 +847,7 @@ class MobileWebviewerView extends ItemView {
 
     const add = this.tabStripEl.createEl("button", {
       cls: "mwv-browser-tab-add",
-      attr: { type: "button", title: "New tab", "aria-label": "New tab" }
+      attr: { type: "button", title: "New Obsidian tab", "aria-label": "New Obsidian tab" }
     });
     setIcon(add, "plus");
     add.addEventListener("click", (event) => {
@@ -856,7 +858,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   async syncActiveBrowserTab(): Promise<void> {
-    const id = this.plugin.settings.activeBrowserTabId;
+    const id = this.activeBrowserTabId || this.plugin.settings.activeBrowserTabId;
     if (!id || !this.currentUrl) return;
     await this.plugin.updateBrowserTab(id, {
       title: this.currentTitle || hostName(this.currentUrl),
@@ -868,10 +870,11 @@ class MobileWebviewerView extends ItemView {
   }
 
   async switchBrowserTab(id: string): Promise<void> {
-    if (id === this.plugin.settings.activeBrowserTabId) return;
+    if (id === this.activeBrowserTabId) return;
     await this.syncActiveBrowserTab();
     const tab = this.plugin.settings.browserTabs.find((item) => item.id === id);
     if (!tab) return;
+    this.activeBrowserTabId = id;
     this.plugin.settings.activeBrowserTabId = id;
     await this.plugin.saveSettings();
     this.applyBrowserTab(tab);
@@ -886,9 +889,7 @@ class MobileWebviewerView extends ItemView {
     this.plugin.settings.browserTabs = this.plugin.settings.browserTabs.slice(0, MAX_BROWSER_TABS);
     this.plugin.settings.activeBrowserTabId = tab.id;
     await this.plugin.saveSettings();
-    this.applyBrowserTab(tab);
-    this.renderTabStrip();
-    this.navigate(url, false);
+    await this.plugin.activateBrowserView(url, true, tab.id);
   }
 
   async closeBrowserTab(id: string): Promise<void> {
@@ -908,8 +909,9 @@ class MobileWebviewerView extends ItemView {
     }
 
     tabs.splice(index, 1);
-    if (this.plugin.settings.activeBrowserTabId === id) {
+    if (this.activeBrowserTabId === id) {
       const next = tabs[Math.min(index, tabs.length - 1)];
+      this.activeBrowserTabId = next.id;
       this.plugin.settings.activeBrowserTabId = next.id;
       await this.plugin.saveSettings();
       this.applyBrowserTab(next);
@@ -1079,6 +1081,36 @@ class MobileWebviewerView extends ItemView {
   closeMorePanel(): void {
     this.morePanelEl?.remove();
     this.morePanelEl = undefined;
+  }
+
+  toggleMoreConsolePanel(panel: HTMLElement, url: string, message?: string): void {
+    const existing = panel.querySelector<HTMLElement>(".mwv-console-panel");
+    if (existing && !message) {
+      existing.remove();
+      return;
+    }
+    this.removeMoreUtilityPanels(panel);
+    const consolePanel = panel.createDiv({ cls: "mwv-console-panel mwv-more-wide-panel" });
+    consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `反馈日志 · ${hostName(url)}` });
+    const entries = this.plugin.settings.consoleEntries.slice(0, 30);
+    if (!entries.length) {
+      consolePanel.createDiv({ cls: "mwv-console-empty", text: "暂无日志。执行搜索、下载、保存、脚本后会出现在这里。" });
+      return;
+    }
+    for (const entry of entries) {
+      const row = consolePanel.createDiv({ cls: `mwv-console-row is-${entry.level}` });
+      row.createDiv({ cls: "mwv-console-level", text: entry.level });
+      const body = row.createDiv({ cls: "mwv-console-message" });
+      body.createDiv({ text: entry.message });
+      if (entry.url) body.createDiv({ cls: "mwv-console-url", text: entry.url });
+    }
+  }
+
+  removeMoreUtilityPanels(panel: HTMLElement): void {
+    [
+      ".mwv-console-panel",
+      ".mwv-downloads-panel"
+    ].forEach((selector) => panel.querySelector<HTMLElement>(selector)?.remove());
   }
 
   navigate(url: string, pushHistory: boolean): void {
@@ -1417,7 +1449,7 @@ class MobileWebviewerView extends ItemView {
       new Notice("Copied link");
     });
     addAction("share-2", "分享", () => this.plugin.sharePage(url, title));
-    addAction("plus", "新标签", () => this.newBrowserTab());
+    addAction("plus", "新 OB 标签", () => this.newBrowserTab());
     addAction("search", "页内查找", () => this.toggleFindPanel());
     addAction("zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
     addAction("zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
@@ -1484,8 +1516,7 @@ class MobileWebviewerView extends ItemView {
       this.openDrawer("reading");
     });
     addAction("terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => {
-      this.closeMorePanel();
-      this.openDrawer("console");
+      this.toggleMoreConsolePanel(panel, url);
     });
     addAction("wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => this.plugin.openSettings());
     addAction("radio", "媒体嗅探", async () => {
@@ -1718,15 +1749,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
   }
 
-  async activateBrowserView(url?: string): Promise<void> {
-    let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+  async activateBrowserView(url?: string, newTab = false, tabId?: string): Promise<void> {
+    let leaf = newTab ? undefined : this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
-      leaf = this.app.workspace.getLeaf(false);
+      leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     this.app.workspace.revealLeaf(leaf);
     const view = leaf.view;
     if (url && view instanceof MobileWebviewerView) {
+      if (tabId) view.activeBrowserTabId = tabId;
       view.openUrl(url);
     }
   }
@@ -2486,7 +2518,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction("download", `Downloads (${this.settings.downloads.length})`, () => {
       this.toggleDownloadsPanel(panel);
     }, false);
-    addAction("terminal", `Console (${this.settings.consoleEntries.length})`, () => {
+    addAction("terminal", `反馈日志 (${this.settings.consoleEntries.length})`, () => {
       this.toggleConsolePanel(panel, url);
     }, false);
     addAction("wand-sparkles", `Scripts (${activeScripts.length})`, () => {
@@ -2595,10 +2627,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.querySelector<HTMLElement>(".mwv-history-panel")?.remove();
     panel.querySelector<HTMLElement>(".mwv-downloads-panel")?.remove();
     const consolePanel = panel.createDiv({ cls: "mwv-console-panel" });
-    consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `Console · ${hostName(url)}` });
+    consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `反馈日志 · ${hostName(url)}` });
     const entries = this.settings.consoleEntries.slice(0, 10);
     if (!entries.length) {
-      consolePanel.createDiv({ cls: "mwv-console-empty", text: "No logs" });
+      consolePanel.createDiv({ cls: "mwv-console-empty", text: "暂无日志。执行搜索、下载、保存、脚本后会出现在这里。" });
       return;
     }
     for (const entry of entries) {
