@@ -193,6 +193,34 @@ interface BrowserConsoleEntry {
   url?: string;
 }
 
+interface ElectronWebviewElement extends HTMLElement {
+  src: string;
+  reload?: () => void;
+  goBack?: () => void;
+  goForward?: () => void;
+  canGoBack?: () => boolean;
+  canGoForward?: () => boolean;
+  getURL?: () => string;
+  getTitle?: () => string;
+  findInPage?: (text: string, options?: { forward?: boolean; findNext?: boolean; matchCase?: boolean }) => number;
+  stopFindInPage?: (action: "clearSelection" | "keepSelection" | "activateSelection") => void;
+  executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
+  setZoomFactor?: (factor: number) => void;
+  openDevTools?: () => void;
+  getWebContentsId?: () => number;
+}
+
+type BrowserSurfaceElement = HTMLIFrameElement | ElectronWebviewElement;
+
+interface BrowserSurfaceCallbacks {
+  onReady?: () => void | Promise<void>;
+  onNavigate?: (url: string) => void | Promise<void>;
+  onTitle?: (title: string) => void | Promise<void>;
+  onFail?: (message: string, url?: string) => void | Promise<void>;
+  onConsole?: (level: BrowserConsoleEntry["level"], message: string, url?: string) => void | Promise<void>;
+  onNewWindow?: (url: string) => void | Promise<void>;
+}
+
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   homeUrl: DEFAULT_HOME,
   searchUrl: DEFAULT_SEARCH,
@@ -611,7 +639,7 @@ function translateModeLabel(code: string): string {
 
 class MobileWebviewerView extends ItemView {
   plugin: MobileWebviewerPlugin;
-  iframeEl!: HTMLIFrameElement;
+  surfaceEl!: BrowserSurfaceElement;
   homeEl!: HTMLElement;
   addressEl!: HTMLInputElement;
   titleEl!: HTMLElement;
@@ -632,6 +660,7 @@ class MobileWebviewerView extends ItemView {
   backStack: string[] = [];
   forwardStack: string[] = [];
   lastQuery = "";
+  surfaceNavMode: "programmatic" | "back" | "forward" | "reload" | "" = "";
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
 
   constructor(leaf: WorkspaceLeaf, plugin: MobileWebviewerPlugin) {
@@ -712,33 +741,18 @@ class MobileWebviewerView extends ItemView {
     this.homeEl = frameWrap.createDiv({ cls: "mwv-home mwv-virtual-md" });
     this.buildHome();
 
-    this.iframeEl = frameWrap.createEl("iframe", {
-      cls: "mwv-frame",
-      attr: {
-        title: "Mobile Webviewer Browser",
-        sandbox: this.plugin.buildFrameSandbox(),
-        referrerpolicy: "strict-origin-when-cross-origin"
-      }
+    this.surfaceEl = this.plugin.createBrowserSurface(frameWrap, "", "mwv-frame", "Mobile Webviewer Browser", {
+      onReady: () => this.handleSurfaceReady(),
+      onNavigate: (url) => this.handleSurfaceNavigate(url),
+      onTitle: (title) => this.handleSurfaceTitle(title),
+      onFail: (message, url) => {
+        this.subtitleEl.setText(message);
+        void this.plugin.addConsole("warn", `Page load issue: ${message}`, url ?? this.currentUrl);
+      },
+      onConsole: (level, message, url) => this.plugin.addConsole(level, message, url ?? this.currentUrl),
+      onNewWindow: (url) => this.navigate(url, true)
     });
-    this.plugin.applyFrameViewPreferences(this.iframeEl);
-
-    this.iframeEl.addEventListener("load", () => {
-      void this.plugin.applyAccessibleFrameFilters(this.iframeEl, this.currentUrl);
-      this.subtitleEl.setText(hostName(this.currentUrl));
-      try {
-        const title = this.iframeEl.contentDocument?.title;
-        if (title) {
-          this.currentTitle = title;
-          this.titleEl.setText(title);
-          void this.syncActiveBrowserTab();
-          this.renderTabStrip();
-        }
-      } catch {
-        this.currentTitle = hostName(this.currentUrl);
-        void this.syncActiveBrowserTab();
-        this.renderTabStrip();
-      }
-    });
+    this.plugin.applyFrameViewPreferences(this.surfaceEl);
 
     this.drawerEl = root.createDiv({ cls: "mwv-drawer" });
     const drawerHead = this.drawerEl.createDiv({ cls: "mwv-drawer-head" });
@@ -809,6 +823,67 @@ class MobileWebviewerView extends ItemView {
     button.createSpan({ cls: "mwv-tool-label", text: label });
     button.addEventListener("click", (event) => onClick(button, event));
     return button;
+  }
+
+  isRealBrowserSurface(): boolean {
+    return this.plugin.isElectronWebview(this.surfaceEl);
+  }
+
+  setSurfaceUrl(url: string): void {
+    this.surfaceNavMode = "programmatic";
+    this.plugin.setBrowserSurfaceUrl(this.surfaceEl, url);
+  }
+
+  handleSurfaceReady(): void {
+    void this.plugin.applyAccessibleFrameFilters(this.surfaceEl, this.currentUrl);
+    this.subtitleEl.setText(hostName(this.currentUrl));
+    const title = this.plugin.getBrowserSurfaceTitle(this.surfaceEl);
+    if (title) {
+      this.handleSurfaceTitle(title);
+    }
+  }
+
+  handleSurfaceTitle(title: string): void {
+    if (!title.trim()) return;
+    this.currentTitle = title.trim();
+    this.titleEl.setText(this.currentTitle);
+    void this.syncActiveBrowserTab();
+    this.renderTabStrip();
+  }
+
+  handleSurfaceNavigate(url: string): void {
+    if (!url || url === "about:blank" || url.startsWith("devtools://")) return;
+    const nextUrl = normalizeInput(url, this.plugin.settings.searchUrl);
+    if (!nextUrl) return;
+    const previous = this.currentUrl;
+    const mode = this.surfaceNavMode;
+    this.surfaceNavMode = "";
+
+    if (previous && previous !== nextUrl) {
+      if (mode === "back") {
+        if (!this.forwardStack.includes(previous)) this.forwardStack.push(previous);
+      } else if (mode === "forward") {
+        if (!this.backStack.includes(previous)) this.backStack.push(previous);
+      } else if (mode !== "programmatic" && mode !== "reload") {
+        if (this.backStack[this.backStack.length - 1] !== previous) this.backStack.push(previous);
+        this.forwardStack = [];
+      }
+    }
+
+    this.currentUrl = nextUrl;
+    this.currentTitle = this.plugin.getBrowserSurfaceTitle(this.surfaceEl) || hostName(nextUrl);
+    this.addressEl.value = nextUrl;
+    this.titleEl.setText(this.currentTitle);
+    this.subtitleEl.setText(hostName(nextUrl));
+    void this.syncActiveBrowserTab();
+    this.renderTabStrip();
+    if (mode !== "programmatic" || previous !== nextUrl) {
+      void this.plugin.addHistory({
+        title: this.currentTitle,
+        url: nextUrl,
+        time: Date.now()
+      });
+    }
   }
 
   applyBrowserTab(tab: BrowserTab): void {
@@ -1150,6 +1225,11 @@ class MobileWebviewerView extends ItemView {
   }
 
   goBack(): void {
+    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoBack?.()) {
+      this.surfaceNavMode = "back";
+      this.surfaceEl.goBack?.();
+      return;
+    }
     const previous = this.backStack.pop();
     if (!previous) {
       new Notice("No previous page");
@@ -1160,6 +1240,11 @@ class MobileWebviewerView extends ItemView {
   }
 
   goForward(): void {
+    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoForward?.()) {
+      this.surfaceNavMode = "forward";
+      this.surfaceEl.goForward?.();
+      return;
+    }
     const next = this.forwardStack.pop();
     if (!next) {
       new Notice("No next page");
@@ -1204,6 +1289,11 @@ class MobileWebviewerView extends ItemView {
       } else {
         this.showNativeHome(this.currentUrl);
       }
+      return;
+    }
+    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.reload) {
+      this.surfaceNavMode = "reload";
+      this.surfaceEl.reload();
       return;
     }
     this.renderUrlAsNote(this.currentUrl);
@@ -1284,7 +1374,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   async renderUrlAsNote(url: string): Promise<void> {
-    this.iframeEl.src = url;
+    this.setSurfaceUrl(url);
     this.setLiveFrameMode(true);
     this.renderLoadingNote(url);
 
@@ -1304,14 +1394,15 @@ class MobileWebviewerView extends ItemView {
   }
 
   setLiveFrameMode(enabled: boolean): void {
-    const wrap = this.iframeEl.parentElement;
+    const wrap = this.surfaceEl.parentElement;
     wrap?.toggleClass("is-live-page", enabled);
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
     this.homeEl.addClass("is-visible");
     if (enabled) {
-      this.iframeEl.removeClass("is-hidden");
+      this.surfaceEl.removeClass("is-hidden");
     } else {
-      this.iframeEl.addClass("is-hidden");
+      this.plugin.setBrowserSurfaceUrl(this.surfaceEl, "about:blank");
+      this.surfaceEl.addClass("is-hidden");
       this.homeEl.removeClass("mwv-reader-strip");
     }
   }
@@ -1557,7 +1648,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   async autofillCurrentPage(): Promise<void> {
-    const count = await this.plugin.autofillFrame(this.iframeEl, this.currentUrl);
+    const count = await this.plugin.autofillFrame(this.surfaceEl, this.currentUrl);
     if (count) new Notice(`Autofilled ${count} field(s)`);
   }
 
@@ -1585,7 +1676,7 @@ class MobileWebviewerView extends ItemView {
 
     const run = async (direction = 1) => {
       const query = input.value.trim();
-      const count = await this.plugin.findInTargets(query, this.containerEl, this.iframeEl, direction);
+      const count = await this.plugin.findInTargets(query, this.containerEl, this.surfaceEl, direction);
       status.setText(query ? String(count) : "0");
     };
     input.addEventListener("input", () => void run(1));
@@ -1967,11 +2058,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const currentUrl = embed.dataset.url;
     if (currentUrl && currentUrl !== nextUrl) {
       const back = this.getEmbedStack(embed, "mwvBack");
-      back.push(currentUrl);
+      if (back[back.length - 1] !== currentUrl) back.push(currentUrl);
       this.setEmbedStack(embed, "mwvBack", back);
       this.setEmbedStack(embed, "mwvForward", []);
     }
     embed.dataset.url = nextUrl;
+    embed.dataset.mwvProgrammaticUrl = nextUrl;
     void this.persistEmbedState(embed);
   }
 
@@ -1981,6 +2073,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.pushEmbedHistory(embed, nextUrl);
     } else {
       embed.dataset.url = nextUrl;
+      embed.dataset.mwvProgrammaticUrl = nextUrl;
       void this.persistEmbedState(embed);
     }
     const query = this.extractBingQuery(nextUrl);
@@ -2002,6 +2095,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async navigateEmbedBack(embed: HTMLElement): Promise<void> {
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+    if (this.isElectronWebview(surface) && surface.canGoBack?.()) {
+      surface.goBack?.();
+      return;
+    }
     const back = this.getEmbedStack(embed, "mwvBack");
     const previous = back.pop();
     if (!previous) return;
@@ -2017,6 +2115,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async navigateEmbedForward(embed: HTMLElement): Promise<void> {
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+    if (this.isElectronWebview(surface) && surface.canGoForward?.()) {
+      surface.goForward?.();
+      return;
+    }
     const forward = this.getEmbedStack(embed, "mwvForward");
     const next = forward.pop();
     if (!next) return;
@@ -2032,6 +2135,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async refreshEmbed(embed: HTMLElement): Promise<void> {
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+    if (this.isElectronWebview(surface) && surface.reload) {
+      surface.reload();
+      return;
+    }
     await this.openUrlInEmbed(embed, embed.dataset.url ?? this.settings.homeUrl, false);
   }
 
@@ -2087,19 +2195,66 @@ export default class MobileWebviewerPlugin extends Plugin {
   renderLiveBrowserSurface(embed: HTMLElement, url: string): void {
     this.applyBrowserRuntimeClasses(embed);
     const surface = embed.createDiv({ cls: "mwv-live-browser" });
-    const frame = surface.createEl("iframe", {
-      cls: "mwv-live-frame",
-      attr: {
-        src: url,
-        title: hostName(url),
-        sandbox: this.buildFrameSandbox(true),
-        referrerpolicy: "strict-origin-when-cross-origin"
-      }
+    const frame = this.createBrowserSurface(surface, url, "mwv-live-frame", hostName(url), {
+      onReady: () => this.applyAccessibleFrameFilters(frame, embed.dataset.url || url),
+      onNavigate: (nextUrl) => this.handleEmbedSurfaceNavigate(embed, nextUrl),
+      onTitle: (title) => this.handleEmbedSurfaceTitle(embed, title),
+      onFail: (message, failedUrl) => {
+        void this.addConsole("warn", `Note Browser load issue: ${message}`, failedUrl ?? embed.dataset.url ?? url);
+      },
+      onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
+      onNewWindow: (nextUrl) => this.openUrlInEmbed(embed, nextUrl)
     });
     this.applyFrameViewPreferences(frame);
-    frame.addEventListener("load", () => {
-      void this.applyAccessibleFrameFilters(frame, url);
+  }
+
+  handleEmbedSurfaceNavigate(embed: HTMLElement, url: string): void {
+    if (!url || url === "about:blank" || url.startsWith("devtools://")) return;
+    const nextUrl = normalizeInput(url, this.settings.searchUrl);
+    const previous = embed.dataset.url;
+    const programmaticUrl = embed.dataset.mwvProgrammaticUrl;
+    if (programmaticUrl === nextUrl) {
+      delete embed.dataset.mwvProgrammaticUrl;
+    } else if (previous && previous !== nextUrl) {
+      const back = this.getEmbedStack(embed, "mwvBack");
+      if (!back.includes(previous)) {
+        back.push(previous);
+        this.setEmbedStack(embed, "mwvBack", back);
+      }
+      this.setEmbedStack(embed, "mwvForward", []);
+    }
+    embed.dataset.url = nextUrl;
+    this.updateEmbedChrome(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
+    void this.persistEmbedState(embed);
+    void this.addHistory({
+      title: this.getEmbedSurfaceTitle(embed) || hostName(nextUrl),
+      url: nextUrl,
+      time: Date.now()
     });
+  }
+
+  handleEmbedSurfaceTitle(embed: HTMLElement, title: string): void {
+    const url = embed.dataset.url || this.settings.homeUrl;
+    this.updateEmbedChrome(embed, url, title || hostName(url));
+  }
+
+  getEmbedSurfaceTitle(embed: HTMLElement): string {
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+    return surface ? this.getBrowserSurfaceTitle(surface) : "";
+  }
+
+  updateEmbedChrome(embed: HTMLElement, url: string, title: string): void {
+    const address = embed.querySelector<HTMLInputElement>(".mwv-browser-url");
+    if (address) address.value = url;
+    const form = embed.querySelector<HTMLElement>(".mwv-browser-address");
+    if (form) form.setAttribute("title", url);
+    const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
+    if (lock) lock.setText(/^https:\/\//i.test(url) ? "https" : "page");
+    const more = embed.querySelector<HTMLElement>(".mwv-browser-action");
+    if (more) {
+      more.dataset.mwvUrl = url;
+      more.dataset.mwvTitle = title;
+    }
   }
 
   renderReaderPanel(panel: HTMLElement, page: NotePage): void {
@@ -2345,11 +2500,15 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
     const more = actions.createEl("button", { cls: "mwv-browser-action", attr: { type: "button", title: "More", "aria-label": "More" } });
+    more.dataset.mwvUrl = url;
+    more.dataset.mwvTitle = title;
     setIcon(more, "more-horizontal");
     more.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.toggleMorePanel(embed, chrome, url, title);
+      const liveUrl = more.dataset.mwvUrl || embed.dataset.url || url;
+      const liveTitle = more.dataset.mwvTitle || this.getEmbedSurfaceTitle(embed) || title || hostName(liveUrl);
+      this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
     });
     this.renderBookmarksBar(embed);
   }
@@ -2492,7 +2651,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.toggleToolsPanel(panel, "Desktop shortcut", [`Saved: ${path}`]);
     }, false);
     addAction("text-cursor-input", "Autofill page", async () => {
-      const frame = embed.querySelector<HTMLIFrameElement>(".mwv-live-frame");
+      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
       if (!frame) return;
       const count = await this.autofillFrame(frame, url);
       if (count) new Notice(`Autofilled ${count} field(s)`);
@@ -2982,7 +3141,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     chrome?.insertAdjacentElement("afterend", panel) ?? embed.prepend(panel);
 
     const run = async (direction = 1) => {
-      const frame = embed.querySelector<HTMLIFrameElement>(".mwv-live-frame");
+      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
       const count = await this.findInTargets(input.value.trim(), embed, frame ?? undefined, direction);
       status.setText(input.value.trim() ? String(count) : "0");
     };
@@ -3631,6 +3790,193 @@ export default class MobileWebviewerPlugin extends Plugin {
     return tokens.filter(Boolean).join(" ");
   }
 
+  isElectronWebview(element: Element | null | undefined): element is ElectronWebviewElement {
+    return Boolean(element && element.tagName.toLowerCase() === "webview");
+  }
+
+  supportsElectronWebview(): boolean {
+    if (!document?.createElement) return false;
+    const platform = typeof process !== "undefined" ? (process as NodeJS.Process & { versions?: Record<string, string> }).versions : undefined;
+    if (!platform?.electron) return false;
+    try {
+      const probe = document.createElement("webview") as ElectronWebviewElement;
+      probe.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+      document.body?.appendChild(probe);
+      const supported =
+        typeof probe === "object" &&
+        probe.tagName.toLowerCase() === "webview" &&
+        (typeof probe.reload === "function" || typeof probe.getURL === "function" || typeof probe.executeJavaScript === "function");
+      probe.remove();
+      return supported;
+    } catch {
+      return false;
+    }
+  }
+
+  createBrowserSurface(
+    parent: HTMLElement,
+    url: string,
+    className: string,
+    title: string,
+    callbacks: BrowserSurfaceCallbacks = {}
+  ): BrowserSurfaceElement {
+    if (this.supportsElectronWebview()) {
+      const webview = document.createElement("webview") as ElectronWebviewElement;
+      webview.addClass(className);
+      webview.addClass("mwv-real-webview");
+      webview.setAttribute("title", title);
+      webview.setAttribute("allowpopups", "true");
+      webview.setAttribute("partition", this.settings.incognitoMode ? `temp:mwv-${Date.now()}` : "persist:mobile-webviewer");
+      webview.setAttribute("webpreferences", this.buildWebviewPreferences());
+      if (this.settings.userAgentMode === "desktop" || this.settings.desktopMode) {
+        webview.setAttribute("useragent", this.getUserAgentHeader());
+      } else {
+        webview.setAttribute("useragent", this.getUserAgentHeader());
+      }
+      if (url) webview.src = url;
+      parent.appendChild(webview);
+      this.bindRealBrowserSurface(webview, callbacks);
+      return webview;
+    }
+
+    const frame = parent.createEl("iframe", {
+      cls: className,
+      attr: {
+        title,
+        sandbox: this.buildFrameSandbox(className.includes("mwv-live-frame")),
+        referrerpolicy: "strict-origin-when-cross-origin"
+      }
+    });
+    if (url) frame.src = url;
+    frame.addEventListener("load", () => {
+      void callbacks.onReady?.();
+      try {
+        const frameTitle = frame.contentDocument?.title;
+        if (frameTitle) void callbacks.onTitle?.(frameTitle);
+      } catch {
+        // Cross-origin iframe title is not readable.
+      }
+    });
+    return frame;
+  }
+
+  buildWebviewPreferences(): string {
+    const preferences = [
+      "contextIsolation=yes",
+      "nativeWindowOpen=yes",
+      "sandbox=yes",
+      this.settings.jsDisabled ? "javascript=no" : "javascript=yes"
+    ];
+    return preferences.join(",");
+  }
+
+  bindRealBrowserSurface(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
+    const emitNavigate = (event: Event) => {
+      const detail = event as Event & { url?: string };
+      const url = detail.url || webview.getURL?.() || webview.src;
+      if (url) void callbacks.onNavigate?.(url);
+    };
+    const emitTitle = (event: Event) => {
+      const detail = event as Event & { title?: string };
+      const title = detail.title || webview.getTitle?.() || "";
+      if (title) void callbacks.onTitle?.(title);
+    };
+
+    webview.addEventListener("dom-ready", () => {
+      this.applyWebviewRuntime(webview);
+      void callbacks.onReady?.();
+      const title = webview.getTitle?.();
+      if (title) void callbacks.onTitle?.(title);
+    });
+    webview.addEventListener("did-navigate", emitNavigate);
+    webview.addEventListener("did-navigate-in-page", emitNavigate);
+    webview.addEventListener("page-title-updated", emitTitle);
+    webview.addEventListener("did-finish-load", () => {
+      const url = webview.getURL?.() || webview.src;
+      if (url) void callbacks.onNavigate?.(url);
+      const title = webview.getTitle?.();
+      if (title) void callbacks.onTitle?.(title);
+    });
+    webview.addEventListener("did-fail-load", (event) => {
+      const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
+      if (detail.errorCode === -3) return;
+      void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || webview.getURL?.() || webview.src);
+    });
+    webview.addEventListener("console-message", (event) => {
+      const detail = event as Event & { message?: string; level?: number };
+      const level = detail.level === 2 ? "error" : detail.level === 1 ? "warn" : "info";
+      if (detail.message) void callbacks.onConsole?.(level, detail.message, webview.getURL?.() || webview.src);
+    });
+    webview.addEventListener("new-window", (event) => {
+      const detail = event as Event & { url?: string; preventDefault?: () => void };
+      if (!detail.url) return;
+      detail.preventDefault?.();
+      void callbacks.onNewWindow?.(detail.url);
+    });
+  }
+
+  setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
+    if (this.isElectronWebview(surface)) {
+      surface.src = url;
+      return;
+    }
+    surface.src = url;
+  }
+
+  getBrowserSurfaceTitle(surface: BrowserSurfaceElement): string {
+    if (this.isElectronWebview(surface)) {
+      return surface.getTitle?.() || "";
+    }
+    try {
+      return surface.contentDocument?.title || "";
+    } catch {
+      return "";
+    }
+  }
+
+  async applyWebviewRuntime(webview: ElectronWebviewElement): Promise<void> {
+    const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200) / 100;
+    try {
+      webview.setZoomFactor?.(zoom);
+    } catch {
+      await this.addConsole("warn", "Webview zoom unavailable", webview.getURL?.() || webview.src);
+    }
+
+    const cssParts: string[] = [];
+    if (this.settings.noImageMode) {
+      cssParts.push("img,picture,source[srcset],video[poster]{display:none!important;}");
+    }
+    if (this.settings.adBlockEnabled) {
+      cssParts.push("[id*='ad' i],[class*='ad-' i],[class*='ads' i],[class*='advert' i],iframe[src*='ad' i],[aria-label*='advert' i]{display:none!important;}");
+    } else if (this.settings.markAdsEnabled) {
+      cssParts.push("[id*='ad' i],[class*='ad-' i],[class*='ads' i],[class*='advert' i],iframe[src*='ad' i],[aria-label*='advert' i]{outline:2px dashed #ef4444!important;outline-offset:2px!important;}");
+    }
+    if (this.settings.eyeProtectionMode) {
+      cssParts.push("html{background:#f3f8ea!important;} body{background:#f3f8ea!important;}");
+    }
+    if (this.settings.nightMode) {
+      cssParts.push("html{filter:brightness(.82) contrast(1.08)!important;background:#101112!important;}");
+    }
+    if (!cssParts.length || !webview.executeJavaScript) return;
+
+    const css = cssParts.join("\n");
+    const code = `
+      (() => {
+        const id = "mwv-runtime-style";
+        document.getElementById(id)?.remove();
+        const style = document.createElement("style");
+        style.id = id;
+        style.textContent = ${JSON.stringify(css)};
+        document.documentElement.appendChild(style);
+      })();
+    `;
+    try {
+      await webview.executeJavaScript(code, false);
+    } catch {
+      await this.addConsole("warn", "Webview runtime filters limited", webview.getURL?.() || webview.src);
+    }
+  }
+
   getUserAgentHeader(): string {
     if (this.settings.userAgentMode === "desktop" || this.settings.desktopMode) {
       return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -3660,12 +4006,22 @@ export default class MobileWebviewerPlugin extends Plugin {
   applyRuntimePreferencesIn(root: HTMLElement): void {
     this.applyBrowserRuntimeClasses(root);
     this.applyFramePreferencesIn(root);
-    root.querySelectorAll<HTMLIFrameElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
-      frame.setAttribute("sandbox", this.buildFrameSandbox(frame.hasClass("mwv-live-frame")));
+    root.querySelectorAll<BrowserSurfaceElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
+      if (this.isElectronWebview(frame)) {
+        frame.setAttribute("webpreferences", this.buildWebviewPreferences());
+        frame.setAttribute("useragent", this.getUserAgentHeader());
+        void this.applyWebviewRuntime(frame);
+      } else {
+        frame.setAttribute("sandbox", this.buildFrameSandbox(frame.hasClass("mwv-live-frame")));
+      }
     });
   }
 
-  async applyAccessibleFrameFilters(frame: HTMLIFrameElement, url: string): Promise<void> {
+  async applyAccessibleFrameFilters(frame: BrowserSurfaceElement, url: string): Promise<void> {
+    if (this.isElectronWebview(frame)) {
+      await this.applyWebviewRuntime(frame);
+      return;
+    }
     try {
       const doc = frame.contentDocument;
       if (!doc) return;
@@ -3711,10 +4067,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  applyFrameViewPreferences(frame: HTMLIFrameElement): void {
+  applyFrameViewPreferences(frame: BrowserSurfaceElement): void {
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200);
     frame.style.setProperty("--mwv-page-zoom", String(zoom / 100));
-    frame.style.setProperty("zoom", `${zoom}%`);
+    if (this.isElectronWebview(frame)) {
+      frame.style.setProperty("zoom", "1");
+      try {
+        frame.setZoomFactor?.(zoom / 100);
+      } catch {
+        // The webview may not be ready yet; dom-ready reapplies zoom.
+      }
+    } else {
+      frame.style.setProperty("zoom", `${zoom}%`);
+    }
     frame.toggleClass("mwv-desktop-frame", this.settings.desktopMode);
     if (this.settings.desktopMode) {
       frame.style.minWidth = "980px";
@@ -3724,7 +4089,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   applyFramePreferencesIn(root: HTMLElement): void {
-    root.querySelectorAll<HTMLIFrameElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
+    root.querySelectorAll<BrowserSurfaceElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
       this.applyFrameViewPreferences(frame);
     });
   }
@@ -3793,30 +4158,44 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  async findInTargets(query: string, root: HTMLElement, frame?: HTMLIFrameElement, direction = 1): Promise<number> {
+  async findInTargets(query: string, root: HTMLElement, frame?: BrowserSurfaceElement, direction = 1): Promise<number> {
     this.clearFindMarks(root);
     const clean = query.trim();
     if (!clean) return 0;
 
     let frameHit = 0;
     if (frame) {
-      try {
-        const win = frame.contentWindow as (Window & {
-          find?: (
-            searchString: string,
-            caseSensitive?: boolean,
-            backwards?: boolean,
-            wrapAround?: boolean,
-            wholeWord?: boolean,
-            searchInFrames?: boolean,
-            showDialog?: boolean
-          ) => boolean;
-        }) | null;
-        if (win?.find?.(clean, false, direction < 0, true, false, true, false)) {
-          frameHit = 1;
+      if (this.isElectronWebview(frame)) {
+        try {
+          frame.stopFindInPage?.("clearSelection");
+          const requestId = frame.findInPage?.(clean, {
+            forward: direction >= 0,
+            findNext: false,
+            matchCase: false
+          });
+          frameHit = requestId ? 1 : 0;
+        } catch {
+          await this.addConsole("warn", "Find skipped webview surface");
         }
-      } catch {
-        await this.addConsole("warn", "Find skipped live frame by page isolation");
+      } else {
+        try {
+          const win = frame.contentWindow as (Window & {
+            find?: (
+              searchString: string,
+              caseSensitive?: boolean,
+              backwards?: boolean,
+              wrapAround?: boolean,
+              wholeWord?: boolean,
+              searchInFrames?: boolean,
+              showDialog?: boolean
+            ) => boolean;
+          }) | null;
+          if (win?.find?.(clean, false, direction < 0, true, false, true, false)) {
+            frameHit = 1;
+          }
+        } catch {
+          await this.addConsole("warn", "Find skipped live frame by page isolation");
+        }
       }
     }
 
@@ -3940,7 +4319,62 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  async autofillFrame(frame: HTMLIFrameElement, url: string): Promise<number> {
+  async autofillFrame(frame: BrowserSurfaceElement, url: string): Promise<number> {
+    if (this.isElectronWebview(frame)) {
+      const profile = {
+        name: this.settings.autofillName.trim(),
+        email: this.settings.autofillEmail.trim(),
+        phone: this.settings.autofillPhone.trim(),
+        address: this.settings.autofillAddress.trim()
+      };
+      if (!Object.values(profile).some(Boolean)) return 0;
+      if (!frame.executeJavaScript) {
+        await this.addConsole("warn", "Autofill unavailable in webview", url);
+        return 0;
+      }
+      const code = `
+        (() => {
+          const profile = ${JSON.stringify(profile)};
+          const values = Object.values(profile).filter(Boolean);
+          if (!values.length) return 0;
+          const fill = (el, value) => {
+            if (!el || el.disabled || el.readOnly || el.value) return false;
+            el.focus();
+            el.value = value;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return true;
+          };
+          let count = 0;
+          for (const el of Array.from(document.querySelectorAll("input, textarea"))) {
+            const hint = [
+              el.name,
+              el.id,
+              el.autocomplete,
+              el.placeholder,
+              el.getAttribute("aria-label")
+            ].filter(Boolean).join(" ").toLowerCase();
+            let value = "";
+            if (/mail|email|邮箱|邮件/.test(hint)) value = profile.email;
+            else if (/phone|tel|mobile|手机号|电话/.test(hint)) value = profile.phone;
+            else if (/addr|address|地址/.test(hint)) value = profile.address;
+            else if (/name|user|姓名|名字/.test(hint)) value = profile.name;
+            if (value && fill(el, value)) count++;
+          }
+          return count;
+        })();
+      `;
+      try {
+        const result = await frame.executeJavaScript(code, true);
+        const count = typeof result === "number" ? result : 0;
+        await this.addConsole("info", `Autofill touched ${count} field(s)`, url);
+        return count;
+      } catch {
+        await this.addConsole("warn", "Autofill skipped by webview isolation", url);
+        return 0;
+      }
+    }
+
     try {
       const doc = frame.contentDocument;
       if (!doc) {
@@ -4542,7 +4976,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("User agent")
-      .setDesc("Used by internal fetch/search/download requests; live iframe UA is controlled by the host WebView.")
+      .setDesc("Used by internal fetch/search/download requests and the live browser surface where Obsidian exposes control.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("mobile", "Mobile")

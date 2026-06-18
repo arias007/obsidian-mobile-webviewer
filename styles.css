@@ -28,7 +28,8 @@
 }
 
 .mwv-night-mode .mwv-frame,
-.mwv-night-mode .mwv-live-frame {
+.mwv-night-mode .mwv-live-frame,
+.mwv-night-mode .mwv-real-webview {
   filter: brightness(0.78) contrast(1.08);
 }
 
@@ -60,7 +61,8 @@
 }
 
 .mwv-rotated .mwv-frame,
-.mwv-rotated .mwv-live-frame {
+.mwv-rotated .mwv-live-frame,
+.mwv-rotated .mwv-real-webview {
   min-width: 760px;
 }
 
@@ -284,7 +286,8 @@
   contain: content;
 }
 
-.mwv-frame {
+.mwv-frame,
+.mwv-real-webview {
   display: block;
   width: 100%;
   height: 100%;
@@ -293,16 +296,19 @@
 }
 
 .mwv-frame.mwv-desktop-frame,
-.mwv-live-frame.mwv-desktop-frame {
+.mwv-live-frame.mwv-desktop-frame,
+.mwv-real-webview.mwv-desktop-frame {
   width: 980px;
   max-width: none;
 }
 
-.mwv-frame.is-hidden {
+.mwv-frame.is-hidden,
+.mwv-real-webview.is-hidden {
   display: none;
 }
 
-.mwv-frame-wrap.is-live-page .mwv-frame {
+.mwv-frame-wrap.is-live-page .mwv-frame,
+.mwv-frame-wrap.is-live-page .mwv-real-webview {
   min-height: 64vh;
   border-bottom: 1px solid var(--mwv-border);
 }
@@ -2349,9 +2355,11 @@
   background: var(--background-primary);
 }
 
-.mwv-live-frame {
+.mwv-live-frame,
+.mwv-live-browser .mwv-real-webview {
   display: block;
   width: 100%;
+  height: 68vh;
   min-height: 68vh;
   border: 0;
   background: var(--background-primary);
