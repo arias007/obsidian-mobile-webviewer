@@ -2583,3 +2583,160 @@
     flex-basis: 52px;
   }
 }
+
+/* Browser View mobile fill overrides. Keep the live page tall and let chrome float. */
+.workspace-leaf-content[data-type="mobile-webviewer-view"],
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-content {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] {
+  position: relative;
+}
+
+@supports (height: 100dvh) {
+  .workspace-leaf-content[data-type="mobile-webviewer-view"] {
+    height: 100dvh;
+  }
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-header {
+  display: none !important;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-content {
+  padding: 0 !important;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-root {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  height: 100%;
+  min-height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-header {
+  z-index: 6;
+  padding: max(3px, env(safe-area-inset-top)) 6px 0;
+  background: color-mix(in srgb, var(--mwv-bg) 96%, transparent);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-address-row {
+  grid-template-columns: 24px minmax(0, 1fr) 34px;
+  min-height: 34px;
+  padding: 2px 3px 2px 8px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-address {
+  height: 34px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-icon-button {
+  width: 34px;
+  height: 34px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-tab-strip {
+  height: 30px;
+  padding-top: 1px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-browser-tab,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-browser-tab-add {
+  height: 29px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap {
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page {
+  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-web-front {
+  grid-template-rows: minmax(0, 1fr) 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-note-front {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-split-front {
+  grid-template-rows: minmax(0, 1fr) minmax(96px, 32vh);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-real-webview,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-live-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-real-webview,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-live-frame {
+  height: 100%;
+  min-height: 0 !important;
+  max-height: none;
+  border-bottom: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-frame:not(.is-hidden),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-real-webview:not(.is-hidden),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-live-frame:not(.is-hidden) {
+  min-height: 0 !important;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home {
+  height: 100%;
+  min-height: 0;
+  padding: 10px 10px 88px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-note-surface {
+  max-width: 100%;
+  padding: 14px 12px 96px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home.mwv-reader-strip {
+  max-height: 32vh;
+  padding: 8px 10px 78px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-toolbar {
+  position: absolute;
+  right: 8px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  left: 8px;
+  z-index: 9;
+  padding: 4px;
+  background: color-mix(in srgb, var(--mwv-panel) 94%, transparent);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-drawer {
+  bottom: calc(58px + max(8px, env(safe-area-inset-bottom)));
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-actions .notedraw-header-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-header-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-webview-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-header-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-fallback-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-inline-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-header-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-fallback-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-inline-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-header-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-fallback-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-inline-button:not(.mwv-notedraw-launcher),
+.mwv-notedraw-source-button {
+  display: none !important;
+}

@@ -34,6 +34,8 @@ const MIN_SEGMENTED_DOWNLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_MHTML_RESOURCES = 24;
 const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
+const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
+const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed, .workspace-leaf-content[data-type='mobile-webviewer-view']";
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -825,14 +827,6 @@ class MobileWebviewerView extends ItemView {
       }
     });
     this.plugin.renderUrlSuggestions(form, "mwv-address-suggestions");
-    if (this.plugin.settings.showFloatingWand) {
-      const wandHeaderButton = form.createEl("button", {
-        cls: "mwv-icon-button mwv-wand-inline",
-        attr: { type: "button", "aria-label": "NoteDraw magic wand", title: "NoteDraw magic wand" }
-      });
-      setIcon(wandHeaderButton, "wand-sparkles");
-      wandHeaderButton.addEventListener("click", () => this.triggerNoteDraw());
-    }
     const goButton = form.createEl("button", {
       cls: "mwv-icon-button mwv-primary",
       attr: { type: "submit", "aria-label": "Go" }
@@ -918,11 +912,12 @@ class MobileWebviewerView extends ItemView {
     this.makeToolButton(toolbar, "plus-square", "Save link", () => this.captureLink());
     this.makeToolButton(toolbar, "more-horizontal", "More", (button) => this.openMoreMenu(button));
     if (this.plugin.settings.showFloatingWand) {
-      this.makeToolButton(toolbar, "wand-sparkles", "NoteDraw", () => this.triggerNoteDraw());
+      this.makeToolButton(toolbar, "wand-sparkles", "NoteDraw", () => this.triggerNoteDraw()).addClass("mwv-notedraw-launcher");
     }
     this.makeToolButton(toolbar, "settings", "Settings", () => this.plugin.openSettings());
 
     this.renderDrawer("bookmarks");
+    this.plugin.queueNoteDrawButtonDedupe(root);
   }
 
   makeToolButton(
@@ -2083,37 +2078,8 @@ class MobileWebviewerView extends ItemView {
   }
 
   triggerNoteDraw(): void {
-    const pluginRegistry = (this.app as App & {
-      plugins?: { plugins?: Record<string, unknown> };
-      commands?: { executeCommandById?: (id: string) => boolean };
-    });
-    const notedraw = pluginRegistry.plugins?.plugins?.notedraw;
-
-    if (!notedraw) {
-      new Notice("NoteDraw plugin is not enabled.");
-      return;
-    }
-
-    const markdownLeaves = this.app.workspace.getLeavesOfType("markdown");
-    const targetLeaf = markdownLeaves.find((leaf) => leaf.view?.containerEl?.isConnected) ?? markdownLeaves[0];
-    if (!targetLeaf) {
-      new Notice("Open a note first, then use NoteDraw.");
-      return;
-    }
-
-    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-    window.setTimeout(() => {
-      const ran = pluginRegistry.commands?.executeCommandById?.("notedraw:toggle");
-      if (!ran) {
-        const activeDoc = this.app.workspace.containerEl.ownerDocument;
-        const button = activeDoc.querySelector<HTMLElement>(".workspace-leaf.mod-active .notedraw-header-button");
-        if (button) {
-          button.click();
-        } else {
-          new Notice("NoteDraw is not ready on this note.");
-        }
-      }
-    }, 80);
+    this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+    this.plugin.triggerNoteDraw(this.containerEl);
   }
 
   openUrl(url: string): void {
@@ -2124,6 +2090,7 @@ class MobileWebviewerView extends ItemView {
 export default class MobileWebviewerPlugin extends Plugin {
   settings: MobileWebviewerSettings = DEFAULT_SETTINGS;
   processorSeq = 0;
+  noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -2138,6 +2105,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(document, "keydown", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
+    this.installNoteDrawDedupeObserver();
 
     this.addRibbonIcon("smartphone", "Mobile Webviewer", () => {
       void this.openNoteBrowser();
@@ -2208,11 +2176,128 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Keep the note browser enhanced after Markdown renders and Live Preview updates.
     this.app.workspace.onLayoutReady(() => {
       this.processWebviewerEmbeds(this.app.workspace.containerEl);
+      this.queueNoteDrawButtonDedupe(this.app.workspace.containerEl);
     });
   }
 
   onunload(): void {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+  }
+
+  installNoteDrawDedupeObserver(): void {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (!(node instanceof HTMLElement)) continue;
+          if (!node.matches(NOTEDRAW_BUTTON_SELECTOR) && !node.querySelector(NOTEDRAW_BUTTON_SELECTOR)) continue;
+          const root =
+            node.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) ??
+            (mutation.target instanceof HTMLElement ? mutation.target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) : null) ??
+            this.app.workspace.containerEl;
+          this.queueNoteDrawButtonDedupe(root);
+          return;
+        }
+      }
+    });
+    observer.observe(this.app.workspace.containerEl, { childList: true, subtree: true });
+    this.register(() => observer.disconnect());
+  }
+
+  queueNoteDrawButtonDedupe(root: HTMLElement): void {
+    if (!root.isConnected) return;
+    const existing = this.noteDrawDedupeTimers.get(root);
+    if (existing) window.clearTimeout(existing);
+    const timer = window.setTimeout(() => {
+      this.noteDrawDedupeTimers.delete(root);
+      this.dedupeNoteDrawButtons(root);
+    }, 80);
+    this.noteDrawDedupeTimers.set(root, timer);
+    for (const delay of [260, 900, 1800]) {
+      window.setTimeout(() => {
+        if (root.isConnected) this.dedupeNoteDrawButtons(root);
+      }, delay);
+    }
+  }
+
+  dedupeNoteDrawButtons(root: HTMLElement): void {
+    const baseSurfaces = root.matches(MWV_DEDUPE_ROOT_SELECTOR)
+      ? [root, ...Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))]
+      : Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR));
+    const surfaces = new Set<HTMLElement>(baseSurfaces);
+    for (const surface of baseSurfaces) {
+      const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
+      if (leaf?.querySelector(".mwv-root, .mwv-note-embed, .mwv-embed")) {
+        surfaces.add(leaf);
+      }
+    }
+    for (const surface of surfaces) {
+      const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter(
+        (button) => !button.hasClass("mwv-notedraw-launcher")
+      );
+      for (const button of buttons) {
+        button.addClass("mwv-notedraw-source-button");
+        button.setAttribute("aria-hidden", "true");
+      }
+    }
+  }
+
+  findNoteDrawSourceButton(root?: HTMLElement): HTMLElement | null {
+    const scopes: HTMLElement[] = [];
+    if (root) {
+      scopes.push(root);
+      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
+      if (leaf) scopes.push(leaf);
+    }
+    scopes.push(this.app.workspace.containerEl);
+
+    for (const scope of scopes) {
+      const buttons = Array.from(scope.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter(
+        (candidate) => candidate.isConnected && !candidate.hasClass("mwv-notedraw-launcher")
+      );
+      const direct = buttons.find((candidate) => candidate.closest(".mwv-root, .mwv-note-embed, .mwv-embed") === root);
+      const webview = buttons.find((candidate) => candidate.hasClass("notedraw-webview-button"));
+      const header = buttons.find((candidate) => candidate.hasClass("notedraw-header-button"));
+      const fallback = buttons[0];
+      const picked = direct ?? webview ?? header ?? fallback;
+      if (picked) return picked;
+    }
+    return null;
+  }
+
+  triggerNoteDraw(root?: HTMLElement): void {
+    const pluginRegistry = (this.app as App & {
+      plugins?: { plugins?: Record<string, unknown> };
+      commands?: {
+        commands?: Record<string, { id?: string; name?: string }>;
+        executeCommandById?: (id: string) => boolean;
+      };
+    });
+    if (!pluginRegistry.plugins?.plugins?.notedraw) {
+      new Notice("NoteDraw plugin is not enabled.");
+      return;
+    }
+
+    root?.focus?.({ preventScroll: true });
+    window.setTimeout(() => {
+      this.queueNoteDrawButtonDedupe(root ?? this.app.workspace.containerEl);
+      const button = this.findNoteDrawSourceButton(root);
+      if (button) {
+        button.click();
+        window.setTimeout(() => this.queueNoteDrawButtonDedupe(root ?? this.app.workspace.containerEl), 120);
+        return;
+      }
+
+      const commands = pluginRegistry.commands;
+      const availableIds = Object.keys(commands?.commands ?? {}).filter((id) => id.startsWith("notedraw:"));
+      const commandId =
+        availableIds.find((id) => id === "notedraw:toggle-draw-mode") ??
+        availableIds.find((id) => /toggle|draw/i.test(id)) ??
+        availableIds[0] ??
+        "notedraw:toggle-draw-mode";
+      if (commands?.executeCommandById?.(commandId)) return;
+
+      new Notice("NoteDraw is not ready on this page.");
+    }, 80);
   }
 
   async activateBrowserView(url?: string, newTab = false, tabId?: string): Promise<void> {
@@ -2946,6 +3031,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
+    if (this.settings.showFloatingWand) {
+      const wand = actions.createEl("button", {
+        cls: "mwv-browser-action mwv-notedraw-launcher",
+        attr: { type: "button", title: "NoteDraw", "aria-label": "NoteDraw" }
+      });
+      setIcon(wand, "wand-sparkles");
+      wand.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.triggerNoteDraw(embed);
+      });
+    }
     const more = actions.createEl("button", { cls: "mwv-browser-action", attr: { type: "button", title: "More", "aria-label": "More" } });
     more.dataset.mwvUrl = url;
     more.dataset.mwvTitle = title;

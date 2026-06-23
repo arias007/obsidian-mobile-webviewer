@@ -12,6 +12,9 @@ It now has two clearly named modes:
   web note by default. A full Chromium `webview` page stays loaded behind it for
   real browser navigation and can be switched in with Note/Web/Split controls.
   Edited text and doodles auto-save into plugin data and Markdown snapshots.
+  On mobile it uses a full-height browser layout with the Obsidian pane header
+  hidden and the bottom toolbar floating over the page instead of shrinking the
+  webview.
 - Real-page navigation now catches `target=_blank` and `window.open` in the
   Chromium webview and routes them to browser tabs, so page jumps behave more
   like Chrome/Edge instead of falling back to the home shell.
@@ -19,7 +22,9 @@ It now has two clearly named modes:
   elements rendered inside the note. The plugin enhances that note with a
   Bing-like lightweight search shell, editable web-note foreground, live web
   backend,
-  bookmarks bar, cache, downloads, history, and More menu.
+  bookmarks bar, cache, downloads, history, and More menu. NoteDraw buttons are
+  deduped so Mobile Webviewer surfaces keep one visible magic-wand launcher
+  while still using NoteDraw's real page controller behind it.
 
 ## Install
 
