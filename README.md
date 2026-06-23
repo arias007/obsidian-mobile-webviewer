@@ -48,6 +48,10 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Switch between Note, Web, and Split modes.
 - Auto-save edited text and doodles into Markdown snapshots under
   `Mobile Webviewer Notes`.
+- Keep Note Browser and Browser View on the same URL-backed web-note data, so
+  edited text and doodles follow the page when switching modes.
+- Load multi-page Bing results with a More results control instead of stopping
+  after the first compact result set.
 - Load URLs or search text from one input.
 - Use multiple persistent browser tabs.
 - Open popup/new-window links as real browser tabs and keep titles, URLs, load

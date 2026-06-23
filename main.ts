@@ -19,6 +19,9 @@ const VIEW_TYPE = "mobile-webviewer-view";
 const DEFAULT_HOME = "https://www.bing.com/";
 const DEFAULT_SEARCH = "https://www.bing.com/search?q={{query}}";
 const WEBVIEW_NOTE_PATH = "Mobile Webviewer.md";
+const BING_RESULTS_PER_PAGE = 10;
+const BING_DEFAULT_PAGES = 3;
+const BING_DEFAULT_MAX_RESULTS = 24;
 const MAX_HISTORY = 80;
 const MAX_BOOKMARKS = 120;
 const MAX_READING_LIST = 120;
@@ -773,7 +776,6 @@ class MobileWebviewerView extends ItemView {
   frontendMode: "note" | "web" | "split" = "note";
   currentWebNote?: WebNoteEntry;
   webNoteSaveTimer?: number;
-  doodleEnabled = false;
   activeDoodlePath?: SVGPathElement;
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
 
@@ -1281,6 +1283,28 @@ class MobileWebviewerView extends ItemView {
         item.createDiv({ cls: "mwv-result-url", text: result.url });
         if (result.snippet) item.createDiv({ cls: "mwv-result-snippet", text: result.snippet });
       }
+      if (query.trim() && results.length < 80) {
+        const more = list.createEl("button", {
+          cls: "mwv-more-results",
+          text: "更多结果",
+          attr: { type: "button" }
+        });
+        more.addEventListener("click", async () => {
+          more.disabled = true;
+          more.setText("加载中...");
+          const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
+          const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
+          try {
+            const expanded = await this.plugin.searchBing(query, nextPages, nextMax);
+            this.subtitleEl.setText(`${expanded.length} result(s)`);
+            this.buildHome(query, expanded);
+          } catch (error) {
+            console.error("[mobile-webviewer] Bing more results failed", error);
+            more.disabled = false;
+            more.setText("加载失败，重试");
+          }
+        });
+      }
     }
   }
 
@@ -1382,6 +1406,7 @@ class MobileWebviewerView extends ItemView {
 
   navigate(url: string, pushHistory: boolean): void {
     const nextUrl = normalizeInput(url, this.plugin.settings.searchUrl);
+    void this.saveCurrentWebNote(false);
     const query = this.extractBingQuery(nextUrl);
     if (this.isBingHome(nextUrl) || query !== null) {
       if (pushHistory && this.currentUrl && this.currentUrl !== nextUrl) {
@@ -1447,6 +1472,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   navigateWithoutStack(url: string): void {
+    void this.saveCurrentWebNote(false);
     const query = this.extractBingQuery(url);
     if (this.isBingHome(url) || query !== null) {
       if (query) {
@@ -1668,9 +1694,15 @@ class MobileWebviewerView extends ItemView {
       await navigator.clipboard.writeText(`[${page.title}](${page.url})`);
       new Notice("Copied link");
     });
+    const noteWebButton = actions.createEl("button", { text: "Note Web", attr: { type: "button" } });
+    noteWebButton.addEventListener("click", async () => {
+      await this.saveCurrentWebNote(false, status);
+      await this.plugin.openNoteBrowser(page.url);
+    });
     const saveButton = actions.createEl("button", { text: "保存笔记", attr: { type: "button" } });
     saveButton.addEventListener("click", () => void this.saveCurrentWebNote(true));
     const doodleButton = actions.createEl("button", { text: "涂鸦", attr: { type: "button" } });
+    doodleButton.setAttribute("aria-pressed", "false");
     doodleButton.addEventListener("click", () => this.toggleDoodleLayer(article, doodleButton));
     const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已保存 ${note.markdownPath}` : "自动保存" });
 
@@ -1779,12 +1811,22 @@ class MobileWebviewerView extends ItemView {
   }
 
   toggleDoodleLayer(article: HTMLElement, button: HTMLElement): void {
-    this.doodleEnabled = !this.doodleEnabled;
-    article.toggleClass("is-doodling", this.doodleEnabled);
-    button.toggleClass("is-active", this.doodleEnabled);
+    const enabled = !article.hasClass("is-doodling");
+    if (!enabled) {
+      this.activeDoodlePath = undefined;
+    }
+    article.toggleClass("is-doodling", enabled);
+    button.toggleClass("is-active", enabled);
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    button.setText(enabled ? "关闭涂鸦" : "涂鸦");
+    if (!enabled) {
+      const status = article.querySelector<HTMLElement>(".mwv-webnote-status");
+      this.queueWebNoteSave(status ?? undefined);
+    }
   }
 
   bindDoodleLayer(svg: SVGSVGElement, status: HTMLElement): void {
+    const isEnabled = () => Boolean(svg.closest<HTMLElement>(".mwv-note-surface")?.hasClass("is-doodling"));
     const point = (event: PointerEvent): [number, number] => {
       const rect = svg.getBoundingClientRect();
       const x = clampNumber(((event.clientX - rect.left) / Math.max(1, rect.width)) * 1000, 0, 1000);
@@ -1792,8 +1834,9 @@ class MobileWebviewerView extends ItemView {
       return [x, y];
     };
     svg.addEventListener("pointerdown", (event) => {
-      if (!this.doodleEnabled) return;
+      if (!isEnabled()) return;
       event.preventDefault();
+      event.stopPropagation();
       const [x, y] = point(event);
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", `M ${x.toFixed(1)} ${y.toFixed(1)}`);
@@ -1807,14 +1850,15 @@ class MobileWebviewerView extends ItemView {
       svg.setPointerCapture(event.pointerId);
     });
     svg.addEventListener("pointermove", (event) => {
-      if (!this.doodleEnabled || !this.activeDoodlePath) return;
+      if (!isEnabled() || !this.activeDoodlePath || this.activeDoodlePath.ownerSVGElement !== svg) return;
       event.preventDefault();
+      event.stopPropagation();
       const [x, y] = point(event);
       this.activeDoodlePath.setAttribute("d", `${this.activeDoodlePath.getAttribute("d")} L ${x.toFixed(1)} ${y.toFixed(1)}`);
       status.setText("保存中...");
     });
     const finish = (event: PointerEvent) => {
-      if (!this.activeDoodlePath) return;
+      if (!this.activeDoodlePath || this.activeDoodlePath.ownerSVGElement !== svg) return;
       this.activeDoodlePath = undefined;
       try {
         svg.releasePointerCapture(event.pointerId);
@@ -1853,11 +1897,12 @@ class MobileWebviewerView extends ItemView {
     setIcon(close, "x");
     close.addEventListener("click", () => this.closeMorePanel());
 
-    const feedback = panel.createDiv({
+    const body = panel.createDiv({ cls: "mwv-more-body" });
+    const feedback = body.createDiv({
       cls: "mwv-more-feedback",
       text: `下载保存到: ${this.plugin.normalizeDownloadFolder()}`
     });
-    const actions = panel.createDiv({ cls: "mwv-more-actions" });
+    const actions = body.createDiv({ cls: "mwv-more-actions" });
     const setFeedback = (message: string, isError = false) => {
       feedback.setText(message);
       feedback.toggleClass("is-error", isError);
@@ -1893,6 +1938,10 @@ class MobileWebviewerView extends ItemView {
     addAction("external-link", "用浏览器打开", () => {
       window.open(url, "_blank");
     });
+    addAction("file-text", "打开 Note Web", async () => {
+      this.closeMorePanel();
+      await this.plugin.openNoteBrowser(url);
+    });
     addAction("copy", "复制链接", async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
       new Notice("Copied link");
@@ -1900,7 +1949,7 @@ class MobileWebviewerView extends ItemView {
     addAction("share-2", "分享", () => this.plugin.sharePage(url, title));
     addAction("plus", "新 OB 标签", () => this.newBrowserTab());
     addAction("search", "页内查找", () => this.toggleFindPanel());
-    addAction("activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(panel, url));
+    addAction("activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(body, url));
     addAction("wrench", "打开 DevTools", async () => {
       const opened = await this.plugin.openBrowserDevTools(this.surfaceEl);
       if (!opened) throw new Error("当前页面层不支持 DevTools");
@@ -1970,7 +2019,7 @@ class MobileWebviewerView extends ItemView {
       this.openDrawer("reading");
     });
     addAction("terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => {
-      this.toggleMoreConsolePanel(panel, url);
+      this.toggleMoreConsolePanel(body, url);
     });
     addAction("wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => this.plugin.openSettings());
     addAction("radio", "媒体嗅探", async () => {
@@ -2462,6 +2511,30 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.renderSearchResult(main, result);
     }
 
+    if (query.trim() && results.length < 80) {
+      const more = main.createEl("button", {
+        cls: "mwv-more-results",
+        text: "更多结果",
+        attr: { type: "button" }
+      });
+      more.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        more.disabled = true;
+        more.setText("加载中...");
+        const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
+        const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
+        try {
+          const expanded = await this.searchBing(query, nextPages, nextMax);
+          this.renderBingResults(resultHost, query, expanded);
+        } catch (error) {
+          console.error("[mobile-webviewer] Bing more results failed", error);
+          more.disabled = false;
+          more.setText("加载失败，重试");
+        }
+      });
+    }
+
     side.createEl("h3", { text: `深入了解 ${query}` });
     for (const item of relatedSearches(query)) {
       const url = DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(item));
@@ -2768,7 +2841,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     noteBtn.addEventListener("click", () => setEmbedMode("note"));
     webBtn.addEventListener("click", () => setEmbedMode("web"));
     splitBtn.addEventListener("click", () => setEmbedMode("split"));
+    const browserBtn = actions.createEl("button", { text: "Browser View", attr: { type: "button" } });
     const saveBtn = actions.createEl("button", { text: "保存笔记", attr: { type: "button" } });
+    const doodleBtn = actions.createEl("button", { text: "涂鸦", attr: { type: "button" } });
+    doodleBtn.setAttribute("aria-pressed", "false");
     const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已保存 ${note.markdownPath}` : "自动保存" });
     if (page.images.length) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
@@ -2776,7 +2852,8 @@ export default class MobileWebviewerPlugin extends Plugin {
         media.createEl("img", { attr: { src: image, alt: "" } });
       }
     }
-    const content = panel.createDiv({
+    const noteWrap = panel.createDiv({ cls: "mwv-webnote-wrap" });
+    const content = noteWrap.createDiv({
       cls: "mwv-md-content mwv-webnote-editor",
       attr: { contenteditable: "true", spellcheck: "true" }
     });
@@ -2794,14 +2871,27 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (clean) content.createEl("p", { text: clean });
       }
     }
+    const doodleLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    doodleLayer.addClass("mwv-doodle-layer");
+    doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
+    doodleLayer.setAttribute("preserveAspectRatio", "none");
+    doodleLayer.setAttribute("aria-hidden", "true");
+    if (note?.doodleSvg) {
+      doodleLayer.innerHTML = note.doodleSvg;
+    }
+    noteWrap.appendChild(doodleLayer);
+    let currentNote = note;
+    let activePath: SVGPathElement | undefined;
     const save = async () => {
-      const base = note ?? this.createWebNoteFromPage(page);
+      const base = currentNote ?? this.createWebNoteFromPage(page);
       const saved = await this.saveWebNote({
         ...base,
         noteHtml: content.innerHTML,
         noteText: htmlToMarkdownFromElement(content),
+        doodleSvg: doodleLayer.innerHTML,
         updatedAt: Date.now()
       });
+      currentNote = saved;
       status.setText(`已保存 ${saved.markdownPath}`);
     };
     let timer: number | undefined;
@@ -2813,7 +2903,62 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
     content.addEventListener("input", queue);
     content.addEventListener("blur", () => void save());
+    browserBtn.addEventListener("click", async () => {
+      await save();
+      await this.activateBrowserView(page.url);
+    });
     saveBtn.addEventListener("click", () => void save());
+    doodleBtn.addEventListener("click", () => {
+      const enabled = !panel.hasClass("is-doodling");
+      if (!enabled) activePath = undefined;
+      panel.toggleClass("is-doodling", enabled);
+      doodleBtn.toggleClass("is-active", enabled);
+      doodleBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
+      doodleBtn.setText(enabled ? "关闭涂鸦" : "涂鸦");
+      if (!enabled) queue();
+    });
+    const point = (event: PointerEvent): [number, number] => {
+      const rect = doodleLayer.getBoundingClientRect();
+      const x = clampNumber(((event.clientX - rect.left) / Math.max(1, rect.width)) * 1000, 0, 1000);
+      const y = clampNumber(((event.clientY - rect.top) / Math.max(1, rect.height)) * 1000, 0, 1000);
+      return [x, y];
+    };
+    doodleLayer.addEventListener("pointerdown", (event) => {
+      if (!panel.hasClass("is-doodling")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const [x, y] = point(event);
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M ${x.toFixed(1)} ${y.toFixed(1)}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "var(--interactive-accent)");
+      path.setAttribute("stroke-width", "5");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      doodleLayer.appendChild(path);
+      activePath = path;
+      doodleLayer.setPointerCapture(event.pointerId);
+    });
+    doodleLayer.addEventListener("pointermove", (event) => {
+      if (!panel.hasClass("is-doodling") || !activePath) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const [x, y] = point(event);
+      activePath.setAttribute("d", `${activePath.getAttribute("d")} L ${x.toFixed(1)} ${y.toFixed(1)}`);
+      status.setText("保存中...");
+    });
+    const finishDoodle = (event: PointerEvent) => {
+      if (!activePath) return;
+      activePath = undefined;
+      try {
+        doodleLayer.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer may already be released by the host.
+      }
+      queue();
+    };
+    doodleLayer.addEventListener("pointerup", finishDoodle);
+    doodleLayer.addEventListener("pointercancel", finishDoodle);
     this.applyReaderCustomizations(panel, page);
   }
 
@@ -3074,11 +3219,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": "Close More" } });
     setIcon(close, "x");
     close.addEventListener("click", () => panel.remove());
-    const feedback = panel.createDiv({
+    const body = panel.createDiv({ cls: "mwv-more-body" });
+    const feedback = body.createDiv({
       cls: "mwv-more-feedback",
       text: `下载保存到: ${this.normalizeDownloadFolder()}`
     });
-    const actions = panel.createDiv({ cls: "mwv-more-actions" });
+    const actions = body.createDiv({ cls: "mwv-more-actions" });
     const setFeedback = (message: string, isError = false) => {
       feedback.setText(message);
       feedback.toggleClass("is-error", isError);
@@ -3116,11 +3262,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
 
     addAction("download", `下载页 (${this.settings.downloads.length})`, () => {
-      this.toggleDownloadsPanel(panel);
+      this.toggleDownloadsPanel(body);
     });
     addAction("external-link", "用浏览器打开", () => {
       window.open(url, "_blank");
     });
+    addAction("smartphone", "Browser View", async () => {
+      await this.activateBrowserView(url);
+    }, true);
     addAction("copy", "Copy link", async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
       new Notice("Copied link");
@@ -3132,7 +3281,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.toggleEmbedFindPanel(embed);
     }, false);
     addAction("activity", "Browser status", () => {
-      this.toggleEmbedBrowserStatusPanel(panel, embed, url);
+      this.toggleEmbedBrowserStatusPanel(body, embed, url);
     }, false);
     addAction("wrench", "Open DevTools", async () => {
       const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
@@ -3187,23 +3336,23 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, false);
     addAction("download", "Download file", async () => {
       await this.downloadUrlFile(url);
-      this.toggleDownloadsPanel(panel);
+      this.toggleDownloadsPanel(body);
     }, false);
     addAction("file-code", "Save HTML", async () => {
       await this.downloadCurrentPageHtml(url, title || hostName(url));
-      this.toggleDownloadsPanel(panel, "Saved HTML");
+      this.toggleDownloadsPanel(body, "Saved HTML");
     }, false);
     addAction("archive", "Save MHT", async () => {
       await this.downloadCurrentPageMhtml(url, title || hostName(url));
-      this.toggleDownloadsPanel(panel, "Saved MHT");
+      this.toggleDownloadsPanel(body, "Saved MHT");
     }, false);
     addAction("file-down", "Offline page", async () => {
       await this.saveOfflinePage(url, title || hostName(url));
-      this.toggleDownloadsPanel(panel, "Offline page saved");
+      this.toggleDownloadsPanel(body, "Offline page saved");
     }, false);
     addAction("external-link", "Add desktop shortcut", async () => {
       const path = await this.createShortcutFile(url, title || hostName(url));
-      this.toggleToolsPanel(panel, "Desktop shortcut", [`Saved: ${path}`]);
+      this.toggleToolsPanel(body, "Desktop shortcut", [`Saved: ${path}`]);
     }, false);
     addAction("text-cursor-input", "Autofill page", async () => {
       const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
@@ -3224,49 +3373,49 @@ export default class MobileWebviewerPlugin extends Plugin {
       new Notice("Added to reading list");
     });
     addAction("library", `Reading list (${this.settings.readingList.length})`, () => {
-      this.toggleReadingListPanel(panel);
+      this.toggleReadingListPanel(body);
     }, false);
     addAction("history", `History (${this.settings.history.length})`, () => {
-      this.toggleHistoryPanel(panel);
+      this.toggleHistoryPanel(body);
     }, false);
     addAction("download", `Downloads (${this.settings.downloads.length})`, () => {
-      this.toggleDownloadsPanel(panel);
+      this.toggleDownloadsPanel(body);
     }, false);
     addAction("terminal", `反馈日志 (${this.settings.consoleEntries.length})`, () => {
-      this.toggleConsolePanel(panel, url);
+      this.toggleConsolePanel(body, url);
     }, false);
     addAction("wand-sparkles", `Scripts (${activeScripts.length})`, () => {
-      this.toggleUserScriptsPanel(panel, url);
+      this.toggleUserScriptsPanel(body, url);
     }, false);
     addAction("settings", "Site settings", () => {
-      this.toggleSiteSettingsPanel(panel, url);
+      this.toggleSiteSettingsPanel(body, url);
     }, false);
     addAction("radio", "Sniff media", () => {
-      void this.toggleAssetsPanel(panel, url, "media");
+      void this.toggleAssetsPanel(body, url, "media");
     }, false);
     addAction("layers", "Page resources", () => {
-      void this.toggleAssetsPanel(panel, url, "resources");
+      void this.toggleAssetsPanel(body, url, "resources");
     }, false);
     addAction("code-2", "View source", () => {
-      void this.toggleSourcePanel(panel, url);
+      void this.toggleSourcePanel(body, url);
     }, false);
     addAction("wrench", "Developer tools", () => {
-      void this.toggleAssetsPanel(panel, url, "developer");
+      void this.toggleAssetsPanel(body, url, "developer");
     }, false);
     addAction("languages", "Translate", () => {
-      this.toggleTranslatePanel(panel, embed, url);
+      this.toggleTranslatePanel(body, embed, url);
     }, false);
     addAction("volume-2", "Read aloud", async () => {
       await this.readPageAloud(url);
     }, false);
     addAction("qr-code", "QR code", () => {
-      this.toggleQrPanel(panel, url);
+      this.toggleQrPanel(body, url);
     }, false);
     addAction("shield-alert", "Report URL", () => {
-      this.toggleReportPanel(panel, url);
+      this.toggleReportPanel(body, url);
     }, false);
     addAction("briefcase", "Toolbox", () => {
-      this.toggleToolsPanel(panel, "Toolbox", [
+      this.toggleToolsPanel(body, "Toolbox", [
         `Mode: ${this.settings.desktopMode ? "Desktop" : "Mobile"}`,
         `UA: ${this.settings.userAgentMode}`,
         `JavaScript: ${this.settings.jsDisabled ? "Disabled" : "Enabled"}`,
@@ -3276,14 +3425,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, false);
     addAction("trash", `Clear cache (${this.settings.pageCache.length})`, async () => {
       await this.clearCache();
-      this.toggleConsolePanel(panel, url, "Cache cleared");
+      this.toggleConsolePanel(body, url, "Cache cleared");
     }, false);
     addAction("trash-2", "Clear data", async () => {
       await this.clearBrowsingData();
-      this.toggleConsolePanel(panel, url, "Browsing data cleared");
+      this.toggleConsolePanel(body, url, "Browsing data cleared");
     }, false);
 
-    const enabled = panel.createDiv({ cls: "mwv-extension-grid" });
+    const enabled = body.createDiv({ cls: "mwv-extension-grid" });
     for (const item of [
       ["Live View", "On", "Direct page surface inside Note Browser."],
       ["Reader", "Auto", "Article text and media layer."],
@@ -5314,7 +5463,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.activateBrowserView(match[0]);
   }
 
-  async searchBing(query: string): Promise<SearchResult[]> {
+  async searchBing(query: string, pages = BING_DEFAULT_PAGES, maxResults = BING_DEFAULT_MAX_RESULTS): Promise<SearchResult[]> {
     const cleanQuery = query.trim();
     if (!cleanQuery) return [];
 
@@ -5324,31 +5473,42 @@ export default class MobileWebviewerPlugin extends Plugin {
     void this.addConsole("info", `Search Bing: ${cleanQuery}`, url);
 
     try {
-      const response = await requestUrl({
-        url,
-        method: "GET",
-        headers: this.requestHeaders("text/html,application/xhtml+xml")
-      });
-
-      const doc = parser.parseFromString(response.text, "text/html");
-      const items = Array.from(doc.querySelectorAll("li.b_algo, .b_algo")).slice(0, 10);
       const results: SearchResult[] = [];
       const seen = new Set<string>();
+      const pageCount = clampNumber(Math.ceil(pages), 1, 8);
+      const limit = clampNumber(Math.ceil(maxResults), 1, 80);
 
-      for (const item of items) {
-        const anchor = item.querySelector<HTMLAnchorElement>("h2 a, a");
-        if (!anchor?.href) continue;
-        const resultUrl = cleanResultUrl(anchor.href);
-        if (!resultUrl || seen.has(resultUrl)) continue;
-        const snippet = item.querySelector(".b_caption p, p")?.textContent?.trim() || "";
-        const title = cleanSearchTitle(anchor.textContent?.trim() || "", resultUrl, snippet, cleanQuery);
-        seen.add(resultUrl);
-        results.push({
-          title,
-          url: resultUrl,
-          snippet,
-          imageUrl: firstImageFromElement(item, url)
+      for (let pageIndex = 0; pageIndex < pageCount && results.length < limit; pageIndex++) {
+        const pageUrl = new URL(url);
+        if (pageIndex > 0) {
+          pageUrl.searchParams.set("first", String(pageIndex * BING_RESULTS_PER_PAGE + 1));
+        }
+        const pageUrlText = pageUrl.toString();
+        const response = await requestUrl({
+          url: pageUrlText,
+          method: "GET",
+          headers: this.requestHeaders("text/html,application/xhtml+xml")
         });
+
+        const doc = parser.parseFromString(response.text, "text/html");
+        const items = Array.from(doc.querySelectorAll("li.b_algo, .b_algo")).slice(0, BING_RESULTS_PER_PAGE + 4);
+
+        for (const item of items) {
+          const anchor = item.querySelector<HTMLAnchorElement>("h2 a, a");
+          if (!anchor?.href) continue;
+          const resultUrl = cleanResultUrl(anchor.href);
+          if (!/^https?:\/\//i.test(resultUrl) || seen.has(resultUrl)) continue;
+          const snippet = item.querySelector(".b_caption p, p")?.textContent?.trim() || "";
+          const title = cleanSearchTitle(anchor.textContent?.trim() || "", resultUrl, snippet, cleanQuery);
+          seen.add(resultUrl);
+          results.push({
+            title,
+            url: resultUrl,
+            snippet,
+            imageUrl: firstImageFromElement(item, pageUrlText)
+          });
+          if (results.length >= limit) break;
+        }
       }
 
       if (results.length) return results;
@@ -5365,19 +5525,19 @@ export default class MobileWebviewerPlugin extends Plugin {
       });
 
       const doc = parser.parseFromString(response.text, "application/xml");
-      const items = Array.from(doc.querySelectorAll("item")).slice(0, 10);
+      const items = Array.from(doc.querySelectorAll("item")).slice(0, clampNumber(maxResults, 1, 80));
       const results: SearchResult[] = [];
       const seen = new Set<string>();
 
       for (const item of items) {
-        const link = textFromElement(item.querySelector("link"));
+        const link = cleanResultUrl(textFromElement(item.querySelector("link")));
         const snippet = htmlToText(textFromElement(item.querySelector("description")));
         const title = cleanSearchTitle(textFromElement(item.querySelector("title")), link, snippet, cleanQuery);
         if (!title || !/^https?:\/\//i.test(link) || seen.has(link)) continue;
         seen.add(link);
         results.push({
           title,
-          url: cleanResultUrl(link),
+          url: link,
           snippet
         });
       }
