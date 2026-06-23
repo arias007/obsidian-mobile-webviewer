@@ -1725,6 +1725,14 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.mwv-browser-controls::-webkit-scrollbar {
+  display: none;
 }
 
 .mwv-browser-nav {
@@ -1751,6 +1759,11 @@
 .mwv-browser-nav:disabled {
   color: var(--text-faint);
   opacity: 0.45;
+}
+
+.mwv-browser-nav.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  color: var(--text-accent);
 }
 
 .mwv-browser-address {
@@ -2432,10 +2445,12 @@
 
   .mwv-browser-controls {
     grid-column: 1 / -1;
+    min-width: 0;
   }
 
   .mwv-browser-address {
     grid-column: 1;
+    min-width: 0;
   }
 
   .mwv-browser-actions {

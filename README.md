@@ -11,7 +11,8 @@ It now has two clearly named modes:
   back/forward state. The foreground is now an editable, reader-style Obsidian
   web note by default. A full Chromium `webview` page stays loaded behind it for
   real browser navigation and can be switched in with Note/Web/Split controls.
-  Edited text and doodles auto-save into plugin data and Markdown snapshots.
+  Edited text and doodles auto-save into plugin data. Use `存 MD` when you
+  want to add a Markdown file to the vault.
   On mobile it uses a full-height browser layout with the Obsidian pane header
   hidden and the bottom toolbar floating over the page instead of shrinking the
   webview.
@@ -46,8 +47,8 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Use an editable reader-style note as the foreground while keeping a full
   browser page loaded in the background.
 - Switch between Note, Web, and Split modes.
-- Auto-save edited text and doodles into Markdown snapshots under
-  `Mobile Webviewer Notes`.
+- Auto-save edited text and doodles into plugin data, then export to Markdown
+  under `Mobile Webviewer Notes` with `存 MD`.
 - Keep Note Browser and Browser View on the same URL-backed web-note data, so
   edited text and doodles follow the page when switching modes.
 - Load multi-page Bing results with a More results control instead of stopping
