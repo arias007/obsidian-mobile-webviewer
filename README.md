@@ -62,6 +62,13 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Save pages to the reading list.
 - Reuse cached reader pages.
 - View or copy console/navigation logs from More.
+- Inspect the active browser surface from More, including whether the current
+  page is using real Electron Chromium `webview` or iframe fallback, current
+  URL, loading state, back/forward availability, zoom, UA mode, and download
+  folder.
+- Open webview DevTools from More when Obsidian exposes that API.
+- Catch common downloadable links inside the live webview and route them to the
+  plugin Downloads panel.
 - Run global reader-layer custom CSS and JavaScript.
 - Manage URL-matched user script rules with wildcard matching, per-rule enable
   switches, CSS, and JavaScript.
@@ -97,5 +104,6 @@ Electron Chromium `webview` when Obsidian exposes it, falling back to iframe
 where needed. Note/Web/Split controls switch between the editable note, the
 real page, and both together. More contains power actions such as system-browser
 open, copy link, bookmark, reading list, history, downloads, matched user
-scripts, console, and cache management. Downloads are saved under `Mobile
-Webviewer Downloads` by default and can be configured in settings.
+scripts, browser-status inspection, DevTools where available, console, and
+cache management. Downloads are saved under `Mobile Webviewer Downloads` by
+default and can be configured in settings.

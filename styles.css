@@ -307,6 +307,14 @@
   background: white;
 }
 
+.mwv-real-webview.is-loading {
+  box-shadow: inset 0 2px 0 var(--interactive-accent);
+}
+
+.mwv-real-webview.has-load-error {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, #dc2626 70%, transparent);
+}
+
 .mwv-frame.mwv-desktop-frame,
 .mwv-live-frame.mwv-desktop-frame,
 .mwv-real-webview.mwv-desktop-frame {
@@ -2127,6 +2135,13 @@
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mwv-tools-row {
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .mwv-download-item-path {

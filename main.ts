@@ -215,6 +215,7 @@ interface BrowserConsoleEntry {
 interface ElectronWebviewElement extends HTMLElement {
   src: string;
   reload?: () => void;
+  stop?: () => void;
   goBack?: () => void;
   goForward?: () => void;
   canGoBack?: () => boolean;
@@ -227,6 +228,7 @@ interface ElectronWebviewElement extends HTMLElement {
   setZoomFactor?: (factor: number) => void;
   openDevTools?: () => void;
   getWebContentsId?: () => number;
+  isLoading?: () => boolean;
 }
 
 type BrowserSurfaceElement = HTMLIFrameElement | ElectronWebviewElement;
@@ -238,6 +240,9 @@ interface BrowserSurfaceCallbacks {
   onFail?: (message: string, url?: string) => void | Promise<void>;
   onConsole?: (level: BrowserConsoleEntry["level"], message: string, url?: string) => void | Promise<void>;
   onNewWindow?: (url: string) => void | Promise<void>;
+  onLoading?: (loading: boolean, url?: string) => void | Promise<void>;
+  onFavicon?: (url: string) => void | Promise<void>;
+  onDownloadCandidate?: (url: string) => void | Promise<void>;
 }
 
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
@@ -844,7 +849,10 @@ class MobileWebviewerView extends ItemView {
         void this.plugin.addConsole("warn", `Page load issue: ${message}`, url ?? this.currentUrl);
       },
       onConsole: (level, message, url) => this.plugin.addConsole(level, message, url ?? this.currentUrl),
-      onNewWindow: (url) => this.navigate(url, true)
+      onNewWindow: (url) => this.navigate(url, true),
+      onLoading: (loading, url) => this.handleSurfaceLoading(loading, url),
+      onFavicon: (iconUrl) => this.plugin.addConsole("info", `Favicon: ${iconUrl}`, this.currentUrl),
+      onDownloadCandidate: (downloadUrl) => this.handleSurfaceDownload(downloadUrl)
     });
     this.plugin.applyFrameViewPreferences(this.surfaceEl);
 
@@ -943,6 +951,18 @@ class MobileWebviewerView extends ItemView {
     this.titleEl.setText(this.currentTitle);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
+  }
+
+  handleSurfaceLoading(loading: boolean, url?: string): void {
+    this.surfaceEl.toggleClass("is-loading", loading);
+    this.subtitleEl.setText(loading ? `Loading ${hostName(url || this.currentUrl)}` : hostName(url || this.currentUrl));
+  }
+
+  async handleSurfaceDownload(url: string): Promise<void> {
+    await this.plugin.addConsole("info", `Detected download link: ${url}`, this.currentUrl);
+    const entry = await this.plugin.downloadUrlFile(url);
+    new Notice(`Download complete: ${entry.path || entry.message}`);
+    this.openDrawer("downloads");
   }
 
   handleSurfaceNavigate(url: string): void {
@@ -1278,8 +1298,23 @@ class MobileWebviewerView extends ItemView {
   removeMoreUtilityPanels(panel: HTMLElement): void {
     [
       ".mwv-console-panel",
-      ".mwv-downloads-panel"
+      ".mwv-downloads-panel",
+      ".mwv-tools-panel"
     ].forEach((selector) => panel.querySelector<HTMLElement>(selector)?.remove());
+  }
+
+  toggleMoreBrowserStatusPanel(panel: HTMLElement, url: string): void {
+    const existing = panel.querySelector<HTMLElement>(".mwv-tools-panel");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    this.removeMoreUtilityPanels(panel);
+    const toolsPanel = panel.createDiv({ cls: "mwv-tools-panel mwv-more-wide-panel" });
+    toolsPanel.createDiv({ cls: "mwv-tools-title", text: "浏览器状态" });
+    for (const row of this.plugin.describeBrowserSurface(this.surfaceEl, url)) {
+      toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
+    }
   }
 
   navigate(url: string, pushHistory: boolean): void {
@@ -1801,6 +1836,11 @@ class MobileWebviewerView extends ItemView {
     addAction("share-2", "分享", () => this.plugin.sharePage(url, title));
     addAction("plus", "新 OB 标签", () => this.newBrowserTab());
     addAction("search", "页内查找", () => this.toggleFindPanel());
+    addAction("activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(panel, url));
+    addAction("wrench", "打开 DevTools", async () => {
+      const opened = await this.plugin.openBrowserDevTools(this.surfaceEl);
+      if (!opened) throw new Error("当前页面层不支持 DevTools");
+    });
     addAction("zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
     addAction("zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
     addAction("monitor-smartphone", this.plugin.settings.desktopMode ? "手机版" : "桌面版", () => this.plugin.toggleDesktopMode(this.containerEl));
@@ -2073,6 +2113,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerObsidianProtocolHandler("mobile-webviewer", async (params) => {
       const url = typeof params.url === "string" ? params.url : this.settings.homeUrl;
       await this.openNoteBrowser(url);
+    });
+
+    this.registerObsidianProtocolHandler("mobile-webviewer-download", async (params) => {
+      const url = typeof params.url === "string" ? params.url : "";
+      if (!url) return;
+      const entry = await this.downloadUrlFile(url);
+      new Notice(`Download complete: ${entry.path || entry.message}`);
     });
 
     this.registerEvent(
@@ -2463,9 +2510,24 @@ export default class MobileWebviewerPlugin extends Plugin {
         void this.addConsole("warn", `Note Browser load issue: ${message}`, failedUrl ?? embed.dataset.url ?? url);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
-      onNewWindow: (nextUrl) => this.openUrlInEmbed(embed, nextUrl)
+      onNewWindow: (nextUrl) => this.openUrlInEmbed(embed, nextUrl),
+      onLoading: (loading, loadingUrl) => this.updateEmbedLoading(embed, loading, loadingUrl || url),
+      onFavicon: (iconUrl) => this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url),
+      onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl)
     });
     this.applyFrameViewPreferences(frame);
+  }
+
+  updateEmbedLoading(embed: HTMLElement, loading: boolean, url: string): void {
+    embed.toggleClass("is-loading", loading);
+    const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
+    if (lock) lock.setText(loading ? "load" : /^https:\/\//i.test(url) ? "https" : "page");
+  }
+
+  async handleEmbedDownloadCandidate(embed: HTMLElement, url: string): Promise<void> {
+    await this.addConsole("info", `Detected download link: ${url}`, embed.dataset.url || url);
+    const entry = await this.downloadUrlFile(url);
+    new Notice(`Download complete: ${entry.path || entry.message}`);
   }
 
   handleEmbedSurfaceNavigate(embed: HTMLElement, url: string): void {
@@ -2889,6 +2951,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction("search", "Find in page", () => {
       this.toggleEmbedFindPanel(embed);
     }, false);
+    addAction("activity", "Browser status", () => {
+      this.toggleEmbedBrowserStatusPanel(panel, embed, url);
+    }, false);
+    addAction("wrench", "Open DevTools", async () => {
+      const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+      const opened = await this.openBrowserDevTools(surface ?? undefined);
+      if (!opened) throw new Error("Current surface does not support DevTools");
+    }, false);
     addAction("zoom-in", `Zoom in (${this.settings.pageZoom}%)`, async () => {
       await this.setPageZoom(this.settings.pageZoom + 10, embed);
     }, false);
@@ -3258,6 +3328,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     const toolsPanel = panel.createDiv({ cls: "mwv-tools-panel" });
     toolsPanel.createDiv({ cls: "mwv-tools-title", text: title });
     for (const row of rows) {
+      toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
+    }
+  }
+
+  toggleEmbedBrowserStatusPanel(panel: HTMLElement, embed: HTMLElement, url: string): void {
+    const existing = panel.querySelector<HTMLElement>(".mwv-tools-panel");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    this.removeUtilityPanels(panel);
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+    const toolsPanel = panel.createDiv({ cls: "mwv-tools-panel" });
+    toolsPanel.createDiv({ cls: "mwv-tools-title", text: "Browser status" });
+    for (const row of this.describeBrowserSurface(surface ?? undefined, embed.dataset.url || url)) {
       toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
     }
   }
@@ -4244,6 +4329,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const emitNavigate = (event: Event) => {
       const detail = event as Event & { url?: string };
       const url = detail.url || webview.getURL?.() || webview.src;
+      const downloadUrl = this.extractInternalDownloadUrl(url);
+      if (downloadUrl) {
+        webview.stop?.();
+        void callbacks.onDownloadCandidate?.(downloadUrl);
+        return;
+      }
       if (url) void callbacks.onNavigate?.(url);
     };
     const emitTitle = (event: Event) => {
@@ -4254,13 +4345,25 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     webview.addEventListener("dom-ready", () => {
       this.applyWebviewRuntime(webview);
+      this.installWebviewDownloadBridge(webview, callbacks);
       void callbacks.onReady?.();
       const title = webview.getTitle?.();
       if (title) void callbacks.onTitle?.(title);
     });
+    webview.addEventListener("did-start-loading", () => {
+      void callbacks.onLoading?.(true, webview.getURL?.() || webview.src);
+    });
+    webview.addEventListener("did-stop-loading", () => {
+      void callbacks.onLoading?.(false, webview.getURL?.() || webview.src);
+    });
     webview.addEventListener("did-navigate", emitNavigate);
     webview.addEventListener("did-navigate-in-page", emitNavigate);
     webview.addEventListener("page-title-updated", emitTitle);
+    webview.addEventListener("page-favicon-updated", (event) => {
+      const detail = event as Event & { favicons?: string[] };
+      const favicon = detail.favicons?.find(Boolean);
+      if (favicon) void callbacks.onFavicon?.(favicon);
+    });
     webview.addEventListener("did-finish-load", () => {
       const url = webview.getURL?.() || webview.src;
       if (url) void callbacks.onNavigate?.(url);
@@ -4270,6 +4373,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     webview.addEventListener("did-fail-load", (event) => {
       const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
       if (detail.errorCode === -3) return;
+      webview.addClass("has-load-error");
       void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || webview.getURL?.() || webview.src);
     });
     webview.addEventListener("console-message", (event) => {
@@ -4283,6 +4387,42 @@ export default class MobileWebviewerPlugin extends Plugin {
       detail.preventDefault?.();
       void callbacks.onNewWindow?.(detail.url);
     });
+  }
+
+  installWebviewDownloadBridge(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
+    if (!webview.executeJavaScript) return;
+    const code = `
+      (() => {
+        if (window.__mwvDownloadBridgeInstalled) return;
+        window.__mwvDownloadBridgeInstalled = true;
+        const filePattern = /\\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
+        document.addEventListener("click", (event) => {
+          const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+          if (!anchor) return;
+          const href = anchor.href || "";
+          if (!href || href.startsWith("javascript:") || href.startsWith("#")) return;
+          const shouldDownload = anchor.hasAttribute("download") || filePattern.test(href);
+          if (!shouldDownload) return;
+          event.preventDefault();
+          event.stopPropagation();
+          window.location.href = "obsidian://mobile-webviewer-download?url=" + encodeURIComponent(href);
+        }, true);
+      })();
+    `;
+    webview.executeJavaScript(code, false).catch(() => {
+      void callbacks.onConsole?.("warn", "Download bridge injection failed", webview.getURL?.() || webview.src);
+    });
+  }
+
+  extractInternalDownloadUrl(url: string | undefined): string {
+    if (!url) return "";
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "obsidian:" || parsed.hostname !== "mobile-webviewer-download") return "";
+      return parsed.searchParams.get("url") || "";
+    } catch {
+      return "";
+    }
   }
 
   setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
@@ -4301,6 +4441,43 @@ export default class MobileWebviewerPlugin extends Plugin {
       return surface.contentDocument?.title || "";
     } catch {
       return "";
+    }
+  }
+
+  describeBrowserSurface(surface: BrowserSurfaceElement | undefined, fallbackUrl: string): string[] {
+    const isWebview = this.isElectronWebview(surface);
+    const currentUrl = surface
+      ? this.isElectronWebview(surface)
+        ? surface.getURL?.() || surface.src || fallbackUrl
+        : surface.src || fallbackUrl
+      : fallbackUrl;
+    const rows = [
+      `内核: ${isWebview ? "Electron Chromium webview" : surface ? "iframe fallback" : "未找到页面层"}`,
+      `当前地址: ${currentUrl}`,
+      `标题: ${surface ? this.getBrowserSurfaceTitle(surface) || hostName(currentUrl) : hostName(currentUrl)}`,
+      `加载中: ${isWebview && surface.isLoading?.() ? "是" : "否"}`,
+      `可后退: ${isWebview && surface.canGoBack?.() ? "是" : "否"}`,
+      `可前进: ${isWebview && surface.canGoForward?.() ? "是" : "否"}`,
+      `DevTools: ${isWebview && typeof surface.openDevTools === "function" ? "可用" : "不可用"}`,
+      `缩放: ${this.settings.pageZoom}%`,
+      `页面模式: ${this.settings.userAgentMode} / ${this.settings.desktopMode ? "desktop width" : "mobile width"}`,
+      `下载目录: ${this.normalizeDownloadFolder()}`
+    ];
+    return rows;
+  }
+
+  async openBrowserDevTools(surface?: BrowserSurfaceElement): Promise<boolean> {
+    if (!this.isElectronWebview(surface) || typeof surface.openDevTools !== "function") {
+      await this.addConsole("warn", "DevTools unavailable on current browser surface");
+      return false;
+    }
+    try {
+      surface.openDevTools();
+      await this.addConsole("info", "Opened webview DevTools", surface.getURL?.() || surface.src);
+      return true;
+    } catch (error) {
+      await this.addConsole("error", `Open DevTools failed: ${error instanceof Error ? error.message : String(error)}`, surface.getURL?.() || surface.src);
+      return false;
     }
   }
 
