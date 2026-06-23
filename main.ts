@@ -26,7 +26,9 @@ const MAX_CACHE_ENTRIES = 40;
 const MAX_CONSOLE_ENTRIES = 120;
 const MAX_BROWSER_TABS = 16;
 const MAX_DOWNLOADS = 120;
+const MAX_WEB_NOTES = 80;
 const DEFAULT_DOWNLOAD_FOLDER = "Mobile Webviewer Downloads";
+const DEFAULT_WEB_NOTE_FOLDER = "Mobile Webviewer Notes";
 const DEFAULT_DOWNLOAD_CONNECTIONS = 4;
 const MIN_SEGMENTED_DOWNLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_MHTML_RESOURCES = 24;
@@ -114,6 +116,19 @@ interface DownloadEntry {
   time: number;
 }
 
+interface WebNoteEntry {
+  id: string;
+  url: string;
+  title: string;
+  sourceTitle: string;
+  noteHtml: string;
+  noteText: string;
+  doodleSvg: string;
+  markdownPath: string;
+  updatedAt: number;
+  createdAt: number;
+}
+
 interface LanguageOption {
   code: string;
   label: string;
@@ -131,6 +146,9 @@ interface MobileWebviewerSettings {
   noteBrowserBack: string[];
   noteBrowserForward: string[];
   liveBrowserFirst: boolean;
+  browserFrontendMode: "note" | "web" | "split";
+  autoSaveWebNotes: boolean;
+  webNoteFolder: string;
   userScriptsEnabled: boolean;
   readerUserStyle: string;
   readerUserScript: string;
@@ -161,6 +179,7 @@ interface MobileWebviewerSettings {
   bookmarks: WebEntry[];
   readingList: WebEntry[];
   pageCache: PageCacheEntry[];
+  webNotes: WebNoteEntry[];
   consoleEntries: BrowserConsoleEntry[];
   downloads: DownloadEntry[];
 }
@@ -232,6 +251,9 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   noteBrowserBack: [],
   noteBrowserForward: [],
   liveBrowserFirst: true,
+  browserFrontendMode: "note",
+  autoSaveWebNotes: true,
+  webNoteFolder: DEFAULT_WEB_NOTE_FOLDER,
   userScriptsEnabled: true,
   readerUserStyle: "",
   readerUserScript: "",
@@ -261,6 +283,7 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   history: [],
   readingList: [],
   pageCache: [],
+  webNotes: [],
   consoleEntries: [],
   downloads: [],
   bookmarks: [
@@ -594,6 +617,72 @@ function simpleHash(value: string): string {
   return Math.abs(value.split("").reduce((sum, char) => ((sum << 5) - sum + char.charCodeAt(0)) | 0, 0)).toString(36);
 }
 
+function webNoteId(url: string): string {
+  return `webnote-${simpleHash(url)}-${simpleHash(hostName(url))}`;
+}
+
+function escapeMarkdownText(value: string): string {
+  return value.replace(/\r/g, "").replace(/\u00a0/g, " ").trim();
+}
+
+function htmlToMarkdownFromElement(root: HTMLElement): string {
+  const lines: string[] = [];
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = escapeMarkdownText(node.textContent ?? "");
+      if (text) lines.push(text);
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+    if (node.closest(".mwv-note-actions, .mwv-note-source, .mwv-doodle-layer, .mwv-webnote-meta")) return;
+    const tag = node.tagName.toLowerCase();
+    const text = escapeMarkdownText(node.innerText ?? node.textContent ?? "");
+    if (!text && tag !== "img") return;
+    if (tag === "h1") lines.push(`# ${text}`);
+    else if (tag === "h2") lines.push(`## ${text}`);
+    else if (tag === "h3") lines.push(`### ${text}`);
+    else if (tag === "li") lines.push(`- ${text}`);
+    else if (tag === "p" || tag === "div" || tag === "section" || tag === "article") {
+      if (Array.from(node.children).some((child) => ["H1", "H2", "H3", "P", "UL", "OL", "LI"].includes(child.tagName))) {
+        Array.from(node.childNodes).forEach(visit);
+      } else if (text) {
+        lines.push(text);
+      }
+    } else if (tag === "img") {
+      const src = node.getAttribute("src") || "";
+      if (src) lines.push(`![](${src})`);
+    } else {
+      Array.from(node.childNodes).forEach(visit);
+    }
+  };
+  Array.from(root.childNodes).forEach(visit);
+  return lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line, index, all) => index === 0 || line !== all[index - 1])
+    .join("\n\n");
+}
+
+function webNoteMarkdown(entry: WebNoteEntry): string {
+  const title = entry.title || entry.sourceTitle || hostName(entry.url);
+  const body = entry.noteText || htmlToText(entry.noteHtml);
+  const doodle = entry.doodleSvg ? `\n\n## Doodle\n\n\`\`\`svg\n${entry.doodleSvg}\n\`\`\`` : "";
+  return [
+    "---",
+    `source: ${entry.url}`,
+    `saved: ${new Date(entry.updatedAt).toISOString()}`,
+    "type: mobile-webviewer-note",
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    entry.url,
+    "",
+    body,
+    doodle
+  ].join("\n").trim() + "\n";
+}
+
 function normalizeTranslateLanguageCode(code: string): string {
   const clean = code.trim().replace(/_/g, "-").toLowerCase();
   if (!clean) return "en";
@@ -661,6 +750,11 @@ class MobileWebviewerView extends ItemView {
   forwardStack: string[] = [];
   lastQuery = "";
   surfaceNavMode: "programmatic" | "back" | "forward" | "reload" | "" = "";
+  frontendMode: "note" | "web" | "split" = "note";
+  currentWebNote?: WebNoteEntry;
+  webNoteSaveTimer?: number;
+  doodleEnabled = false;
+  activeDoodlePath?: SVGPathElement;
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
 
   constructor(leaf: WorkspaceLeaf, plugin: MobileWebviewerPlugin) {
@@ -1376,6 +1470,7 @@ class MobileWebviewerView extends ItemView {
   async renderUrlAsNote(url: string): Promise<void> {
     this.setSurfaceUrl(url);
     this.setLiveFrameMode(true);
+    this.setFrontendMode(this.plugin.settings.browserFrontendMode || "note");
     this.renderLoadingNote(url);
 
     try {
@@ -1383,7 +1478,9 @@ class MobileWebviewerView extends ItemView {
       this.currentTitle = page.title || hostName(url);
       this.titleEl.setText(this.currentTitle);
       this.subtitleEl.setText(page.byline || hostName(url));
-      this.renderNotePage(page);
+      const note = await this.plugin.ensureWebNote(page);
+      this.currentWebNote = note;
+      this.renderNotePage(page, note);
       void this.syncActiveBrowserTab();
       this.renderTabStrip();
     } catch (error) {
@@ -1396,6 +1493,9 @@ class MobileWebviewerView extends ItemView {
   setLiveFrameMode(enabled: boolean): void {
     const wrap = this.surfaceEl.parentElement;
     wrap?.toggleClass("is-live-page", enabled);
+    wrap?.toggleClass("is-note-front", enabled && this.frontendMode === "note");
+    wrap?.toggleClass("is-web-front", enabled && this.frontendMode === "web");
+    wrap?.toggleClass("is-split-front", enabled && this.frontendMode === "split");
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
     this.homeEl.addClass("is-visible");
     if (enabled) {
@@ -1405,6 +1505,23 @@ class MobileWebviewerView extends ItemView {
       this.surfaceEl.addClass("is-hidden");
       this.homeEl.removeClass("mwv-reader-strip");
     }
+  }
+
+  setFrontendMode(mode: "note" | "web" | "split"): void {
+    this.frontendMode = mode;
+    this.plugin.settings.browserFrontendMode = mode;
+    void this.plugin.saveSettings();
+    const wrap = this.surfaceEl?.parentElement;
+    if (!wrap) return;
+    wrap.toggleClass("is-note-front", mode === "note");
+    wrap.toggleClass("is-web-front", mode === "web");
+    wrap.toggleClass("is-split-front", mode === "split");
+    this.homeEl.toggleClass("mwv-reader-strip", mode !== "web");
+    this.surfaceEl.toggleClass("is-hidden", mode === "note");
+    this.homeEl.toggleClass("is-visible", mode !== "web");
+    this.homeEl.querySelectorAll<HTMLElement>("[data-mwv-mode]").forEach((button) => {
+      button.toggleClass("is-active", button.dataset.mwvMode === mode);
+    });
   }
 
   renderLoadingNote(url: string): void {
@@ -1429,32 +1546,56 @@ class MobileWebviewerView extends ItemView {
     });
   }
 
-  renderNotePage(page: NotePage): void {
+  renderNotePage(page: NotePage, note?: WebNoteEntry): void {
     this.homeEl.empty();
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface" });
+    article.dataset.url = page.url;
     article.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     article.createEl("h1", { text: page.title || hostName(page.url) });
 
     const actions = article.createDiv({ cls: "mwv-note-actions" });
+    const noteButton = actions.createEl("button", { text: "笔记", attr: { type: "button" } });
+    noteButton.dataset.mwvMode = "note";
+    noteButton.addClass("is-active");
+    noteButton.addEventListener("click", () => this.setFrontendMode("note"));
+    const webButton = actions.createEl("button", { text: "网页", attr: { type: "button" } });
+    webButton.dataset.mwvMode = "web";
+    webButton.addEventListener("click", () => this.setFrontendMode("web"));
+    const splitButton = actions.createEl("button", { text: "分屏", attr: { type: "button" } });
+    splitButton.dataset.mwvMode = "split";
+    splitButton.addEventListener("click", () => this.setFrontendMode("split"));
     const copyButton = actions.createEl("button", { text: "Copy link", attr: { type: "button" } });
     copyButton.addEventListener("click", async () => {
       await navigator.clipboard.writeText(`[${page.title}](${page.url})`);
       new Notice("Copied link");
     });
+    const saveButton = actions.createEl("button", { text: "保存笔记", attr: { type: "button" } });
+    saveButton.addEventListener("click", () => void this.saveCurrentWebNote(true));
+    const doodleButton = actions.createEl("button", { text: "涂鸦", attr: { type: "button" } });
+    doodleButton.addEventListener("click", () => this.toggleDoodleLayer(article, doodleButton));
+    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已保存 ${note.markdownPath}` : "自动保存" });
 
-    const content = article.createDiv({ cls: "mwv-note-content" });
-    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-    if (!blocks.length) {
-      content.remove();
-    }
-    for (const block of blocks.slice(0, 80)) {
-      if (/^#{1,3}\s+/.test(block)) {
-        const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
-        content.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
-      } else {
-        content.createEl("p", { text: block });
+    const noteWrap = article.createDiv({ cls: "mwv-webnote-wrap" });
+    const content = noteWrap.createDiv({
+      cls: "mwv-note-content mwv-webnote-editor",
+      attr: {
+        contenteditable: "true",
+        spellcheck: "true",
+        "aria-label": "Editable web note"
       }
+    });
+    this.populateWebNoteContent(content, page, note);
+    const doodleLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    doodleLayer.addClass("mwv-doodle-layer");
+    doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
+    doodleLayer.setAttribute("preserveAspectRatio", "none");
+    doodleLayer.setAttribute("aria-hidden", "true");
+    noteWrap.appendChild(doodleLayer);
+    if (note?.doodleSvg) {
+      doodleLayer.innerHTML = note.doodleSvg;
     }
+    this.bindWebNoteEditor(content, status);
+    this.bindDoodleLayer(doodleLayer, status);
     this.plugin.applyReaderCustomizations(article, page);
 
     if (page.links.length) {
@@ -1467,6 +1608,124 @@ class MobileWebviewerView extends ItemView {
         button.addEventListener("click", () => this.navigate(link.url, true));
       }
     }
+    if (this.frontendMode) {
+      this.setFrontendMode(this.frontendMode);
+    }
+  }
+
+  populateWebNoteContent(content: HTMLElement, page: NotePage, note?: WebNoteEntry): void {
+    if (note?.noteHtml) {
+      content.innerHTML = note.noteHtml;
+      return;
+    }
+    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+    if (!blocks.length && page.excerpt) {
+      content.createEl("p", { text: page.excerpt });
+      return;
+    }
+    for (const block of blocks.slice(0, 100)) {
+      if (/^#{1,3}\s+/.test(block)) {
+        const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
+        content.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
+      } else {
+        content.createEl("p", { text: block });
+      }
+    }
+  }
+
+  bindWebNoteEditor(content: HTMLElement, status: HTMLElement): void {
+    const markDirty = () => {
+      status.setText("保存中...");
+      this.queueWebNoteSave(status);
+    };
+    content.addEventListener("input", markDirty);
+    content.addEventListener("paste", markDirty);
+    content.addEventListener("blur", () => void this.saveCurrentWebNote(false, status));
+  }
+
+  queueWebNoteSave(status?: HTMLElement): void {
+    if (!this.plugin.settings.autoSaveWebNotes) return;
+    if (this.webNoteSaveTimer) window.clearTimeout(this.webNoteSaveTimer);
+    this.webNoteSaveTimer = window.setTimeout(() => {
+      void this.saveCurrentWebNote(false, status);
+    }, 700);
+  }
+
+  async saveCurrentWebNote(showNotice = false, status?: HTMLElement): Promise<void> {
+    if (!this.currentUrl) return;
+    const article = this.homeEl.querySelector<HTMLElement>(".mwv-note-surface");
+    const editor = article?.querySelector<HTMLElement>(".mwv-webnote-editor");
+    if (!article || !editor) return;
+    const doodle = article.querySelector<SVGSVGElement>(".mwv-doodle-layer");
+    const base = this.currentWebNote ?? this.plugin.createWebNoteFromPage({
+      title: this.currentTitle || hostName(this.currentUrl),
+      url: this.currentUrl,
+      byline: hostName(this.currentUrl),
+      excerpt: editor.innerText.slice(0, 420),
+      content: editor.innerText,
+      images: [],
+      links: []
+    });
+    const updated: WebNoteEntry = {
+      ...base,
+      title: this.currentTitle || base.title,
+      noteHtml: editor.innerHTML,
+      noteText: htmlToMarkdownFromElement(editor),
+      doodleSvg: doodle?.innerHTML ?? "",
+      updatedAt: Date.now()
+    };
+    this.currentWebNote = await this.plugin.saveWebNote(updated);
+    status?.setText(`已保存 ${this.currentWebNote.markdownPath}`);
+    if (showNotice) new Notice("Web note saved");
+  }
+
+  toggleDoodleLayer(article: HTMLElement, button: HTMLElement): void {
+    this.doodleEnabled = !this.doodleEnabled;
+    article.toggleClass("is-doodling", this.doodleEnabled);
+    button.toggleClass("is-active", this.doodleEnabled);
+  }
+
+  bindDoodleLayer(svg: SVGSVGElement, status: HTMLElement): void {
+    const point = (event: PointerEvent): [number, number] => {
+      const rect = svg.getBoundingClientRect();
+      const x = clampNumber(((event.clientX - rect.left) / Math.max(1, rect.width)) * 1000, 0, 1000);
+      const y = clampNumber(((event.clientY - rect.top) / Math.max(1, rect.height)) * 1000, 0, 1000);
+      return [x, y];
+    };
+    svg.addEventListener("pointerdown", (event) => {
+      if (!this.doodleEnabled) return;
+      event.preventDefault();
+      const [x, y] = point(event);
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M ${x.toFixed(1)} ${y.toFixed(1)}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "var(--interactive-accent)");
+      path.setAttribute("stroke-width", "5");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      svg.appendChild(path);
+      this.activeDoodlePath = path;
+      svg.setPointerCapture(event.pointerId);
+    });
+    svg.addEventListener("pointermove", (event) => {
+      if (!this.doodleEnabled || !this.activeDoodlePath) return;
+      event.preventDefault();
+      const [x, y] = point(event);
+      this.activeDoodlePath.setAttribute("d", `${this.activeDoodlePath.getAttribute("d")} L ${x.toFixed(1)} ${y.toFixed(1)}`);
+      status.setText("保存中...");
+    });
+    const finish = (event: PointerEvent) => {
+      if (!this.activeDoodlePath) return;
+      this.activeDoodlePath = undefined;
+      try {
+        svg.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer may already be released by the host.
+      }
+      this.queueWebNoteSave(status);
+    };
+    svg.addEventListener("pointerup", finish);
+    svg.addEventListener("pointercancel", finish);
   }
 
   async toggleBookmark(): Promise<void> {
@@ -2163,13 +2422,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.renderBrowserChrome(embed, url, "Loading");
 
     if (this.settings.liveBrowserFirst) {
-      this.renderLiveBrowserSurface(embed, url);
-      const reader = embed.createDiv({ cls: "mwv-reader-panel is-loading" });
+      const reader = embed.createDiv({ cls: "mwv-reader-panel is-loading mwv-note-front-panel" });
       reader.createDiv({ cls: "mwv-reader-panel-title", text: "Reader" });
       reader.createDiv({ cls: "mwv-reader-loading-text", text: "正在提取页面摘要..." });
+      this.renderLiveBrowserSurface(embed, url);
       try {
         const page = await this.fetchNotePage(url);
-        this.renderReaderPanel(reader, page);
+        const note = await this.ensureWebNote(page);
+        this.renderReaderPanel(reader, page, note, embed);
       } catch (error) {
         console.error("[mobile-webviewer] reader extraction failed", error);
         void this.addConsole("warn", "Reader extraction skipped", url);
@@ -2257,29 +2517,74 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  renderReaderPanel(panel: HTMLElement, page: NotePage): void {
+  renderReaderPanel(panel: HTMLElement, page: NotePage, note?: WebNoteEntry, embed?: HTMLElement): void {
     panel.empty();
     panel.removeClass("is-loading");
     panel.createDiv({ cls: "mwv-reader-panel-title", text: "Reader" });
     panel.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     panel.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
+    const actions = panel.createDiv({ cls: "mwv-note-actions" });
+    const noteBtn = actions.createEl("button", { text: "笔记", attr: { type: "button" } });
+    const webBtn = actions.createEl("button", { text: "网页", attr: { type: "button" } });
+    const splitBtn = actions.createEl("button", { text: "分屏", attr: { type: "button" } });
+    noteBtn.addClass("is-active");
+    const setEmbedMode = (mode: "note" | "web" | "split") => {
+      if (!embed) return;
+      embed.toggleClass("is-web-front", mode === "web");
+      embed.toggleClass("is-split-front", mode === "split");
+      noteBtn.toggleClass("is-active", mode === "note");
+      webBtn.toggleClass("is-active", mode === "web");
+      splitBtn.toggleClass("is-active", mode === "split");
+    };
+    noteBtn.addEventListener("click", () => setEmbedMode("note"));
+    webBtn.addEventListener("click", () => setEmbedMode("web"));
+    splitBtn.addEventListener("click", () => setEmbedMode("split"));
+    const saveBtn = actions.createEl("button", { text: "保存笔记", attr: { type: "button" } });
+    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已保存 ${note.markdownPath}` : "自动保存" });
     if (page.images.length) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
         media.createEl("img", { attr: { src: image, alt: "" } });
       }
     }
-    const content = panel.createDiv({ cls: "mwv-md-content" });
-    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-    const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
-    if (!visibleBlocks.length && !page.images.length) {
-      panel.remove();
-      return;
+    const content = panel.createDiv({
+      cls: "mwv-md-content mwv-webnote-editor",
+      attr: { contenteditable: "true", spellcheck: "true" }
+    });
+    if (note?.noteHtml) {
+      content.innerHTML = note.noteHtml;
+    } else {
+      const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+      const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
+      if (!visibleBlocks.length && !page.images.length) {
+        panel.remove();
+        return;
+      }
+      for (const block of visibleBlocks.slice(0, 40)) {
+        const clean = block.replace(/^#{1,3}\s+/, "");
+        if (clean) content.createEl("p", { text: clean });
+      }
     }
-    for (const block of visibleBlocks.slice(0, 12)) {
-      const clean = block.replace(/^#{1,3}\s+/, "");
-      if (clean) content.createEl("p", { text: clean });
-    }
+    const save = async () => {
+      const base = note ?? this.createWebNoteFromPage(page);
+      const saved = await this.saveWebNote({
+        ...base,
+        noteHtml: content.innerHTML,
+        noteText: htmlToMarkdownFromElement(content),
+        updatedAt: Date.now()
+      });
+      status.setText(`已保存 ${saved.markdownPath}`);
+    };
+    let timer: number | undefined;
+    const queue = () => {
+      if (!this.settings.autoSaveWebNotes) return;
+      status.setText("保存中...");
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void save(), 700);
+    };
+    content.addEventListener("input", queue);
+    content.addEventListener("blur", () => void save());
+    saveBtn.addEventListener("click", () => void save());
     this.applyReaderCustomizations(panel, page);
   }
 
@@ -3328,6 +3633,71 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.pageCache = [];
     await this.addConsole("info", "Cache cleared");
     await this.saveSettings();
+  }
+
+  createWebNoteFromPage(page: NotePage): WebNoteEntry {
+    const now = Date.now();
+    return {
+      id: webNoteId(page.url),
+      url: page.url,
+      title: page.title || hostName(page.url),
+      sourceTitle: page.title || hostName(page.url),
+      noteHtml: "",
+      noteText: page.content || page.excerpt || "",
+      doodleSvg: "",
+      markdownPath: "",
+      updatedAt: now,
+      createdAt: now
+    };
+  }
+
+  async ensureWebNote(page: NotePage): Promise<WebNoteEntry> {
+    const id = webNoteId(page.url);
+    const existing = this.settings.webNotes.find((entry) => entry.id === id || entry.url === page.url);
+    if (existing) {
+      return existing;
+    }
+    const note = this.createWebNoteFromPage(page);
+    note.noteHtml = this.notePageToHtml(page);
+    note.noteText = page.content || page.excerpt || "";
+    return await this.saveWebNote(note);
+  }
+
+  notePageToHtml(page: NotePage): string {
+    const temp = document.createElement("div");
+    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+    for (const block of blocks.slice(0, 100)) {
+      if (/^#{1,3}\s+/.test(block)) {
+        const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
+        temp.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
+      } else {
+        temp.createEl("p", { text: block });
+      }
+    }
+    if (!blocks.length && page.excerpt) {
+      temp.createEl("p", { text: page.excerpt });
+    }
+    return temp.innerHTML;
+  }
+
+  async saveWebNote(entry: WebNoteEntry): Promise<WebNoteEntry> {
+    const folder = normalizePath(this.settings.webNoteFolder || DEFAULT_WEB_NOTE_FOLDER);
+    await this.ensureVaultFolder(folder);
+    const fileName = appendFileExtension(sanitizeFileName(entry.title || hostName(entry.url), "web-note"), "md");
+    const path = entry.markdownPath || await this.uniqueVaultPath(folder, fileName);
+    const saved: WebNoteEntry = {
+      ...entry,
+      markdownPath: path,
+      updatedAt: Date.now()
+    };
+    await this.app.vault.adapter.write(path, webNoteMarkdown(saved));
+    this.settings.webNotes = [
+      saved,
+      ...this.settings.webNotes.filter((item) => item.id !== saved.id && item.url !== saved.url)
+    ].slice(0, MAX_WEB_NOTES);
+    await this.saveSettings();
+    await this.addConsole("info", `Web note saved: ${path}`, saved.url);
+    return saved;
   }
 
   async addConsole(level: BrowserConsoleEntry["level"], message: string, url?: string): Promise<void> {
@@ -4626,6 +4996,27 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.bookmarks = Array.isArray(this.settings.bookmarks) ? this.settings.bookmarks : [];
     this.settings.readingList = Array.isArray(this.settings.readingList) ? this.settings.readingList : [];
     this.settings.pageCache = Array.isArray(this.settings.pageCache) ? this.settings.pageCache : [];
+    this.settings.webNotes = Array.isArray(this.settings.webNotes)
+      ? this.settings.webNotes
+          .filter((entry) => entry && typeof entry.url === "string")
+          .slice(0, MAX_WEB_NOTES)
+          .map((entry) => {
+            const item = entry as Partial<WebNoteEntry> & { url: string };
+            const now = Date.now();
+            return {
+              id: typeof item.id === "string" && item.id ? item.id : webNoteId(item.url),
+              url: item.url,
+              title: typeof item.title === "string" && item.title ? item.title : hostName(item.url),
+              sourceTitle: typeof item.sourceTitle === "string" ? item.sourceTitle : "",
+              noteHtml: typeof item.noteHtml === "string" ? item.noteHtml : "",
+              noteText: typeof item.noteText === "string" ? item.noteText : "",
+              doodleSvg: typeof item.doodleSvg === "string" ? item.doodleSvg : "",
+              markdownPath: typeof item.markdownPath === "string" ? normalizePath(item.markdownPath) : "",
+              updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
+              createdAt: typeof item.createdAt === "number" ? item.createdAt : now
+            };
+          })
+      : [];
     this.settings.consoleEntries = Array.isArray(this.settings.consoleEntries) ? this.settings.consoleEntries : [];
     this.settings.downloads = Array.isArray(this.settings.downloads)
       ? this.settings.downloads
@@ -4651,6 +5042,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.userScriptsEnabled = typeof this.settings.userScriptsEnabled === "boolean" ? this.settings.userScriptsEnabled : true;
     this.settings.readerUserStyle = typeof this.settings.readerUserStyle === "string" ? this.settings.readerUserStyle : "";
     this.settings.readerUserScript = typeof this.settings.readerUserScript === "string" ? this.settings.readerUserScript : "";
+    this.settings.browserFrontendMode = ["note", "web", "split"].includes(this.settings.browserFrontendMode)
+      ? this.settings.browserFrontendMode
+      : "note";
+    this.settings.autoSaveWebNotes = typeof this.settings.autoSaveWebNotes === "boolean" ? this.settings.autoSaveWebNotes : true;
+    this.settings.webNoteFolder = typeof this.settings.webNoteFolder === "string" && this.settings.webNoteFolder.trim()
+      ? normalizePath(this.settings.webNoteFolder)
+      : DEFAULT_WEB_NOTE_FOLDER;
     this.settings.userScriptRules = Array.isArray(this.settings.userScriptRules)
       ? this.settings.userScriptRules
           .filter((rule) => rule && typeof rule === "object")
@@ -4930,6 +5328,46 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.liveBrowserFirst)
           .onChange(async (value) => {
             this.plugin.settings.liveBrowserFirst = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Frontend mode")
+      .setDesc("Default foreground: editable note, full web page, or split view.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("note", "Editable note")
+          .addOption("web", "Full web page")
+          .addOption("split", "Split")
+          .setValue(this.plugin.settings.browserFrontendMode)
+          .onChange(async (value) => {
+            this.plugin.settings.browserFrontendMode = value as "note" | "web" | "split";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-save web notes")
+      .setDesc("Save edited reader text and doodles into plugin data and Markdown snapshots.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoSaveWebNotes)
+          .onChange(async (value) => {
+            this.plugin.settings.autoSaveWebNotes = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Web note folder")
+      .setDesc("Markdown snapshots are saved here inside the vault.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_WEB_NOTE_FOLDER)
+          .setValue(this.plugin.settings.webNoteFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.webNoteFolder = normalizePath(value || DEFAULT_WEB_NOTE_FOLDER);
             await this.plugin.saveSettings();
           })
       );

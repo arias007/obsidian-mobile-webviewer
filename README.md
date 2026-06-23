@@ -8,15 +8,14 @@ It now has two clearly named modes:
   browser with a top address/search input, page area, bottom controls, history,
   downloads, bookmarks, reading list, cache controls, console copy, and one-tap
   link capture. It includes a persistent mobile tab strip with per-tab URL and
-  back/forward state. On desktop Obsidian it now prefers Electron's Chromium
-  `webview` surface for real browser navigation, selection/copy, page scripts,
-  popups, in-page navigation, title updates, and page history. When that surface
-  is unavailable it falls back to the older iframe/reader layer. System-browser
-  opening is kept inside the More menu, not the main browser chrome.
+  back/forward state. The foreground is now an editable, reader-style Obsidian
+  web note by default. A full Chromium `webview` page stays loaded behind it for
+  real browser navigation and can be switched in with Note/Web/Split controls.
+  Edited text and doodles auto-save into plugin data and Markdown snapshots.
 - **Note Browser**: a real Markdown note named `Mobile Webviewer.md` with HTML
   elements rendered inside the note. The plugin enhances that note with a
-  Bing-like lightweight search shell, real-webview-first live page surface,
-  reader layer,
+  Bing-like lightweight search shell, editable web-note foreground, live web
+  backend,
   bookmarks bar, cache, downloads, history, and More menu.
 
 ## Install
@@ -36,8 +35,11 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 
 - Open the original browser-like view inside Obsidian.
 - Open the note-based browser shell as a real Markdown file.
-- Use Electron Chromium `webview` on desktop Obsidian where available, with
-  iframe/reader fallback for restricted or mobile plugin environments.
+- Use an editable reader-style note as the foreground while keeping a full
+  browser page loaded in the background.
+- Switch between Note, Web, and Split modes.
+- Auto-save edited text and doodles into Markdown snapshots under
+  `Mobile Webviewer Notes`.
 - Load URLs or search text from one input.
 - Use multiple persistent browser tabs.
 - Find text inside the live page where accessible and inside the reader/search
@@ -88,12 +90,12 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 
 ## Browser model
 
-The plugin first tries to show pages inside Obsidian with a real Electron
-Chromium `webview`. That gives the closest behavior to a normal browser inside
-Obsidian: continuous navigation, native page selection/copy, page title changes,
-popup/new-window capture, webview history, and page console capture. If Obsidian
-or the platform blocks `webview`, it falls back to the iframe surface plus
-reader/cache layer. More contains power actions such as system-browser open,
-copy link, bookmark, reading list, history, downloads, matched user scripts,
-console, and cache management. Downloads are saved under `Mobile Webviewer
-Downloads` by default and can be configured in settings.
+The plugin uses a dual-layer model. The foreground is an editable Obsidian-like
+web note extracted from the page, suitable for reading, editing, highlighting,
+and doodling. The background keeps the complete browser page alive with
+Electron Chromium `webview` when Obsidian exposes it, falling back to iframe
+where needed. Note/Web/Split controls switch between the editable note, the
+real page, and both together. More contains power actions such as system-browser
+open, copy link, bookmark, reading list, history, downloads, matched user
+scripts, console, and cache management. Downloads are saved under `Mobile
+Webviewer Downloads` by default and can be configured in settings.
