@@ -553,14 +553,22 @@
   color: var(--mwv-text);
   text-align: left;
   overflow: hidden;
+  user-select: text;
 }
 
 .mwv-result-title {
-  color: var(--mwv-accent);
+  color: #1a5fb4;
   font-size: 14px;
   font-weight: 720;
   line-height: 1.3;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.mwv-result-title:hover,
+.mwv-result-title:focus-visible {
+  color: #174ea6;
+  text-decoration: underline;
 }
 
 .mwv-result-url {
@@ -1211,12 +1219,20 @@
   background: var(--background-secondary);
   color: var(--text-normal);
   text-align: left;
+  user-select: text;
 }
 
 .mwv-md-result-title {
-  color: var(--text-accent);
+  color: #1a5fb4;
   font-weight: 700;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.mwv-md-result-title:hover,
+.mwv-md-result-title:focus-visible {
+  color: #174ea6;
+  text-decoration: underline;
 }
 
 .mwv-md-result-url {
@@ -1470,19 +1486,20 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: #d00000;
+  color: #1a5fb4;
   font-size: 17px;
   font-weight: 500;
   line-height: 1.28;
   overflow-wrap: anywhere;
   text-align: left;
+  text-decoration: none;
   user-select: text;
   cursor: pointer;
 }
 
 .mwv-bing-result-title:hover,
 .mwv-bing-result-title:focus-visible {
-  color: #a00000;
+  color: #174ea6;
   text-decoration: underline;
 }
 
@@ -1656,6 +1673,35 @@
   padding: 8px 10px;
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
+}
+
+.mwv-browser-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.mwv-browser-page-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-browser-status-text {
+  overflow: hidden;
+  max-width: 42vw;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mwv-browser-controls {

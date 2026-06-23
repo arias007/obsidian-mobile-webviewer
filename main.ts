@@ -33,6 +33,7 @@ const DEFAULT_DOWNLOAD_CONNECTIONS = 4;
 const MIN_SEGMENTED_DOWNLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_MHTML_RESOURCES = 24;
 const DEFAULT_TRANSLATE_TARGET = "ob";
+const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -214,6 +215,7 @@ interface BrowserConsoleEntry {
 
 interface ElectronWebviewElement extends HTMLElement {
   src: string;
+  loadURL?: (url: string) => void;
   reload?: () => void;
   stop?: () => void;
   goBack?: () => void;
@@ -243,6 +245,7 @@ interface BrowserSurfaceCallbacks {
   onLoading?: (loading: boolean, url?: string) => void | Promise<void>;
   onFavicon?: (url: string) => void | Promise<void>;
   onDownloadCandidate?: (url: string) => void | Promise<void>;
+  onContextLink?: (url: string, title?: string) => void | Promise<void>;
 }
 
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
@@ -496,6 +499,16 @@ function fallbackSearchResults(query: string): SearchResult[] {
       snippet: `查看 Bing 对“${query}”的网页、图片、视频和相关结果。`
     }
   ];
+}
+
+function looksLikeDownloadUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return BINARY_URL_PATTERN.test(`${parsed.pathname}${parsed.search}`);
+  } catch {
+    return BINARY_URL_PATTERN.test(url);
+  }
 }
 
 function createDefaultUserScriptRule(): UserScriptRule {
@@ -849,12 +862,17 @@ class MobileWebviewerView extends ItemView {
         void this.plugin.addConsole("warn", `Page load issue: ${message}`, url ?? this.currentUrl);
       },
       onConsole: (level, message, url) => this.plugin.addConsole(level, message, url ?? this.currentUrl),
-      onNewWindow: (url) => this.navigate(url, true),
+      onNewWindow: (url) => this.openPopupTab(url),
       onLoading: (loading, url) => this.handleSurfaceLoading(loading, url),
       onFavicon: (iconUrl) => this.plugin.addConsole("info", `Favicon: ${iconUrl}`, this.currentUrl),
-      onDownloadCandidate: (downloadUrl) => this.handleSurfaceDownload(downloadUrl)
+      onDownloadCandidate: (downloadUrl) => this.handleSurfaceDownload(downloadUrl),
+      onContextLink: (linkUrl, linkTitle) => this.setContextLink(linkUrl, linkTitle)
     });
     this.plugin.applyFrameViewPreferences(this.surfaceEl);
+    this.surfaceEl.addEventListener("contextmenu", (event) => {
+      const contextUrl = this.addressEl.title && /^https?:\/\//i.test(this.addressEl.title) ? this.addressEl.title : this.currentUrl;
+      this.openLinkContextMenu(event as MouseEvent, contextUrl, this.currentTitle || hostName(contextUrl));
+    });
 
     this.drawerEl = root.createDiv({ cls: "mwv-drawer" });
     const drawerHead = this.drawerEl.createDiv({ cls: "mwv-drawer-head" });
@@ -1191,6 +1209,12 @@ class MobileWebviewerView extends ItemView {
         event.stopPropagation();
         void this.plugin.copyDownloadPath(entry);
       });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      locate.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.revealDownloadEntry(entry);
+      });
     }
   }
 
@@ -1248,11 +1272,19 @@ class MobileWebviewerView extends ItemView {
     if (results.length) {
       const list = article.createDiv({ cls: "mwv-results" });
       for (const result of results) {
-        const item = list.createEl("button", { cls: "mwv-result", attr: { type: "button" } });
-        item.createDiv({ cls: "mwv-result-title", text: result.title });
+        const item = list.createDiv({ cls: "mwv-result" });
+        const titleLink = item.createEl("a", {
+          cls: "mwv-result-title",
+          text: result.title,
+          href: result.url,
+          attr: { "data-mwv-open-url": result.url, title: result.url }
+        });
+        titleLink.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigate(result.url, true);
+        });
         item.createDiv({ cls: "mwv-result-url", text: result.url });
         if (result.snippet) item.createDiv({ cls: "mwv-result-snippet", text: result.snippet });
-        item.addEventListener("click", () => this.navigate(result.url, true));
       }
     }
   }
@@ -1315,6 +1347,42 @@ class MobileWebviewerView extends ItemView {
     for (const row of this.plugin.describeBrowserSurface(this.surfaceEl, url)) {
       toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
     }
+  }
+
+  setContextLink(url: string, title = ""): void {
+    this.subtitleEl.setText(title ? `${title} · ${hostName(url)}` : url);
+    this.addressEl.title = url;
+  }
+
+  async openPopupTab(url: string): Promise<void> {
+    await this.plugin.addConsole("info", `New tab requested: ${url}`, this.currentUrl);
+    await this.newBrowserTab(url);
+  }
+
+  openLinkContextMenu(event: MouseEvent, url: string, title: string): void {
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    event.preventDefault();
+    const menu = new Menu();
+    menu.addItem((item) => item
+      .setTitle("打开链接")
+      .setIcon("arrow-right")
+      .onClick(() => this.navigate(url, true)));
+    menu.addItem((item) => item
+      .setTitle("新标签打开")
+      .setIcon("plus")
+      .onClick(() => void this.newBrowserTab(url)));
+    menu.addItem((item) => item
+      .setTitle("复制链接")
+      .setIcon("copy")
+      .onClick(async () => {
+        await navigator.clipboard.writeText(`[${title || hostName(url)}](${url})`);
+        new Notice("Copied link");
+      }));
+    menu.addItem((item) => item
+      .setTitle("下载链接")
+      .setIcon("download")
+      .onClick(() => void this.handleSurfaceDownload(url)));
+    menu.showAtMouseEvent(event);
   }
 
   navigate(url: string, pushHistory: boolean): void {
@@ -1521,7 +1589,8 @@ class MobileWebviewerView extends ItemView {
     } catch (error) {
       console.error("[mobile-webviewer] note render failed", error);
       this.subtitleEl.setText(hostName(url));
-      this.renderErrorNote(url);
+      this.setFrontendMode("web");
+      void this.plugin.addConsole("warn", "Reader extraction failed; showing live web page", url);
     }
   }
 
@@ -2333,10 +2402,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     const copy = actions.createEl("button", { cls: "mwv-result-action", attr: { type: "button", "data-mwv-copy-url": result.url, "data-mwv-copy-title": result.title, title: "Copy link" } });
     setIcon(copy, "copy");
     const titleLine = item.createDiv({ cls: "mwv-result-title-line" });
-    titleLine.createEl("button", {
+    titleLine.createEl("a", {
       cls: "mwv-bing-result-title",
       text: result.title,
-      attr: { type: "button", "data-mwv-open-url": result.url, title: result.url }
+      href: result.url,
+      attr: { "data-mwv-open-url": result.url, title: result.url }
     });
     item.createDiv({ cls: "mwv-bing-result-url", text: result.url });
     const body = item.createDiv({ cls: "mwv-result-body" });
@@ -2510,10 +2580,11 @@ export default class MobileWebviewerPlugin extends Plugin {
         void this.addConsole("warn", `Note Browser load issue: ${message}`, failedUrl ?? embed.dataset.url ?? url);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
-      onNewWindow: (nextUrl) => this.openUrlInEmbed(embed, nextUrl),
+      onNewWindow: (nextUrl) => this.activateBrowserView(nextUrl, true),
       onLoading: (loading, loadingUrl) => this.updateEmbedLoading(embed, loading, loadingUrl || url),
       onFavicon: (iconUrl) => this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url),
-      onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl)
+      onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl),
+      onContextLink: (linkUrl, linkTitle) => this.updateEmbedStatus(embed, linkUrl, linkTitle)
     });
     this.applyFrameViewPreferences(frame);
   }
@@ -2522,6 +2593,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.toggleClass("is-loading", loading);
     const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
     if (lock) lock.setText(loading ? "load" : /^https:\/\//i.test(url) ? "https" : "page");
+    const status = embed.querySelector<HTMLElement>(".mwv-browser-status-text");
+    if (status) status.setText(loading ? `Loading ${hostName(url)}` : hostName(url));
   }
 
   async handleEmbedDownloadCandidate(embed: HTMLElement, url: string): Promise<void> {
@@ -2572,11 +2645,20 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (form) form.setAttribute("title", url);
     const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
     if (lock) lock.setText(/^https:\/\//i.test(url) ? "https" : "page");
+    const titleEl = embed.querySelector<HTMLElement>(".mwv-browser-page-title");
+    if (titleEl) titleEl.setText(title || hostName(url));
+    const status = embed.querySelector<HTMLElement>(".mwv-browser-status-text");
+    if (status) status.setText(hostName(url));
     const more = embed.querySelector<HTMLElement>(".mwv-browser-action");
     if (more) {
       more.dataset.mwvUrl = url;
       more.dataset.mwvTitle = title;
     }
+  }
+
+  updateEmbedStatus(embed: HTMLElement, url: string, title = ""): void {
+    const status = embed.querySelector<HTMLElement>(".mwv-browser-status-text");
+    if (status) status.setText(title ? `${title} · ${hostName(url)}` : url);
   }
 
   renderReaderPanel(panel: HTMLElement, page: NotePage, note?: WebNoteEntry, embed?: HTMLElement): void {
@@ -2791,21 +2873,19 @@ export default class MobileWebviewerPlugin extends Plugin {
         .then((results) => {
           list.empty();
           for (const result of results) {
-            const item = list.createEl("button", { cls: "mwv-md-result", attr: { type: "button" } });
-            item.createDiv({ cls: "mwv-md-result-title", text: result.title });
+            const item = list.createDiv({ cls: "mwv-md-result" });
+            item.createEl("a", { cls: "mwv-md-result-title", text: result.title, href: result.url, attr: { "data-mwv-open-url": result.url, title: result.url } });
             item.createDiv({ cls: "mwv-md-result-url", text: result.url });
             if (result.snippet) item.createDiv({ cls: "mwv-md-result-snippet", text: result.snippet });
-            item.dataset.mwvOpenUrl = result.url;
           }
         })
         .catch(() => {
           list.empty();
           for (const result of fallbackSearchResults(query)) {
-            const item = list.createEl("button", { cls: "mwv-md-result", attr: { type: "button" } });
-            item.createDiv({ cls: "mwv-md-result-title", text: result.title });
+            const item = list.createDiv({ cls: "mwv-md-result" });
+            item.createEl("a", { cls: "mwv-md-result-title", text: result.title, href: result.url, attr: { "data-mwv-open-url": result.url, title: result.url } });
             item.createDiv({ cls: "mwv-md-result-url", text: result.url });
             item.createDiv({ cls: "mwv-md-result-snippet", text: result.snippet });
-            item.dataset.mwvOpenUrl = result.url;
           }
         });
     }
@@ -2877,6 +2957,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       const liveTitle = more.dataset.mwvTitle || this.getEmbedSurfaceTitle(embed) || title || hostName(liveUrl);
       this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
     });
+    const status = embed.createDiv({ cls: "mwv-browser-status" });
+    status.createDiv({ cls: "mwv-browser-page-title", text: title || hostName(url) });
+    status.createDiv({ cls: "mwv-browser-status-text", text: hostName(url) });
     this.renderBookmarksBar(embed);
   }
 
@@ -3269,6 +3352,12 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.preventDefault();
         event.stopPropagation();
         void this.copyDownloadPath(entry);
+      });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      locate.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.revealDownloadEntry(entry);
       });
     }
   }
@@ -3885,6 +3974,29 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.addConsole("info", `Copied download path: ${path}`, entry.url);
   }
 
+  async revealDownloadEntry(entry: DownloadEntry): Promise<void> {
+    if (!entry.path) {
+      await this.copyDownloadPath(entry);
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(entry.path);
+    if (file instanceof TFile) {
+      const absolutePath = this.vaultPathToAbsolute(entry.path);
+      if (absolutePath) {
+        const electronShell = this.getElectronShell();
+        if (electronShell?.showItemInFolder) {
+          electronShell.showItemInFolder(absolutePath);
+          await this.addConsole("info", `Revealed download: ${absolutePath}`, entry.url);
+          return;
+        }
+      }
+      await this.app.workspace.getLeaf(true).openFile(file);
+      await this.addConsole("info", `Opened download from reveal fallback: ${entry.path}`, entry.url);
+      return;
+    }
+    await this.copyDownloadPath(entry);
+  }
+
   async openDownloadEntry(entry: DownloadEntry): Promise<void> {
     if (!entry.path) {
       await this.copyDownloadPath(entry);
@@ -3900,6 +4012,23 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.copyDownloadPath(entry);
     new Notice("File not found in vault; path copied");
     await this.addConsole("warn", `Download file not found: ${entry.path}`, entry.url);
+  }
+
+  vaultPathToAbsolute(path: string): string {
+    const adapter = this.app.vault.adapter as { basePath?: string; getBasePath?: () => string };
+    const base = adapter.basePath ?? adapter.getBasePath?.() ?? "";
+    if (!base) return "";
+    return `${base.replace(/[\\/]+$/, "")}/${normalizePath(path)}`.replace(/\//g, "\\");
+  }
+
+  getElectronShell(): { showItemInFolder?: (fullPath: string) => void; openPath?: (fullPath: string) => Promise<string> } | null {
+    try {
+      const req = (window as unknown as { require?: (id: string) => { shell?: unknown } }).require;
+      const electron = req?.("electron") as { shell?: { showItemInFolder?: (fullPath: string) => void; openPath?: (fullPath: string) => Promise<string> } } | undefined;
+      return electron?.shell ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async downloadCurrentPageHtml(url: string, title: string): Promise<DownloadEntry> {
@@ -4345,12 +4474,43 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     webview.addEventListener("dom-ready", () => {
       this.applyWebviewRuntime(webview);
-      this.installWebviewDownloadBridge(webview, callbacks);
+      this.installWebviewBrowserBridge(webview, callbacks);
       void callbacks.onReady?.();
       const title = webview.getTitle?.();
       if (title) void callbacks.onTitle?.(title);
     });
+    webview.addEventListener("did-start-navigation", (event) => {
+      const detail = event as Event & { url?: string; isMainFrame?: boolean; preventDefault?: () => void };
+      const url = detail.url || "";
+      const downloadUrl = this.extractInternalDownloadUrl(url);
+      if (downloadUrl) {
+        detail.preventDefault?.();
+        webview.stop?.();
+        void callbacks.onDownloadCandidate?.(downloadUrl);
+        return;
+      }
+      if (detail.isMainFrame !== false && looksLikeDownloadUrl(url)) {
+        detail.preventDefault?.();
+        webview.stop?.();
+        void callbacks.onDownloadCandidate?.(url);
+      }
+    });
+    webview.addEventListener("will-navigate", (event) => {
+      const detail = event as Event & { url?: string; preventDefault?: () => void };
+      const url = detail.url || "";
+      const downloadUrl = this.extractInternalDownloadUrl(url);
+      if (downloadUrl) {
+        detail.preventDefault?.();
+        void callbacks.onDownloadCandidate?.(downloadUrl);
+        return;
+      }
+      if (looksLikeDownloadUrl(url)) {
+        detail.preventDefault?.();
+        void callbacks.onDownloadCandidate?.(url);
+      }
+    });
     webview.addEventListener("did-start-loading", () => {
+      webview.removeClass("has-load-error");
       void callbacks.onLoading?.(true, webview.getURL?.() || webview.src);
     });
     webview.addEventListener("did-stop-loading", () => {
@@ -4365,6 +4525,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (favicon) void callbacks.onFavicon?.(favicon);
     });
     webview.addEventListener("did-finish-load", () => {
+      webview.removeClass("has-load-error");
       const url = webview.getURL?.() || webview.src;
       if (url) void callbacks.onNavigate?.(url);
       const title = webview.getTitle?.();
@@ -4378,6 +4539,26 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
     webview.addEventListener("console-message", (event) => {
       const detail = event as Event & { message?: string; level?: number };
+      const bridgePrefix = "__MWV_BRIDGE__";
+      if (typeof detail.message === "string" && detail.message.startsWith(bridgePrefix)) {
+        try {
+          const payload = JSON.parse(detail.message.slice(bridgePrefix.length)) as { kind?: string; url?: string; title?: string };
+          if (payload.kind === "new-window" && payload.url) {
+            void callbacks.onNewWindow?.(payload.url);
+            return;
+          }
+          if (payload.kind === "download" && payload.url) {
+            void callbacks.onDownloadCandidate?.(payload.url);
+            return;
+          }
+          if (payload.kind === "context-link" && payload.url) {
+            void callbacks.onContextLink?.(payload.url, payload.title || "");
+            return;
+          }
+        } catch {
+          // Fall through to normal console logging.
+        }
+      }
       const level = detail.level === 2 ? "error" : detail.level === 1 ? "warn" : "info";
       if (detail.message) void callbacks.onConsole?.(level, detail.message, webview.getURL?.() || webview.src);
     });
@@ -4387,30 +4568,78 @@ export default class MobileWebviewerPlugin extends Plugin {
       detail.preventDefault?.();
       void callbacks.onNewWindow?.(detail.url);
     });
+    webview.addEventListener("ipc-message", (event) => {
+      const detail = event as Event & { channel?: string; args?: unknown[] };
+      if (detail.channel !== "mwv-browser-bridge") return;
+      const [kind, url, title] = detail.args ?? [];
+      if (typeof kind !== "string" || typeof url !== "string" || !url) return;
+      if (kind === "new-window") {
+        void callbacks.onNewWindow?.(url);
+      } else if (kind === "download") {
+        void callbacks.onDownloadCandidate?.(url);
+      } else if (kind === "context-link") {
+        void callbacks.onContextLink?.(url, typeof title === "string" ? title : "");
+      }
+    });
   }
 
-  installWebviewDownloadBridge(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
+  installWebviewBrowserBridge(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
     if (!webview.executeJavaScript) return;
     const code = `
       (() => {
-        if (window.__mwvDownloadBridgeInstalled) return;
-        window.__mwvDownloadBridgeInstalled = true;
-        const filePattern = /\\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
+        if (window.__mwvBrowserBridgeInstalled) return;
+        window.__mwvBrowserBridgeInstalled = true;
+        const filePattern = ${BINARY_URL_PATTERN.toString()};
+        const send = (kind, url, title) => {
+          try {
+            console.info("__MWV_BRIDGE__" + JSON.stringify({ kind, url, title: title || "" }));
+            return true;
+          } catch (error) {}
+          if (kind === "download") {
+            window.location.href = "obsidian://mobile-webviewer-download?url=" + encodeURIComponent(url);
+            return true;
+          }
+          return kind === "new-window";
+        };
+        const originalOpen = window.open;
+        window.open = function(url, target, features) {
+          if (url && typeof url === "string" && (!target || target === "_blank")) {
+            send("new-window", new URL(url, location.href).href, "");
+            return null;
+          }
+          return originalOpen ? originalOpen.apply(window, arguments) : null;
+        };
         document.addEventListener("click", (event) => {
           const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
           if (!anchor) return;
           const href = anchor.href || "";
           if (!href || href.startsWith("javascript:") || href.startsWith("#")) return;
           const shouldDownload = anchor.hasAttribute("download") || filePattern.test(href);
-          if (!shouldDownload) return;
-          event.preventDefault();
-          event.stopPropagation();
-          window.location.href = "obsidian://mobile-webviewer-download?url=" + encodeURIComponent(href);
+          if (shouldDownload) {
+            event.preventDefault();
+            event.stopPropagation();
+            send("download", href, anchor.textContent || "");
+            return;
+          }
+          const target = (anchor.getAttribute("target") || "").toLowerCase();
+          if (target === "_blank") {
+            event.preventDefault();
+            event.stopPropagation();
+            send("new-window", href, anchor.textContent || "");
+          }
+        }, true);
+        document.addEventListener("contextmenu", (event) => {
+          const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+          if (anchor && anchor.href) send("context-link", anchor.href, anchor.textContent || "");
+        }, true);
+        document.addEventListener("mouseover", (event) => {
+          const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+          if (anchor && anchor.href) send("context-link", anchor.href, anchor.textContent || "");
         }, true);
       })();
     `;
     webview.executeJavaScript(code, false).catch(() => {
-      void callbacks.onConsole?.("warn", "Download bridge injection failed", webview.getURL?.() || webview.src);
+      void callbacks.onConsole?.("warn", "Browser bridge injection failed", webview.getURL?.() || webview.src);
     });
   }
 
@@ -4427,7 +4656,11 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
     if (this.isElectronWebview(surface)) {
-      surface.src = url;
+      if (surface.loadURL) {
+        surface.loadURL(url);
+      } else {
+        surface.src = url;
+      }
       return;
     }
     surface.src = url;

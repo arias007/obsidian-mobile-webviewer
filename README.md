@@ -12,6 +12,9 @@ It now has two clearly named modes:
   web note by default. A full Chromium `webview` page stays loaded behind it for
   real browser navigation and can be switched in with Note/Web/Split controls.
   Edited text and doodles auto-save into plugin data and Markdown snapshots.
+- Real-page navigation now catches `target=_blank` and `window.open` in the
+  Chromium webview and routes them to browser tabs, so page jumps behave more
+  like Chrome/Edge instead of falling back to the home shell.
 - **Note Browser**: a real Markdown note named `Mobile Webviewer.md` with HTML
   elements rendered inside the note. The plugin enhances that note with a
   Bing-like lightweight search shell, editable web-note foreground, live web
@@ -42,6 +45,8 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
   `Mobile Webviewer Notes`.
 - Load URLs or search text from one input.
 - Use multiple persistent browser tabs.
+- Open popup/new-window links as real browser tabs and keep titles, URLs, load
+  state, and hover/context-link status synchronized with the browser shell.
 - Find text inside the live page where accessible and inside the reader/search
   layer.
 - Zoom pages and switch between mobile and desktop-width surfaces.
@@ -69,6 +74,8 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Open webview DevTools from More when Obsidian exposes that API.
 - Catch common downloadable links inside the live webview and route them to the
   plugin Downloads panel.
+- Open downloaded files from the Downloads panel or reveal their location when
+  the desktop shell exposes that capability.
 - Run global reader-layer custom CSS and JavaScript.
 - Manage URL-matched user script rules with wildcard matching, per-rule enable
   switches, CSS, and JavaScript.
