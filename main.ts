@@ -38,7 +38,7 @@ const MAX_MHTML_RESOURCES = 24;
 const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
-const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed, .workspace-leaf-content[data-type='mobile-webviewer-view']";
+const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -862,6 +862,28 @@ class MobileWebviewerView extends ItemView {
       attr: { type: "submit", "aria-label": "Go" }
     });
     setIcon(goButton, "arrow-right");
+    if (this.plugin.settings.showFloatingWand) {
+      const wandButton = form.createEl("button", {
+        cls: "mwv-icon-button mwv-notedraw-launcher clickable-icon notedraw-webview-button notedraw-webview-inline-button",
+        attr: { type: "button", "aria-label": "NoteDraw", title: "NoteDraw" }
+      });
+      setIcon(wandButton, "wand-sparkles");
+      wandButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.triggerNoteDraw();
+      });
+    }
+    const moreButton = form.createEl("button", {
+      cls: "mwv-icon-button",
+      attr: { type: "button", "aria-label": "More", title: "More" }
+    });
+    setIcon(moreButton, "more-horizontal");
+    moreButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.openMoreMenu(moreButton);
+    });
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -943,13 +965,10 @@ class MobileWebviewerView extends ItemView {
     this.makeToolButton(toolbar, "history", "History", () => this.openDrawer("history"));
     this.makeToolButton(toolbar, "download", "Downloads", () => this.openDrawer("downloads"));
     this.makeToolButton(toolbar, "plus-square", "Save link", () => this.captureLink());
-    this.makeToolButton(toolbar, "more-horizontal", "More", (button) => this.openMoreMenu(button));
-    if (this.plugin.settings.showFloatingWand) {
-      this.makeToolButton(toolbar, "wand-sparkles", "NoteDraw", () => this.triggerNoteDraw()).addClass("mwv-notedraw-launcher");
-    }
     this.makeToolButton(toolbar, "settings", "Settings", () => this.plugin.openSettings());
 
     this.renderDrawer("bookmarks");
+    this.syncSurfaceIdentity();
     this.plugin.queueNoteDrawButtonDedupe(root);
   }
 
@@ -987,10 +1006,29 @@ class MobileWebviewerView extends ItemView {
 
   setSurfaceUrl(url: string): void {
     this.surfaceNavMode = "programmatic";
+    this.syncSurfaceIdentity(url, this.currentTitle || hostName(url));
     this.plugin.setBrowserSurfaceUrl(this.surfaceEl, url);
   }
 
+  syncSurfaceIdentity(url = this.currentUrl || this.plugin.settings.homeUrl, title = this.currentTitle || hostName(url)): void {
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
+    if (root) {
+      root.dataset.url = url;
+      root.dataset.mwvTitle = title;
+      root.setAttribute("data-url", url);
+      root.setAttribute("data-mwv-title", title);
+    }
+    const frameWrap = this.surfaceEl?.parentElement;
+    if (frameWrap) {
+      frameWrap.dataset.url = url;
+      frameWrap.dataset.mwvTitle = title;
+      frameWrap.setAttribute("data-url", url);
+      frameWrap.setAttribute("data-mwv-title", title);
+    }
+  }
+
   handleSurfaceReady(): void {
+    this.syncSurfaceIdentity();
     void this.plugin.applyAccessibleFrameFilters(this.surfaceEl, this.currentUrl);
     this.subtitleEl.setText(hostName(this.currentUrl));
     const title = this.plugin.getBrowserSurfaceTitle(this.surfaceEl);
@@ -1003,6 +1041,7 @@ class MobileWebviewerView extends ItemView {
     if (!title.trim()) return;
     this.currentTitle = title.trim();
     this.titleEl.setText(this.currentTitle);
+    this.syncSurfaceIdentity();
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
   }
@@ -1044,6 +1083,7 @@ class MobileWebviewerView extends ItemView {
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText(hostName(nextUrl));
+    this.syncSurfaceIdentity();
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
     if (mode !== "programmatic" || previous !== nextUrl) {
@@ -1060,6 +1100,7 @@ class MobileWebviewerView extends ItemView {
     this.currentTitle = tab.title || hostName(this.currentUrl);
     this.backStack = Array.isArray(tab.back) ? [...tab.back] : [];
     this.forwardStack = Array.isArray(tab.forward) ? [...tab.forward] : [];
+    this.syncSurfaceIdentity();
   }
 
   renderTabStrip(): void {
@@ -1467,6 +1508,7 @@ class MobileWebviewerView extends ItemView {
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText("Reading...");
+    this.syncSurfaceIdentity();
     this.renderUrlAsNote(nextUrl);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
@@ -1524,6 +1566,7 @@ class MobileWebviewerView extends ItemView {
     this.addressEl.value = url;
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText("Reading...");
+    this.syncSurfaceIdentity();
     this.renderUrlAsNote(url);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
@@ -1582,6 +1625,7 @@ class MobileWebviewerView extends ItemView {
     this.addressEl.value = url;
     this.titleEl.setText("Bing");
     this.subtitleEl.setText("Native light home");
+    this.syncSurfaceIdentity();
     this.setLiveFrameMode(false);
     this.buildHome();
     void this.syncActiveBrowserTab();
@@ -1608,6 +1652,7 @@ class MobileWebviewerView extends ItemView {
     this.addressEl.value = cleanQuery;
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText("Searching Bing...");
+    this.syncSurfaceIdentity(searchUrl, this.currentTitle);
     this.setLiveFrameMode(false);
     this.buildHome(cleanQuery, []);
     void this.syncActiveBrowserTab();
@@ -1641,6 +1686,7 @@ class MobileWebviewerView extends ItemView {
       this.currentTitle = page.title || hostName(url);
       this.titleEl.setText(this.currentTitle);
       this.subtitleEl.setText(page.byline || hostName(url));
+      this.syncSurfaceIdentity(page.url, this.currentTitle);
       const note = await this.plugin.ensureWebNote(page);
       this.currentWebNote = note;
       this.renderNotePage(page, note);
@@ -2345,7 +2391,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Keep the note browser enhanced after Markdown renders and Live Preview updates.
     this.app.workspace.onLayoutReady(() => {
       this.processWebviewerEmbeds(this.app.workspace.containerEl);
-      this.queueNoteDrawButtonDedupe(this.app.workspace.containerEl);
+      this.app.workspace.containerEl
+        .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
+        .forEach((root) => this.queueNoteDrawButtonDedupe(root));
     });
   }
 
@@ -2361,8 +2409,8 @@ export default class MobileWebviewerPlugin extends Plugin {
           if (!node.matches(NOTEDRAW_BUTTON_SELECTOR) && !node.querySelector(NOTEDRAW_BUTTON_SELECTOR)) continue;
           const root =
             node.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) ??
-            (mutation.target instanceof HTMLElement ? mutation.target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) : null) ??
-            this.app.workspace.containerEl;
+            (mutation.target instanceof HTMLElement ? mutation.target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) : null);
+          if (!root) continue;
           this.queueNoteDrawButtonDedupe(root);
           return;
         }
@@ -2392,17 +2440,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     const baseSurfaces = root.matches(MWV_DEDUPE_ROOT_SELECTOR)
       ? [root, ...Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))]
       : Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR));
-    const surfaces = new Set<HTMLElement>(baseSurfaces);
-    for (const surface of baseSurfaces) {
-      const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
-      if (leaf?.querySelector(".mwv-root, .mwv-note-embed, .mwv-embed")) {
-        surfaces.add(leaf);
-      }
-    }
-    for (const surface of surfaces) {
-      const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter(
-        (button) => !button.hasClass("mwv-notedraw-launcher")
-      );
+    for (const surface of new Set(baseSurfaces)) {
+      const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter((button) => {
+        if (button.hasClass("mwv-notedraw-launcher")) return false;
+        const controller = (button as NoteDrawButtonElement)._noteDrawController;
+        const previewEl = controller?.previewEl;
+        return Boolean(controller?.surfaceType === "webview" || previewEl === surface || (previewEl && surface.contains(previewEl)));
+      });
       for (const button of buttons) {
         button.addClass("mwv-notedraw-source-button");
         button.setAttribute("aria-hidden", "true");
@@ -2414,20 +2458,24 @@ export default class MobileWebviewerPlugin extends Plugin {
     const scopes: HTMLElement[] = [];
     if (root) {
       scopes.push(root);
-      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
-      if (leaf) scopes.push(leaf);
     }
-    scopes.push(this.app.workspace.containerEl);
 
     for (const scope of scopes) {
       const buttons = Array.from(scope.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter(
         (candidate) => candidate.isConnected && !candidate.hasClass("mwv-notedraw-launcher")
       );
-      const direct = buttons.find((candidate) => candidate.closest(".mwv-root, .mwv-note-embed, .mwv-embed") === root);
-      const webview = buttons.find((candidate) => candidate.hasClass("notedraw-webview-button"));
-      const header = buttons.find((candidate) => candidate.hasClass("notedraw-header-button"));
+      const direct = buttons.find((candidate) => {
+        const controller = (candidate as NoteDrawButtonElement)._noteDrawController;
+        const previewEl = controller?.previewEl;
+        return previewEl === root || Boolean(previewEl && root?.contains(previewEl));
+      });
+      const webview = buttons.find((candidate) => {
+        const controller = (candidate as NoteDrawButtonElement)._noteDrawController;
+        const previewEl = controller?.previewEl;
+        return candidate.hasClass("notedraw-webview-button") && (!previewEl || previewEl === root || Boolean(root?.contains(previewEl)));
+      });
       const fallback = buttons[0];
-      const picked = direct ?? webview ?? header ?? fallback;
+      const picked = direct ?? webview ?? fallback;
       if (picked) return picked;
     }
     return null;
@@ -2437,10 +2485,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const scopes: HTMLElement[] = [];
     if (root) {
       scopes.push(root);
-      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
-      if (leaf) scopes.push(leaf);
     }
-    scopes.push(this.app.workspace.containerEl);
 
     const controllers: NoteDrawControllerLike[] = [];
     const seen = new Set<NoteDrawControllerLike>();
@@ -2481,10 +2526,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       scopes.push(root);
       const shell = root.closest<HTMLElement>(".notedraw-shell");
       if (shell) scopes.push(shell);
-      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
-      if (leaf) scopes.push(leaf);
     }
-    scopes.push(this.app.workspace.containerEl);
 
     for (const scope of scopes) {
       if (scope.isConnected && scope.matches(".notedraw-shell.is-drawing-active")) {
@@ -2620,8 +2662,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     root?.focus?.({ preventScroll: true });
     window.setTimeout(() => {
       const queueDedupe = () => {
-        window.setTimeout(() => this.queueNoteDrawButtonDedupe(root ?? this.app.workspace.containerEl), 120);
-        window.setTimeout(() => this.queueNoteDrawButtonDedupe(root ?? this.app.workspace.containerEl), 500);
+        if (!root) return;
+        window.setTimeout(() => this.queueNoteDrawButtonDedupe(root), 120);
+        window.setTimeout(() => this.queueNoteDrawButtonDedupe(root), 500);
       };
       const toggleController = (controller?: NoteDrawControllerLike | null): boolean => {
         if (typeof controller?.toggle !== "function") return false;
@@ -3217,7 +3260,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (titleEl) titleEl.setText(title || hostName(url));
     const status = embed.querySelector<HTMLElement>(".mwv-browser-status-text");
     if (status) status.setText(hostName(url));
-    const more = embed.querySelector<HTMLElement>(".mwv-browser-action");
+    const more = embed.querySelector<HTMLElement>(".mwv-browser-more");
     if (more) {
       more.dataset.mwvUrl = url;
       more.dataset.mwvTitle = title;
@@ -3653,7 +3696,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         this.triggerNoteDraw(embed);
       });
     }
-    const more = actions.createEl("button", { cls: "mwv-browser-action", attr: { type: "button", title: "More", "aria-label": "More" } });
+    const more = actions.createEl("button", { cls: "mwv-browser-action mwv-browser-more", attr: { type: "button", title: "More", "aria-label": "More" } });
     more.dataset.mwvUrl = url;
     more.dataset.mwvTitle = title;
     setIcon(more, "more-horizontal");
