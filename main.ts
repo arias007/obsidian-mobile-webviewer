@@ -260,6 +260,9 @@ interface WebNotePanelElement extends HTMLElement {
 
 interface NoteDrawControllerLike {
   toggle?: () => void | Promise<void>;
+  onButtonClick?: (event?: Event) => void | Promise<void>;
+  onButtonPointerDown?: (event?: Event) => void | Promise<void>;
+  onButtonPointerUp?: (event?: Event) => void | Promise<void>;
 }
 
 interface NoteDrawButtonElement extends HTMLElement {
@@ -2424,6 +2427,18 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   dispatchActivationClick(target: HTMLElement): void {
     target.removeAttribute("aria-hidden");
+    target.removeClass("mwv-notedraw-source-button");
+    const previousStyle = target.getAttribute("style");
+    target.style.setProperty("display", "inline-flex", "important");
+    target.style.setProperty("visibility", "visible", "important");
+    target.style.setProperty("opacity", "0.001", "important");
+    target.style.setProperty("pointer-events", "auto", "important");
+    target.style.setProperty("position", "fixed", "important");
+    target.style.setProperty("right", "8px", "important");
+    target.style.setProperty("bottom", "8px", "important");
+    target.style.setProperty("width", "32px", "important");
+    target.style.setProperty("height", "32px", "important");
+    target.style.setProperty("z-index", "2147483647", "important");
     const rect = target.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
     const clientY = rect.top + rect.height / 2;
@@ -2442,9 +2457,20 @@ export default class MobileWebviewerPlugin extends Plugin {
             cancelable: true,
             clientX,
             clientY
-          });
+      });
       target.dispatchEvent(event);
     }
+    window.setTimeout(() => {
+      if (previousStyle === null) {
+        target.removeAttribute("style");
+      } else {
+        target.setAttribute("style", previousStyle);
+      }
+      if (target.isConnected && !target.hasClass("mwv-notedraw-launcher")) {
+        target.addClass("mwv-notedraw-source-button");
+        target.setAttribute("aria-hidden", "true");
+      }
+    }, 500);
   }
 
   triggerNoteDraw(root?: HTMLElement): void {
@@ -2479,12 +2505,38 @@ export default class MobileWebviewerPlugin extends Plugin {
           return false;
         }
       };
+      const clickController = (controller?: NoteDrawControllerLike | null): boolean => {
+        if (typeof controller?.onButtonClick !== "function") return false;
+        try {
+          const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+          void Promise.resolve(controller.onButtonPointerDown?.(event)).catch((error) => {
+            console.error("[mobile-webviewer] NoteDraw controller pointerdown failed", error);
+          });
+          void Promise.resolve(controller.onButtonPointerUp?.(event)).catch((error) => {
+            console.error("[mobile-webviewer] NoteDraw controller pointerup failed", error);
+          });
+          void Promise.resolve(controller.onButtonClick(event)).catch((error) => {
+            console.error("[mobile-webviewer] NoteDraw controller click failed", error);
+          });
+          queueDedupe();
+          return true;
+        } catch (error) {
+          console.error("[mobile-webviewer] NoteDraw controller click failed", error);
+          return false;
+        }
+      };
       const button = this.findNoteDrawSourceButton(root) as NoteDrawButtonElement | null;
       if (toggleController(button?._noteDrawController)) {
         return;
       }
+      if (clickController(button?._noteDrawController)) {
+        return;
+      }
       const noteDrawApi = (window as Window & { NoteDraw?: NoteDrawWindowApi }).NoteDraw;
       if (toggleController(noteDrawApi?.getActiveController?.())) {
+        return;
+      }
+      if (clickController(noteDrawApi?.getActiveController?.())) {
         return;
       }
       if (button) {
@@ -2498,14 +2550,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       const commandId =
         availableIds.find((id) => id === "notedraw:toggle-draw-mode") ??
         availableIds.find((id) => /toggle|draw/i.test(id)) ??
-        availableIds[0] ??
         "notedraw:toggle-draw-mode";
       if (commands?.executeCommandById?.(commandId)) {
         queueDedupe();
         return;
       }
 
-      new Notice("NoteDraw is not ready on this page.");
+      void this.addConsole("warn", "NoteDraw controller not ready on this page", root?.dataset?.url ?? "");
     }, 80);
   }
 
@@ -2781,7 +2832,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       url: nextUrl,
       time: Date.now()
     });
-    await this.renderEmbed(embed, nextUrl);
+    try {
+      await this.renderEmbed(embed, nextUrl);
+    } catch (error) {
+      console.error("[mobile-webviewer] render embed failed", error);
+      void this.addConsole("error", `Render failed: ${error instanceof Error ? error.message : String(error)}`, nextUrl);
+      this.renderEmbedFallback(embed, nextUrl, hostName(nextUrl));
+    }
   }
 
   async navigateEmbedBack(embed: HTMLElement): Promise<void> {
@@ -2867,7 +2924,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     embed.empty();
+    embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
+    embed.dataset.url = url;
     embed.removeClass("mwv-bing-home");
     this.renderBrowserChrome(embed, url, "Loading");
 
@@ -2895,11 +2954,25 @@ export default class MobileWebviewerPlugin extends Plugin {
       console.error("[mobile-webviewer] reader-first extraction failed", error);
       void this.addConsole("warn", "Reader-first extraction skipped", url);
       embed.empty();
+      embed.addClass("mwv-embed");
       embed.addClass("mwv-note-embed");
+      embed.dataset.url = url;
       embed.removeClass("mwv-bing-home");
       this.renderBrowserChrome(embed, url, hostName(url));
       this.renderLiveBrowserSurface(embed, url);
     }
+  }
+
+  renderEmbedFallback(embed: HTMLElement, url: string, title: string): void {
+    embed.empty();
+    embed.addClass("mwv-embed");
+    embed.addClass("mwv-note-embed");
+    embed.removeClass("mwv-bing-home");
+    embed.dataset.url = url;
+    embed.dataset.mwvProgrammaticUrl = url;
+    this.renderBrowserChrome(embed, url, title || hostName(url));
+    this.renderLiveBrowserSurface(embed, url);
+    this.updateEmbedStatus(embed, url, hostName(url));
   }
 
   renderLiveBrowserSurface(embed: HTMLElement, url: string): void {
@@ -2910,7 +2983,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       onNavigate: (nextUrl) => this.handleEmbedSurfaceNavigate(embed, nextUrl),
       onTitle: (title) => this.handleEmbedSurfaceTitle(embed, title),
       onFail: (message, failedUrl) => {
-        void this.addConsole("warn", `Note Browser load issue: ${message}`, failedUrl ?? embed.dataset.url ?? url);
+        const currentUrl = failedUrl ?? embed.dataset.url ?? url;
+        this.updateEmbedStatus(embed, currentUrl, hostName(currentUrl));
+        void this.addConsole("warn", `Note Browser load issue: ${message}`, currentUrl);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
       onNewWindow: (nextUrl) => this.activateBrowserView(nextUrl, true),
@@ -2972,6 +3047,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.setEmbedStack(embed, "mwvForward", []);
     }
     embed.dataset.url = nextUrl;
+    embed.setAttribute("data-url", nextUrl);
     this.updateEmbedChrome(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
     void this.persistEmbedState(embed);
     void this.addHistory({
@@ -3203,6 +3279,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     const currentUrl = query
       ? DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(query))
       : this.settings.homeUrl;
+    embed.addClass("mwv-embed");
+    embed.dataset.url = currentUrl;
     this.renderBrowserChrome(embed, currentUrl, query ? `Bing: ${query}` : "Bing");
 
     const searchHeader = query.trim()
@@ -4148,7 +4226,9 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   renderPageEmbed(embed: HTMLElement, page: NotePage): void {
     embed.empty();
+    embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
+    embed.dataset.url = page.url;
     embed.removeClass("mwv-bing-home");
     this.renderBrowserChrome(embed, page.url, page.title || hostName(page.url));
     embed.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });

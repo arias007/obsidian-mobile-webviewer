@@ -1778,7 +1778,9 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
   min-width: 0;
+  width: 100%;
   height: 34px;
   margin: 0;
   padding: 0 6px 0 10px;
@@ -1790,14 +1792,19 @@
 }
 
 .mwv-browser-lock {
+  overflow: hidden;
+  max-width: 42px;
   color: var(--text-faint);
   font-size: 11px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .mwv-browser-url {
   overflow: hidden;
   min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   height: 28px;
   border: 0;
   background: transparent;
@@ -2447,21 +2454,47 @@
   }
 
   .mwv-browser-chrome {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px;
   }
 
   .mwv-browser-controls {
-    grid-column: 1 / -1;
+    grid-column: 1;
+    width: 100%;
     min-width: 0;
+    justify-content: flex-start;
   }
 
   .mwv-browser-address {
     grid-column: 1;
+    grid-template-columns: minmax(32px, auto) minmax(0, 1fr) 30px;
+    gap: 6px;
     min-width: 0;
+    width: 100%;
+    height: 38px;
+  }
+
+  .mwv-browser-lock {
+    max-width: 36px;
+    font-size: 10px;
+  }
+
+  .mwv-browser-url {
+    height: 30px;
+    font-size: 13px;
+    line-height: 30px;
+  }
+
+  .mwv-browser-go {
+    width: 30px;
+    height: 30px;
   }
 
   .mwv-browser-actions {
-    grid-column: 2;
+    grid-column: 1;
+    justify-content: flex-end;
+    width: 100%;
   }
 }
 
@@ -2772,6 +2805,26 @@
   bottom: calc(58px + max(8px, env(safe-area-inset-bottom)));
 }
 
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-actions .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher) {
+  display: inline-flex !important;
+}
+
 .workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-actions .notedraw-header-button:not(.mwv-notedraw-launcher),
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-header-button:not(.mwv-notedraw-launcher),
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .view-actions .notedraw-webview-button:not(.mwv-notedraw-launcher),
@@ -2786,7 +2839,33 @@
 .mwv-embed .notedraw-header-button:not(.mwv-notedraw-launcher),
 .mwv-embed .notedraw-webview-button:not(.mwv-notedraw-launcher),
 .mwv-embed .notedraw-fallback-button:not(.mwv-notedraw-launcher),
-.mwv-embed .notedraw-webview-inline-button:not(.mwv-notedraw-launcher),
-.mwv-notedraw-source-button {
+.mwv-embed .notedraw-webview-inline-button:not(.mwv-notedraw-launcher) {
   display: none !important;
+}
+
+.mwv-notedraw-source-button {
+  display: inline-flex !important;
+  position: absolute !important;
+  inset: auto 0 0 auto !important;
+  z-index: 1 !important;
+  width: 32px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  opacity: 0.001 !important;
+  pointer-events: auto !important;
+}
+
+.mwv-root .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-root .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-header-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-fallback-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .notedraw-webview-inline-button.mwv-notedraw-source-button:not(.mwv-notedraw-launcher) {
+  display: inline-flex !important;
 }
