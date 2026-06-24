@@ -83,6 +83,8 @@
 .mwv-header {
   display: grid;
   gap: 5px;
+  position: relative;
+  z-index: 1205;
   min-width: 0;
 }
 
@@ -1015,6 +1017,8 @@
 
 .mwv-toolbar {
   display: flex;
+  position: relative;
+  z-index: 1205;
   gap: 4px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1691,6 +1695,8 @@
 
 .mwv-browser-chrome {
   display: grid;
+  position: relative;
+  z-index: 1205;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
@@ -1730,6 +1736,8 @@
 
 .mwv-browser-controls {
   display: inline-flex;
+  position: relative;
+  z-index: 1205;
   align-items: center;
   gap: 2px;
   min-width: 0;
@@ -1744,6 +1752,8 @@
 
 .mwv-browser-nav {
   display: inline-flex;
+  position: relative;
+  z-index: 1206;
   align-items: center;
   justify-content: center;
   width: 30px;
@@ -1775,6 +1785,8 @@
 
 .mwv-browser-address {
   display: grid;
+  position: relative;
+  z-index: 1205;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
@@ -1844,6 +1856,8 @@
 
 .mwv-browser-go {
   display: inline-flex;
+  position: relative;
+  z-index: 1206;
   align-items: center;
   justify-content: center;
   width: 26px;
@@ -1857,12 +1871,16 @@
 
 .mwv-browser-actions {
   display: inline-flex;
+  position: relative;
+  z-index: 1205;
   align-items: center;
   gap: 2px;
 }
 
 .mwv-browser-action {
   display: inline-flex;
+  position: relative;
+  z-index: 1206;
   align-items: center;
   justify-content: center;
   width: 30px;
@@ -1874,12 +1892,35 @@
   padding: 0;
 }
 
+.notedraw-shell.is-drawing-active .mwv-header,
+.notedraw-shell.is-drawing-active .mwv-toolbar,
+.notedraw-shell.is-drawing-active .mwv-browser-chrome,
+.notedraw-shell.is-drawing-active .mwv-browser-controls,
+.notedraw-shell.is-drawing-active .mwv-browser-nav,
+.notedraw-shell.is-drawing-active .mwv-browser-address,
+.notedraw-shell.is-drawing-active .mwv-browser-go,
+.notedraw-shell.is-drawing-active .mwv-browser-actions,
+.notedraw-shell.is-drawing-active .mwv-browser-action,
+.notedraw-shell.is-drawing-active .mwv-extension-panel,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-header,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-toolbar,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-chrome,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-controls,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-nav,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-address,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-go,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-actions,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-action,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-extension-panel {
+  z-index: 1205;
+}
+
 .mwv-extension-panel {
   position: absolute;
   top: 58px;
   right: 8px;
   left: 8px;
-  z-index: 20;
+  z-index: 1210;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 9px;
@@ -2736,7 +2777,7 @@
 }
 
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-header {
-  z-index: 6;
+  z-index: 1205;
   padding: max(3px, env(safe-area-inset-top)) 6px 0;
   background: color-mix(in srgb, var(--mwv-bg) 96%, transparent);
 }
@@ -2828,7 +2869,7 @@
   right: 8px;
   bottom: max(8px, env(safe-area-inset-bottom));
   left: 8px;
-  z-index: 9;
+  z-index: 1205;
   padding: 4px;
   background: color-mix(in srgb, var(--mwv-panel) 94%, transparent);
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);

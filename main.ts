@@ -261,6 +261,7 @@ interface WebNotePanelElement extends HTMLElement {
 interface NoteDrawControllerLike {
   active?: boolean;
   previewEl?: HTMLElement;
+  button?: HTMLElement;
   surfaceType?: string;
   toggle?: () => void | Promise<void>;
   onButtonClick?: (event?: Event) => void | Promise<void>;
@@ -2474,6 +2475,87 @@ export default class MobileWebviewerPlugin extends Plugin {
     return this.collectNoteDrawControllers(root).find((controller) => this.isNoteDrawControllerActive(controller)) ?? null;
   }
 
+  findActiveNoteDrawShell(root?: HTMLElement): NoteDrawSurfaceElement | null {
+    const scopes: HTMLElement[] = [];
+    if (root) {
+      scopes.push(root);
+      const shell = root.closest<HTMLElement>(".notedraw-shell");
+      if (shell) scopes.push(shell);
+      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
+      if (leaf) scopes.push(leaf);
+    }
+    scopes.push(this.app.workspace.containerEl);
+
+    for (const scope of scopes) {
+      if (scope.isConnected && scope.matches(".notedraw-shell.is-drawing-active")) {
+        return scope as NoteDrawSurfaceElement;
+      }
+      const shell = scope.querySelector<NoteDrawSurfaceElement>(".notedraw-shell.is-drawing-active");
+      if (shell?.isConnected) return shell;
+    }
+    return null;
+  }
+
+  closeNoteDrawShell(shell?: HTMLElement | null): boolean {
+    if (!shell) return false;
+    const controller = (shell as NoteDrawSurfaceElement)._noteDrawController;
+    if (controller) {
+      controller.active = false;
+      controller.button?.removeClass("is-active");
+    }
+    for (const cls of [
+      "is-drawing-active",
+      "is-palette-open",
+      "is-text-panel-open",
+      "is-selection-menu-open",
+      "is-select-mode",
+      "is-edit-md-mode",
+      "is-watercolor-mode",
+      "is-selecting-strokes",
+      "is-moving-selection",
+      "is-resizing-selection",
+      "is-native-text-editing",
+      "is-two-finger-scroll"
+    ]) {
+      shell.removeClass(cls);
+    }
+    shell
+      .querySelectorAll<HTMLElement>(
+        ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button, .notedraw-toolbar button, .notedraw-palette-panel button, .notedraw-text-panel button, .notedraw-selection-menu button"
+      )
+      .forEach((button) => button.removeClass("is-active"));
+    return true;
+  }
+
+  forceCloseNoteDraw(root?: HTMLElement, onClose?: () => void): boolean {
+    const shell = this.findActiveNoteDrawShell(root);
+    const controller = shell?._noteDrawController ?? this.findActiveNoteDrawController(root);
+    const target = controller?.previewEl ?? shell;
+    if (!shell && !this.isNoteDrawControllerActive(controller)) return false;
+
+    if (controller?.active && typeof controller.toggle === "function") {
+      try {
+        void Promise.resolve(controller.toggle())
+          .then(() => {
+            controller.button?.removeClass("is-active");
+            this.closeNoteDrawShell(controller.previewEl ?? shell);
+          })
+          .catch((error) => {
+            console.error("[mobile-webviewer] NoteDraw close failed", error);
+            this.closeNoteDrawShell(target);
+          });
+        onClose?.();
+        return true;
+      } catch (error) {
+        console.error("[mobile-webviewer] NoteDraw close failed", error);
+      }
+    }
+
+    const closed = this.closeNoteDrawShell(target);
+    if (closed) onClose?.();
+    return closed;
+  }
+
   dispatchActivationClick(target: HTMLElement): void {
     target.removeAttribute("aria-hidden");
     target.removeClass("mwv-notedraw-source-button");
@@ -2574,6 +2656,9 @@ export default class MobileWebviewerPlugin extends Plugin {
           return false;
         }
       };
+      if (this.forceCloseNoteDraw(root, queueDedupe)) {
+        return;
+      }
       const activeController = this.findActiveNoteDrawController(root);
       if (activeController && toggleController(activeController)) {
         return;
