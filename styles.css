@@ -1788,6 +1788,7 @@
   border-radius: 999px;
   background: var(--background-primary);
   color: var(--text-muted);
+  overflow: hidden;
   text-align: left;
 }
 
@@ -1801,18 +1802,44 @@
 }
 
 .mwv-browser-url {
+  appearance: none;
+  -webkit-appearance: none;
   overflow: hidden;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
   height: 28px;
-  border: 0;
-  background: transparent;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
   color: var(--text-normal);
   font-size: 12px;
+  line-height: 28px;
   text-overflow: ellipsis;
   white-space: nowrap;
   outline: none;
+}
+
+.mwv-browser-address .mwv-browser-url,
+.mwv-browser-address .mwv-browser-url:hover,
+.mwv-browser-address .mwv-browser-url:focus,
+.mwv-browser-address .mwv-browser-url:focus-visible,
+.mwv-note-embed .mwv-browser-address .mwv-browser-url,
+.mwv-root .mwv-browser-address .mwv-browser-url {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 .mwv-browser-go {
@@ -2454,13 +2481,13 @@
   }
 
   .mwv-browser-chrome {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-    padding: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+    padding: 8px 8px 7px;
   }
 
   .mwv-browser-controls {
-    grid-column: 1;
+    grid-column: 1 / -1;
     width: 100%;
     min-width: 0;
     justify-content: flex-start;
@@ -2468,33 +2495,39 @@
 
   .mwv-browser-address {
     grid-column: 1;
-    grid-template-columns: minmax(32px, auto) minmax(0, 1fr) 30px;
-    gap: 6px;
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+    gap: 4px;
     min-width: 0;
     width: 100%;
-    height: 38px;
+    height: 36px;
+    padding: 0 4px 0 8px;
   }
 
   .mwv-browser-lock {
-    max-width: 36px;
+    max-width: 28px;
     font-size: 10px;
   }
 
   .mwv-browser-url {
-    height: 30px;
-    font-size: 13px;
-    line-height: 30px;
+    height: 28px;
+    font-size: 12px;
+    line-height: 28px;
   }
 
   .mwv-browser-go {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
   }
 
   .mwv-browser-actions {
-    grid-column: 1;
+    grid-column: 2;
     justify-content: flex-end;
-    width: 100%;
+    width: auto;
+  }
+
+  .mwv-browser-action {
+    width: 36px;
+    height: 36px;
   }
 }
 

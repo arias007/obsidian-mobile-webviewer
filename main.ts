@@ -259,6 +259,9 @@ interface WebNotePanelElement extends HTMLElement {
 }
 
 interface NoteDrawControllerLike {
+  active?: boolean;
+  previewEl?: HTMLElement;
+  surfaceType?: string;
   toggle?: () => void | Promise<void>;
   onButtonClick?: (event?: Event) => void | Promise<void>;
   onButtonPointerDown?: (event?: Event) => void | Promise<void>;
@@ -266,6 +269,10 @@ interface NoteDrawControllerLike {
 }
 
 interface NoteDrawButtonElement extends HTMLElement {
+  _noteDrawController?: NoteDrawControllerLike;
+}
+
+interface NoteDrawSurfaceElement extends HTMLElement {
   _noteDrawController?: NoteDrawControllerLike;
 }
 
@@ -2425,6 +2432,48 @@ export default class MobileWebviewerPlugin extends Plugin {
     return null;
   }
 
+  collectNoteDrawControllers(root?: HTMLElement): NoteDrawControllerLike[] {
+    const scopes: HTMLElement[] = [];
+    if (root) {
+      scopes.push(root);
+      const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
+      if (leaf) scopes.push(leaf);
+    }
+    scopes.push(this.app.workspace.containerEl);
+
+    const controllers: NoteDrawControllerLike[] = [];
+    const seen = new Set<NoteDrawControllerLike>();
+    const add = (controller?: NoteDrawControllerLike | null) => {
+      if (!controller || seen.has(controller)) return;
+      seen.add(controller);
+      controllers.push(controller);
+    };
+
+    for (const scope of scopes) {
+      add((scope as NoteDrawSurfaceElement)._noteDrawController);
+      scope.querySelectorAll<NoteDrawSurfaceElement>(".notedraw-shell, .is-drawing-active, .mwv-root, .mwv-note-embed, .mwv-embed").forEach((surface) => {
+        add(surface._noteDrawController);
+      });
+      scope.querySelectorAll<NoteDrawButtonElement>(NOTEDRAW_BUTTON_SELECTOR).forEach((button) => {
+        if (!button.hasClass("mwv-notedraw-launcher")) add(button._noteDrawController);
+      });
+    }
+    return controllers;
+  }
+
+  isNoteDrawControllerActive(controller?: NoteDrawControllerLike | null): boolean {
+    if (!controller) return false;
+    return Boolean(
+      controller.active ||
+      controller.previewEl?.hasClass("is-drawing-active") ||
+      controller.previewEl?.querySelector?.(".is-drawing-active")
+    );
+  }
+
+  findActiveNoteDrawController(root?: HTMLElement): NoteDrawControllerLike | null {
+    return this.collectNoteDrawControllers(root).find((controller) => this.isNoteDrawControllerActive(controller)) ?? null;
+  }
+
   dispatchActivationClick(target: HTMLElement): void {
     target.removeAttribute("aria-hidden");
     target.removeClass("mwv-notedraw-source-button");
@@ -2525,6 +2574,10 @@ export default class MobileWebviewerPlugin extends Plugin {
           return false;
         }
       };
+      const activeController = this.findActiveNoteDrawController(root);
+      if (activeController && toggleController(activeController)) {
+        return;
+      }
       const button = this.findNoteDrawSourceButton(root) as NoteDrawButtonElement | null;
       if (toggleController(button?._noteDrawController)) {
         return;
