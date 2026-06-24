@@ -516,7 +516,7 @@
 }
 
 .mwv-home-quick {
-  display: flex;
+  display: none !important;
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
@@ -729,6 +729,13 @@
 .mwv-reader-panel.is-doodling .mwv-doodle-layer {
   pointer-events: auto;
   cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.mwv-note-surface.is-doodling .mwv-webnote-editor,
+.mwv-reader-panel.is-doodling .mwv-webnote-editor {
+  user-select: none;
 }
 
 .mwv-note-related {
@@ -1384,7 +1391,7 @@
 }
 
 .mwv-bing-shortcuts {
-  display: flex;
+  display: none !important;
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
