@@ -1,7 +1,7 @@
 {
   "id": "mobile-webviewer",
   "name": "Mobile Webviewer",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "minAppVersion": "1.5.0",
   "description": "Lightweight mobile-first web viewer for Obsidian with search, history, bookmarks, and quick note capture.",
   "author": "Murat / Codex",

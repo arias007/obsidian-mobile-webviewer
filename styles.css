@@ -90,7 +90,7 @@
 
 .mwv-address-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 38px 38px 38px;
+  grid-template-columns: 26px minmax(0, 1fr) 38px 38px;
   align-items: center;
   gap: 3px;
   min-width: 0;
@@ -2783,7 +2783,7 @@
 }
 
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-address-row {
-  grid-template-columns: 24px minmax(0, 1fr) 34px 34px 34px;
+  grid-template-columns: 24px minmax(0, 1fr) 34px 34px;
   min-height: 34px;
   padding: 2px 3px 2px 8px;
 }
@@ -2882,13 +2882,11 @@
 .mwv-root .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .mwv-note-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .mwv-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher) {
-  display: inline-flex !important;
-  position: absolute !important;
-  inset: auto 0 0 auto !important;
-  z-index: 1 !important;
-  width: 32px !important;
-  height: 32px !important;
-  margin: 0 !important;
-  opacity: 0.001 !important;
-  pointer-events: auto !important;
+  display: none !important;
+}
+
+.workspace-leaf-content:has(.mwv-root) .view-actions .notedraw-webview-button:not(.notedraw-header-button),
+.workspace-leaf-content:has(.mwv-note-embed) .view-actions .notedraw-webview-button:not(.notedraw-header-button),
+.workspace-leaf-content:has(.mwv-embed) .view-actions .notedraw-webview-button:not(.notedraw-header-button) {
+  display: none !important;
 }

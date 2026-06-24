@@ -862,18 +862,6 @@ class MobileWebviewerView extends ItemView {
       attr: { type: "submit", "aria-label": "Go" }
     });
     setIcon(goButton, "arrow-right");
-    if (this.plugin.settings.showFloatingWand) {
-      const wandButton = form.createEl("button", {
-        cls: "mwv-icon-button mwv-notedraw-launcher clickable-icon notedraw-webview-button notedraw-webview-inline-button",
-        attr: { type: "button", "aria-label": "NoteDraw", title: "NoteDraw" }
-      });
-      setIcon(wandButton, "wand-sparkles");
-      wandButton.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.triggerNoteDraw();
-      });
-    }
     const moreButton = form.createEl("button", {
       cls: "mwv-icon-button",
       attr: { type: "button", "aria-label": "More", title: "More" }
@@ -3684,18 +3672,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
-    if (this.settings.showFloatingWand) {
-      const wand = actions.createEl("button", {
-        cls: "mwv-browser-action mwv-notedraw-launcher",
-        attr: { type: "button", title: "NoteDraw", "aria-label": "NoteDraw" }
-      });
-      setIcon(wand, "wand-sparkles");
-      wand.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.triggerNoteDraw(embed);
-      });
-    }
     const more = actions.createEl("button", { cls: "mwv-browser-action mwv-browser-more", attr: { type: "button", title: "More", "aria-label": "More" } });
     more.dataset.mwvUrl = url;
     more.dataset.mwvTitle = title;
