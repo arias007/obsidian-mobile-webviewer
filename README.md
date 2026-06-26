@@ -10,8 +10,9 @@ It now has two clearly named modes:
   link capture. It includes a persistent mobile tab strip with per-tab URL and
   back/forward state. The foreground is now an editable, reader-style Obsidian
   web note by default. A full Chromium `webview` page stays loaded behind it for
-  real browser navigation and can be switched in with Note/Web/Split controls.
-  Edited text and doodles auto-save into plugin data. Use `存 MD` when you
+  real browser navigation and can be switched in with Note/Web controls.
+  Edited text and doodles auto-save into plugin data per canonical page URL.
+  Use the toolbar `存 MD` button when you
   want to add a Markdown file to the vault.
   On mobile it uses a full-height browser layout with the Obsidian pane header
   hidden and the bottom toolbar floating over the page instead of shrinking the
@@ -24,8 +25,8 @@ It now has two clearly named modes:
   Bing-like lightweight search shell, editable web-note foreground, live web
   backend,
   bookmarks bar, cache, downloads, history, and More menu. NoteDraw buttons are
-  deduped so Mobile Webviewer surfaces keep one visible magic-wand launcher
-  while still using NoteDraw's real page controller behind it.
+  left as NoteDraw's normal visible magic-wand launcher while Mobile Webviewer
+  only stabilizes its web-note controller and per-URL save behavior.
 
 ## Install
 
@@ -46,11 +47,12 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Open the note-based browser shell as a real Markdown file.
 - Use an editable reader-style note as the foreground while keeping a full
   browser page loaded in the background.
-- Switch between Note, Web, and Split modes.
+- Switch between Note and Web modes.
 - Auto-save edited text and doodles into plugin data, then export to Markdown
   under `Mobile Webviewer Notes` with `存 MD`.
-- Keep Note Browser and Browser View on the same URL-backed web-note data, so
-  edited text and doodles follow the page when switching modes.
+- Keep Note Browser and Browser View on the same canonical URL-backed web-note
+  data, so edited text and doodles follow the page when switching modes without
+  leaking into other pages.
 - Load multi-page Bing results with a More results control instead of stopping
   after the first compact result set.
 - Load URLs or search text from one input.
@@ -118,8 +120,8 @@ The plugin uses a dual-layer model. The foreground is an editable Obsidian-like
 web note extracted from the page, suitable for reading, editing, highlighting,
 and doodling. The background keeps the complete browser page alive with
 Electron Chromium `webview` when Obsidian exposes it, falling back to iframe
-where needed. Note/Web/Split controls switch between the editable note, the
-real page, and both together. More contains power actions such as system-browser
+where needed. Note/Web controls switch between the editable note and the
+real page. More contains power actions such as system-browser
 open, copy link, bookmark, reading list, history, downloads, matched user
 scripts, browser-status inspection, DevTools where available, console, and
 cache management. Downloads are saved under `Mobile Webviewer Downloads` by
