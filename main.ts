@@ -961,7 +961,8 @@ class MobileWebviewerView extends ItemView {
     this.makeToolButton(toolbar, "home", "Home", () => this.navigate(this.plugin.settings.homeUrl, true));
     this.makeModeButton(toolbar, "file-text", "笔记", "note");
     this.makeModeButton(toolbar, "globe-2", "网页", "web");
-    this.makeModeButton(toolbar, "panel-top", "分屏", "split");
+    this.makeToolButton(toolbar, "notebook-tabs", "Note Browser", () => void this.openCurrentInNoteBrowser());
+    this.makeToolButton(toolbar, "file-down", "存 MD", () => void this.exportCurrentWebNote());
     this.makeToolButton(toolbar, "star", "Bookmark", () => this.toggleBookmark());
     this.makeToolButton(toolbar, "book-open", "Bookmarks", () => this.openDrawer("bookmarks"));
     this.makeToolButton(toolbar, "history", "History", () => this.openDrawer("history"));
@@ -1774,13 +1775,6 @@ class MobileWebviewerView extends ItemView {
       await navigator.clipboard.writeText(`[${page.title}](${page.url})`);
       new Notice("Copied link");
     });
-    const noteWebButton = actions.createEl("button", { text: "Note Web", attr: { type: "button" } });
-    noteWebButton.addEventListener("click", async () => {
-      await this.saveCurrentWebNote(false, status);
-      await this.plugin.openNoteBrowser(page.url);
-    });
-    const saveButton = actions.createEl("button", { text: "存 MD", attr: { type: "button" } });
-    saveButton.addEventListener("click", () => void this.exportCurrentWebNote(status));
     const doodleButton = actions.createEl("button", { text: "涂鸦", attr: { type: "button" } });
     doodleButton.dataset.mwvDoodleToggle = "true";
     doodleButton.setAttribute("aria-pressed", "false");
@@ -1901,6 +1895,12 @@ class MobileWebviewerView extends ItemView {
     this.currentWebNote = exported;
     status?.setText(`已入库 ${exported.markdownPath}`);
     new Notice(`Saved to ${exported.markdownPath}`);
+  }
+
+  async openCurrentInNoteBrowser(): Promise<void> {
+    const status = this.homeEl?.querySelector<HTMLElement>(".mwv-webnote-status") ?? undefined;
+    await this.saveCurrentWebNote(false, status);
+    await this.plugin.openNoteBrowser(this.currentUrl || this.plugin.settings.homeUrl);
   }
 
   setDoodleToggleState(button: HTMLButtonElement, enabled: boolean): void {
@@ -3417,8 +3417,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     panel.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
     const actions = panel.createDiv({ cls: "mwv-note-actions" });
-    const browserBtn = actions.createEl("button", { text: "Browser View", attr: { type: "button" } });
-    const saveBtn = actions.createEl("button", { text: "存 MD", attr: { type: "button" } });
     const doodleBtn = actions.createEl("button", { text: "涂鸦", attr: { type: "button" } });
     doodleBtn.dataset.mwvDoodleToggle = "true";
     doodleBtn.setAttribute("aria-pressed", "false");
@@ -3485,19 +3483,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     content.addEventListener("compositionend", queue, true);
     content.addEventListener("paste", () => window.setTimeout(queue, 0), true);
     content.addEventListener("blur", () => void save());
-    browserBtn.addEventListener("click", async () => {
-      await save();
-      await this.activateBrowserView(page.url);
-    });
-    saveBtn.addEventListener("click", () => {
-      void (async () => {
-        const saved = await save();
-        const exported = await this.exportWebNoteMarkdown(saved);
-        currentNote = exported;
-        status.setText(`已入库 ${exported.markdownPath}`);
-        new Notice(`Saved to ${exported.markdownPath}`);
-      })();
-    });
     const setDoodleToggle = (enabled: boolean) => {
       panel.toggleClass("is-doodling", enabled);
       doodleBtn.toggleClass("is-active", enabled);
@@ -3782,7 +3767,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     makeNavButton("home", "Home", () => void this.openUrlInEmbed(embed, this.settings.homeUrl));
     makeModeButton("file-text", "笔记", "note");
     makeModeButton("globe-2", "网页", "web");
-    makeModeButton("panel-top", "分屏", "split");
+    makeNavButton("external-link", "Browser View", () => void this.openEmbedInBrowserView(embed));
+    makeNavButton("file-down", "存 MD", () => void this.exportEmbedWebNote(embed));
 
     const suggestionsId = `mwv-url-suggestions-${++this.processorSeq}`;
     const address = chrome.createEl("form", {
@@ -3831,10 +3817,35 @@ export default class MobileWebviewerPlugin extends Plugin {
     status.createDiv({ cls: "mwv-browser-page-title", text: title || hostName(url) });
     status.createDiv({ cls: "mwv-browser-status-text", text: hostName(url) });
     this.renderBookmarksBar(embed);
-    const initialMode = ["note", "web", "split"].includes(embed.dataset.mwvBrowserMode ?? "")
-      ? embed.dataset.mwvBrowserMode as "note" | "web" | "split"
+    const initialMode = ["note", "web"].includes(embed.dataset.mwvBrowserMode ?? "")
+      ? embed.dataset.mwvBrowserMode as "note" | "web"
       : this.settings.browserFrontendMode;
     setMode(initialMode || "note");
+  }
+
+  async openEmbedInBrowserView(embed: HTMLElement): Promise<void> {
+    const panel = embed.querySelector<WebNotePanelElement>(".mwv-reader-panel");
+    await panel?._mwvFlushWebNote?.();
+    const url = panel?.dataset.url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    await this.activateBrowserView(url);
+  }
+
+  async exportEmbedWebNote(embed: HTMLElement): Promise<void> {
+    const panel = embed.querySelector<WebNotePanelElement>(".mwv-reader-panel");
+    if (!panel) {
+      new Notice("Reader note is not ready yet");
+      return;
+    }
+    await panel._mwvFlushWebNote?.();
+    const url = panel.dataset.url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    const note = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
+    if (!note) {
+      new Notice("No web note to export");
+      return;
+    }
+    const exported = await this.exportWebNoteMarkdown(note);
+    panel.querySelector<HTMLElement>(".mwv-webnote-status")?.setText(`已入库 ${exported.markdownPath}`);
+    new Notice(`Saved to ${exported.markdownPath}`);
   }
 
   toggleMorePanel(embed: HTMLElement, chrome: HTMLElement, url: string, title: string): void {
@@ -6360,7 +6371,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.userScriptsEnabled = typeof this.settings.userScriptsEnabled === "boolean" ? this.settings.userScriptsEnabled : true;
     this.settings.readerUserStyle = typeof this.settings.readerUserStyle === "string" ? this.settings.readerUserStyle : "";
     this.settings.readerUserScript = typeof this.settings.readerUserScript === "string" ? this.settings.readerUserScript : "";
-    this.settings.browserFrontendMode = ["note", "web", "split"].includes(this.settings.browserFrontendMode)
+    this.settings.browserFrontendMode = ["note", "web"].includes(this.settings.browserFrontendMode)
       ? this.settings.browserFrontendMode
       : "note";
     this.settings.autoSaveWebNotes = typeof this.settings.autoSaveWebNotes === "boolean" ? this.settings.autoSaveWebNotes : true;
@@ -6652,12 +6663,11 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Frontend mode")
-      .setDesc("Default foreground: editable note, full web page, or split view.")
+      .setDesc("Default foreground: editable note or full web page.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("note", "Editable note")
           .addOption("web", "Full web page")
-          .addOption("split", "Split")
           .setValue(this.plugin.settings.browserFrontendMode)
           .onChange(async (value) => {
             this.plugin.settings.browserFrontendMode = value as "note" | "web" | "split";
