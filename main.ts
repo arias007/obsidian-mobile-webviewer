@@ -263,6 +263,16 @@ interface NoteDrawControllerLike {
   previewEl?: HTMLElement;
   button?: HTMLElement;
   surfaceType?: string;
+  allowTextEdit?: boolean;
+  toolMode?: string;
+  currentEditor?: HTMLElement | null;
+  formatToolbar?: HTMLElement | null;
+  createFormatToolbar?: () => void;
+  setEditMarkdownMode?: () => void;
+  positionFormatToolbar?: () => void;
+  applyWebEdits?: () => void;
+  resizeCanvas?: () => void;
+  render?: () => void;
   toggle?: () => void | Promise<void>;
   onButtonClick?: (event?: Event) => void | Promise<void>;
   onButtonPointerDown?: (event?: Event) => void | Promise<void>;
@@ -279,6 +289,10 @@ interface NoteDrawSurfaceElement extends HTMLElement {
 
 interface NoteDrawWindowApi {
   getActiveController?: () => NoteDrawControllerLike | null;
+}
+
+interface MobileWebviewerSyntheticEvent extends Event {
+  _mwvSyntheticWebNoteSave?: boolean;
 }
 
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
@@ -1836,8 +1850,10 @@ class MobileWebviewerView extends ItemView {
       status.setText("保存中...");
       this.queueWebNoteSave(status);
     };
-    content.addEventListener("input", markDirty);
-    content.addEventListener("paste", markDirty);
+    content.addEventListener("input", markDirty, true);
+    content.addEventListener("keyup", markDirty, true);
+    content.addEventListener("compositionend", markDirty, true);
+    content.addEventListener("paste", () => window.setTimeout(markDirty, 0), true);
     content.addEventListener("blur", () => void this.saveCurrentWebNote(false, status));
   }
 
@@ -2308,6 +2324,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(document, "keydown", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
+    this.registerDomEvent(document, "input", (event) => {
+      this.handleNoteDrawWebNoteEditEvent(event);
+    }, { capture: true });
+    this.registerDomEvent(document, "keyup", (event) => {
+      this.handleNoteDrawWebNoteEditEvent(event);
+    }, { capture: true });
+    this.registerDomEvent(document, "compositionend", (event) => {
+      this.handleNoteDrawWebNoteEditEvent(event);
+    }, { capture: true });
+    this.registerDomEvent(document, "paste", (event) => {
+      window.setTimeout(() => this.handleNoteDrawWebNoteEditEvent(event), 0);
+    }, { capture: true });
+    this.registerDomEvent(document, "click", (event) => {
+      this.handleNoteDrawWebNoteEditEvent(event);
+    }, { capture: true });
     this.installNoteDrawDedupeObserver();
 
     this.addRibbonIcon("smartphone", "Mobile Webviewer", () => {
@@ -2508,6 +2539,112 @@ export default class MobileWebviewerPlugin extends Plugin {
     return this.collectNoteDrawControllers(root).find((controller) => this.isNoteDrawControllerActive(controller)) ?? null;
   }
 
+  handleNoteDrawWebNoteEditEvent(event: Event): void {
+    if ((event as MobileWebviewerSyntheticEvent)._mwvSyntheticWebNoteSave) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+
+    const fromFormatToolbar = Boolean(target.closest(".notedraw-format-toolbar"));
+    const fromEditable =
+      Boolean(target.closest(".notedraw-editing, .mwv-webnote-editor, .mwv-note-content, .mwv-md-content")) ||
+      event.type === "paste";
+    if (!fromFormatToolbar && !fromEditable) return;
+
+    const surface =
+      target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) ??
+      target.closest<HTMLElement>(".notedraw-shell")?.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
+    if (!surface) return;
+
+    const saveDelay = fromFormatToolbar ? 80 : 0;
+    window.setTimeout(() => this.queueWebNoteSaveForSurface(surface), saveDelay);
+    this.queueNoteDrawControllerSync(surface, false);
+  }
+
+  queueWebNoteSaveForSurface(surface: HTMLElement): void {
+    const root = surface.matches(MWV_DEDUPE_ROOT_SELECTOR)
+      ? surface
+      : surface.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
+    if (!root?.isConnected) return;
+
+    const editor = root.querySelector<HTMLElement>(".mwv-webnote-editor");
+    if (!editor) return;
+    const status = root.querySelector<HTMLElement>(".mwv-webnote-status") ?? undefined;
+    const view = this.app.workspace
+      .getLeavesOfType(VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .find((candidate): candidate is MobileWebviewerView => candidate instanceof MobileWebviewerView && candidate.containerEl.contains(root));
+
+    if (view) {
+      view.queueWebNoteSave(status);
+      return;
+    }
+
+    const synthetic = new Event("input", { bubbles: true }) as MobileWebviewerSyntheticEvent;
+    synthetic._mwvSyntheticWebNoteSave = true;
+    editor.dispatchEvent(synthetic);
+  }
+
+  queueNoteDrawControllerSync(root?: HTMLElement, forceEditMode = false): void {
+    if (!root?.isConnected) return;
+    for (const delay of [0, 80, 220, 520]) {
+      window.setTimeout(() => this.syncNoteDrawControllers(root, forceEditMode), delay);
+    }
+  }
+
+  syncNoteDrawControllers(root?: HTMLElement, forceEditMode = false): void {
+    for (const controller of this.collectNoteDrawControllers(root)) {
+      if (!controller.previewEl?.isConnected || controller.surfaceType !== "webview") continue;
+      if (!this.isMobileWebviewerSurface(controller.previewEl)) continue;
+
+      controller.allowTextEdit = true;
+      if ((!controller.formatToolbar || !controller.formatToolbar.isConnected) && typeof controller.createFormatToolbar === "function") {
+        try {
+          controller.createFormatToolbar();
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw toolbar create skipped", error);
+        }
+      }
+
+      const active = this.isNoteDrawControllerActive(controller);
+      const currentEditor = controller.currentEditor;
+      if (active && !currentEditor && forceEditMode && controller.toolMode !== "edit-md") {
+        try {
+          controller.setEditMarkdownMode?.();
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw edit mode skipped", error);
+        }
+      }
+
+      if (controller.currentEditor?.isConnected) {
+        controller.formatToolbar?.addClass("is-visible");
+        try {
+          controller.positionFormatToolbar?.();
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw toolbar position skipped", error);
+        }
+        this.queueWebNoteSaveForSurface(controller.previewEl);
+        continue;
+      }
+
+      try {
+        controller.applyWebEdits?.();
+        controller.resizeCanvas?.();
+        controller.render?.();
+      } catch (error) {
+        console.warn("[mobile-webviewer] NoteDraw controller sync skipped", error);
+      }
+    }
+  }
+
+  isMobileWebviewerSurface(surface?: HTMLElement | null): boolean {
+    if (!surface) return false;
+    return Boolean(
+      surface.closest(MWV_DEDUPE_ROOT_SELECTOR) ||
+      surface.matches(MWV_DEDUPE_ROOT_SELECTOR) ||
+      surface.querySelector(MWV_DEDUPE_ROOT_SELECTOR)
+    );
+  }
+
   findActiveNoteDrawShell(root?: HTMLElement): NoteDrawSurfaceElement | null {
     const scopes: HTMLElement[] = [];
     if (root) {
@@ -2649,18 +2786,22 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     root?.focus?.({ preventScroll: true });
     window.setTimeout(() => {
-      const queueDedupe = () => {
+      const queueDedupe = (forceEditMode = false) => {
         if (!root) return;
         window.setTimeout(() => this.queueNoteDrawButtonDedupe(root), 120);
         window.setTimeout(() => this.queueNoteDrawButtonDedupe(root), 500);
+        this.queueNoteDrawControllerSync(root, forceEditMode);
       };
       const toggleController = (controller?: NoteDrawControllerLike | null): boolean => {
         if (typeof controller?.toggle !== "function") return false;
+        const wasActive = this.isNoteDrawControllerActive(controller);
         try {
           void Promise.resolve(controller.toggle()).catch((error) => {
             console.error("[mobile-webviewer] NoteDraw controller toggle failed", error);
+          }).then(() => {
+            queueDedupe(!wasActive);
           });
-          queueDedupe();
+          queueDedupe(!wasActive);
           return true;
         } catch (error) {
           console.error("[mobile-webviewer] NoteDraw controller toggle failed", error);
@@ -2669,6 +2810,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       };
       const clickController = (controller?: NoteDrawControllerLike | null): boolean => {
         if (typeof controller?.onButtonClick !== "function") return false;
+        const wasActive = this.isNoteDrawControllerActive(controller);
         try {
           const event = new MouseEvent("click", { bubbles: true, cancelable: true });
           void Promise.resolve(controller.onButtonPointerDown?.(event)).catch((error) => {
@@ -2679,17 +2821,16 @@ export default class MobileWebviewerPlugin extends Plugin {
           });
           void Promise.resolve(controller.onButtonClick(event)).catch((error) => {
             console.error("[mobile-webviewer] NoteDraw controller click failed", error);
+          }).then(() => {
+            queueDedupe(!wasActive);
           });
-          queueDedupe();
+          queueDedupe(!wasActive);
           return true;
         } catch (error) {
           console.error("[mobile-webviewer] NoteDraw controller click failed", error);
           return false;
         }
       };
-      if (this.forceCloseNoteDraw(root, queueDedupe)) {
-        return;
-      }
       const activeController = this.findActiveNoteDrawController(root);
       if (activeController && toggleController(activeController)) {
         return;
@@ -2710,7 +2851,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       if (button) {
         this.dispatchActivationClick(button);
-        queueDedupe();
+        queueDedupe(true);
         return;
       }
 
@@ -2721,7 +2862,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         availableIds.find((id) => /toggle|draw/i.test(id)) ??
         "notedraw:toggle-draw-mode";
       if (commands?.executeCommandById?.(commandId)) {
-        queueDedupe();
+        queueDedupe(true);
         return;
       }
 
@@ -3339,7 +3480,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (timer) window.clearTimeout(timer);
       timer = window.setTimeout(() => void save(), 700);
     };
-    content.addEventListener("input", queue);
+    content.addEventListener("input", queue, true);
+    content.addEventListener("keyup", queue, true);
+    content.addEventListener("compositionend", queue, true);
+    content.addEventListener("paste", () => window.setTimeout(queue, 0), true);
     content.addEventListener("blur", () => void save());
     browserBtn.addEventListener("click", async () => {
       await save();
