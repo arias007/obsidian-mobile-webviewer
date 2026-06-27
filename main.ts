@@ -39,7 +39,7 @@ const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.19";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.21";
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -264,6 +264,8 @@ interface NoteDrawControllerLike {
   active?: boolean;
   previewEl?: HTMLElement;
   button?: HTMLElement;
+  file?: { path?: string };
+  plugin?: unknown;
   surfaceType?: string;
   allowTextEdit?: boolean;
   toolMode?: string;
@@ -275,10 +277,12 @@ interface NoteDrawControllerLike {
   applyWebEdits?: () => void;
   resizeCanvas?: () => void;
   render?: () => void;
+  setFile?: (file?: { path?: string; name?: string; extension?: string }) => Promise<void>;
   toggle?: () => void | Promise<void>;
   onButtonClick?: (event?: Event) => void | Promise<void>;
   onButtonPointerDown?: (event?: Event) => void | Promise<void>;
   onButtonPointerUp?: (event?: Event) => void | Promise<void>;
+  destroy?: () => void;
 }
 
 interface NoteDrawButtonElement extends HTMLElement {
@@ -291,6 +295,16 @@ interface NoteDrawSurfaceElement extends HTMLElement {
 
 interface NoteDrawWindowApi {
   getActiveController?: () => NoteDrawControllerLike | null;
+}
+
+interface NoteDrawPluginLike {
+  syncSourceControllers?: () => void;
+  syncWebviewControllers?: () => void;
+  syncMobileWebviewerHeaderButtons?: () => void;
+  scheduleWebviewSync?: () => void;
+  webviewControllers?: Map<HTMLElement, NoteDrawControllerLike>;
+  drawingPathForFile?: (file?: { path?: string }) => string;
+  writeDrawings?: (file?: { path?: string }, data?: unknown) => Promise<void>;
 }
 
 interface MobileWebviewerSyntheticEvent extends Event {
@@ -2641,6 +2655,143 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  getNoteDrawPlugin(): NoteDrawPluginLike | null {
+    const pluginRegistry = (this.app as App & { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+    const plugin = pluginRegistry?.plugins?.notedraw;
+    return plugin && typeof plugin === "object" ? plugin as NoteDrawPluginLike : null;
+  }
+
+  findWorkspaceLeafForElement(root?: HTMLElement): WorkspaceLeaf | null {
+    if (!root?.isConnected) return null;
+    let match: WorkspaceLeaf | null = null;
+    try {
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (!match && leaf.view?.containerEl?.contains(root)) {
+          match = leaf;
+        }
+      });
+    } catch (error) {
+      console.warn("[mobile-webviewer] workspace leaf lookup skipped", error);
+    }
+    return match;
+  }
+
+  refreshNoteDrawWorkspaceBinding(root?: HTMLElement, forceEditMode = false, emitWorkspaceEvents = true): void {
+    if (!root?.isConnected) return;
+    const noteDrawPlugin = this.getNoteDrawPlugin();
+    const leaf = this.findWorkspaceLeafForElement(root);
+
+    if (emitWorkspaceEvents) {
+      const workspace = this.app.workspace as unknown as {
+        activeLeaf?: WorkspaceLeaf | null;
+        setActiveLeaf?: (leaf: WorkspaceLeaf, params?: { focus?: boolean }) => void;
+        revealLeaf?: (leaf: WorkspaceLeaf) => Promise<void>;
+        trigger?: (name: string, ...data: unknown[]) => void;
+      };
+      try {
+        const isActiveLeaf = leaf && (workspace.activeLeaf === leaf || Boolean(root.closest(".workspace-leaf.mod-active, .workspace-leaf.is-active")));
+        if (leaf && isActiveLeaf) {
+          workspace.setActiveLeaf?.(leaf, { focus: true });
+          const revealPromise = workspace.revealLeaf?.(leaf);
+          if (revealPromise) {
+            void revealPromise.catch((error) => {
+              console.warn("[mobile-webviewer] workspace reveal skipped", error);
+            });
+          }
+        }
+      } catch (error) {
+        console.warn("[mobile-webviewer] workspace focus skipped", error);
+      }
+      try {
+        workspace.trigger?.("layout-change");
+      } catch (error) {
+        console.warn("[mobile-webviewer] workspace layout refresh skipped", error);
+      }
+      try {
+        if (leaf) workspace.trigger?.("active-leaf-change", leaf);
+      } catch (error) {
+        console.warn("[mobile-webviewer] workspace active leaf refresh skipped", error);
+      }
+      try {
+        const file = this.app.workspace.getActiveFile();
+        if (file) workspace.trigger?.("file-open", file);
+      } catch (error) {
+        console.warn("[mobile-webviewer] workspace file refresh skipped", error);
+      }
+    }
+
+    const run = (label: string, callback?: () => void) => {
+      if (typeof callback !== "function") return;
+      try {
+        callback();
+      } catch (error) {
+        console.warn(`[mobile-webviewer] NoteDraw ${label} skipped`, error);
+      }
+    };
+
+    run("source sync", () => noteDrawPlugin?.syncSourceControllers?.());
+    run("webview sync", () => noteDrawPlugin?.syncWebviewControllers?.());
+    run("header sync", () => noteDrawPlugin?.syncMobileWebviewerHeaderButtons?.());
+    run("scheduled webview sync", () => noteDrawPlugin?.scheduleWebviewSync?.());
+    this.queueNoteDrawButtonDedupe(root);
+    this.queueNoteDrawControllerSync(root, forceEditMode);
+  }
+
+  notifyNoteDrawWebviewChanged(root?: HTMLElement, forceEditMode = false): void {
+    if (!root?.isConnected) return;
+    const delays = [0, 80, 180, 420, 900, 1600];
+    delays.forEach((delay, index) => {
+      window.setTimeout(() => {
+        if (!root.isConnected) return;
+        this.refreshNoteDrawWorkspaceBinding(root, forceEditMode, index === 0 || index === 2 || index === 4);
+      }, delay);
+    });
+  }
+
+  resetNoteDrawWebviewControllers(root?: HTMLElement): void {
+    if (!root?.isConnected) return;
+    const noteDrawPlugin = this.getNoteDrawPlugin();
+    const controllers = new Set<NoteDrawControllerLike>();
+    for (const controller of this.collectNoteDrawControllers(root)) {
+      if (controller.surfaceType === "webview" && this.isMobileWebviewerSurface(controller.previewEl)) {
+        controllers.add(controller);
+      }
+    }
+    noteDrawPlugin?.webviewControllers?.forEach((controller, surface) => {
+      if ((surface === root || root.contains(surface)) && controller?.surfaceType === "webview") {
+        controllers.add(controller);
+      }
+    });
+
+    noteDrawPlugin?.webviewControllers?.forEach((controller, surface) => {
+      if (
+        controllers.has(controller) ||
+        surface === root ||
+        root.contains(surface) ||
+        Boolean(controller?.previewEl && (controller.previewEl === root || root.contains(controller.previewEl)))
+      ) {
+        noteDrawPlugin.webviewControllers?.delete(surface);
+      }
+    });
+
+    for (const controller of controllers) {
+      const data = (controller as NoteDrawControllerLike & { drawingData?: unknown }).drawingData;
+      if (controller.file && data && typeof noteDrawPlugin?.writeDrawings === "function") {
+        void noteDrawPlugin.writeDrawings(controller.file, data).catch((error) => {
+          console.warn("[mobile-webviewer] NoteDraw drawing flush skipped", error);
+        });
+      }
+      try {
+        controller.destroy?.();
+      } catch (error) {
+        console.warn("[mobile-webviewer] NoteDraw controller reset skipped", error);
+      }
+    }
+    root.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR).forEach((button) => button.remove());
+    root.querySelectorAll<HTMLElement>(".notedraw-toolbar, .notedraw-palette-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-embed-layer, .notedraw-file-input, .notedraw-canvas").forEach((element) => element.remove());
+    (root as NoteDrawSurfaceElement)._noteDrawController = undefined;
+  }
+
   isMobileWebviewerSurface(surface?: HTMLElement | null): boolean {
     if (!surface) return false;
     return Boolean(
@@ -2871,7 +3022,23 @@ export default class MobileWebviewerPlugin extends Plugin {
         return;
       }
 
-      void this.addConsole("warn", "NoteDraw controller not ready on this page", root?.dataset?.url ?? "");
+      this.refreshNoteDrawWorkspaceBinding(root, true, true);
+      window.setTimeout(() => {
+        this.refreshNoteDrawWorkspaceBinding(root, true, false);
+        const retryButton = this.findNoteDrawSourceButton(root) as NoteDrawButtonElement | null;
+        const retryController =
+          retryButton?._noteDrawController ??
+          this.collectNoteDrawControllers(root).find((controller) => controller.surfaceType === "webview");
+        if (toggleController(retryController) || clickController(retryController)) {
+          return;
+        }
+        if (retryButton) {
+          this.dispatchActivationClick(retryButton);
+          queueDedupe(true);
+          return;
+        }
+        void this.addConsole("warn", "NoteDraw controller not ready on this page", root?.dataset?.url ?? "");
+      }, 180);
     }, 80);
   }
 
@@ -3134,18 +3301,24 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.setEmbedStack(embed, "mwvForward", []);
     }
     embed.dataset.url = nextUrl;
+    embed.setAttribute("data-url", nextUrl);
     embed.dataset.mwvProgrammaticUrl = nextUrl;
     void this.persistEmbedState(embed);
   }
 
   async openUrlInEmbed(embed: HTMLElement, url: string, recordHistory = true): Promise<void> {
     const nextUrl = normalizeInput(url, this.settings.searchUrl);
+    const previousUrl = embed.dataset.url;
     this.flushEmbedReader(embed);
+    if (previousUrl && previousUrl !== nextUrl) {
+      this.resetNoteDrawWebviewControllers(embed);
+    }
     if (recordHistory) {
       this.pushEmbedHistory(embed, nextUrl);
     } else {
       embed.dataset.url = nextUrl;
       embed.dataset.mwvProgrammaticUrl = nextUrl;
+      embed.setAttribute("data-url", nextUrl);
       void this.persistEmbedState(embed);
     }
     const query = this.extractBingQuery(nextUrl);
@@ -3258,8 +3431,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
     embed.dataset.url = url;
+    embed.setAttribute("data-url", url);
     embed.removeClass("mwv-bing-home");
     this.renderBrowserChrome(embed, url, "Loading");
+    this.notifyNoteDrawWebviewChanged(embed);
 
     if (this.settings.liveBrowserFirst) {
       const reader = embed.createDiv({ cls: "mwv-reader-panel is-loading mwv-note-front-panel" });
@@ -3288,9 +3463,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.addClass("mwv-embed");
       embed.addClass("mwv-note-embed");
       embed.dataset.url = url;
+      embed.setAttribute("data-url", url);
       embed.removeClass("mwv-bing-home");
       this.renderBrowserChrome(embed, url, hostName(url));
       this.renderLiveBrowserSurface(embed, url);
+      this.notifyNoteDrawWebviewChanged(embed);
     }
   }
 
@@ -3300,27 +3477,36 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.addClass("mwv-note-embed");
     embed.removeClass("mwv-bing-home");
     embed.dataset.url = url;
+    embed.setAttribute("data-url", url);
     embed.dataset.mwvProgrammaticUrl = url;
     this.renderBrowserChrome(embed, url, title || hostName(url));
     this.renderLiveBrowserSurface(embed, url);
     this.updateEmbedStatus(embed, url, hostName(url));
+    this.notifyNoteDrawWebviewChanged(embed);
   }
 
   renderLiveBrowserSurface(embed: HTMLElement, url: string): void {
     this.applyBrowserRuntimeClasses(embed);
     const surface = embed.createDiv({ cls: "mwv-live-browser" });
     const frame = this.createBrowserSurface(surface, url, "mwv-live-frame", hostName(url), {
-      onReady: () => this.applyAccessibleFrameFilters(frame, embed.dataset.url || url),
+      onReady: () => {
+        void this.applyAccessibleFrameFilters(frame, embed.dataset.url || url);
+        this.notifyNoteDrawWebviewChanged(embed);
+      },
       onNavigate: (nextUrl) => this.handleEmbedSurfaceNavigate(embed, nextUrl),
       onTitle: (title) => this.handleEmbedSurfaceTitle(embed, title),
       onFail: (message, failedUrl) => {
         const currentUrl = failedUrl ?? embed.dataset.url ?? url;
         this.updateEmbedStatus(embed, currentUrl, hostName(currentUrl));
         void this.addConsole("warn", `Note Browser load issue: ${message}`, currentUrl);
+        this.notifyNoteDrawWebviewChanged(embed);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
       onNewWindow: (nextUrl) => this.activateBrowserView(nextUrl, true),
-      onLoading: (loading, loadingUrl) => this.updateEmbedLoading(embed, loading, loadingUrl || url),
+      onLoading: (loading, loadingUrl) => {
+        this.updateEmbedLoading(embed, loading, loadingUrl || url);
+        if (!loading) this.notifyNoteDrawWebviewChanged(embed);
+      },
       onFavicon: (iconUrl) => this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url),
       onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl),
       onContextLink: (linkUrl, linkTitle) => this.updateEmbedStatus(embed, linkUrl, linkTitle)
@@ -3352,6 +3538,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const note = await this.ensureWebNote(page);
       if (!embed.isConnected || embed.dataset.url !== url) return;
       this.renderReaderPanel(reader, page, note, embed);
+      this.notifyNoteDrawWebviewChanged(embed, true);
     } catch (error) {
       console.error("[mobile-webviewer] reader sync failed", error);
       reader.removeClass("is-loading");
@@ -3366,6 +3553,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const programmaticUrl = embed.dataset.mwvProgrammaticUrl;
     if (previous && previous !== nextUrl) {
       this.flushEmbedReader(embed);
+      this.resetNoteDrawWebviewControllers(embed);
     }
     if (programmaticUrl === nextUrl) {
       delete embed.dataset.mwvProgrammaticUrl;
@@ -3380,6 +3568,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.dataset.url = nextUrl;
     embed.setAttribute("data-url", nextUrl);
     this.updateEmbedChrome(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
+    this.notifyNoteDrawWebviewChanged(embed);
     void this.persistEmbedState(embed);
     void this.addHistory({
       title: this.getEmbedSurfaceTitle(embed) || hostName(nextUrl),
@@ -3587,10 +3776,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(window, "pointercancel", finishFromWindow);
     this.registerDomEvent(window, "blur", finishFromWindow);
     this.applyReaderCustomizations(panel, page);
+    if (embed) this.notifyNoteDrawWebviewChanged(embed, true);
   }
 
   renderBingShellEmbed(embed: HTMLElement, query = ""): void {
     this.flushEmbedReader(embed);
+    this.resetNoteDrawWebviewControllers(embed);
     embed.empty();
     embed.addClass("mwv-bing-home");
     embed.removeClass("mwv-note-embed");
@@ -3600,7 +3791,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       : this.settings.homeUrl;
     embed.addClass("mwv-embed");
     embed.dataset.url = currentUrl;
+    embed.setAttribute("data-url", currentUrl);
     this.renderBrowserChrome(embed, currentUrl, query ? `Bing: ${query}` : "Bing");
+    this.notifyNoteDrawWebviewChanged(embed);
 
     const searchHeader = query.trim()
       ? embed.createDiv({ cls: "mwv-bing-serp-head" })
