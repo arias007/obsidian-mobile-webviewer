@@ -12,7 +12,8 @@ import {
   TFile,
   WorkspaceLeaf,
   normalizePath,
-  setIcon
+  setIcon,
+  type SettingDefinitionItem
 } from "obsidian";
 import * as qrcodeFactory from "qrcode-generator";
 
@@ -37,10 +38,12 @@ const DEFAULT_DOWNLOAD_CONNECTIONS = 4;
 const MIN_SEGMENTED_DOWNLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_MHTML_RESOURCES = 24;
 const DEFAULT_TRANSLATE_TARGET = "ob";
+const DEFAULT_UI_LANGUAGE = "auto";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
+const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.32";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.35";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -73,6 +76,12 @@ const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   native: "跟随 Obsidian 语言"
 };
 
+const FOLLOW_OBSIDIAN_UI_OPTION: LanguageOption = {
+  code: DEFAULT_UI_LANGUAGE,
+  label: "Follow Obsidian language",
+  native: "跟随 Obsidian 语言"
+};
+
 const TRANSLATE_LANGUAGES: LanguageOption[] = [
   { code: "zh-Hans", label: "Chinese Simplified", native: "简体中文" },
   { code: "zh-Hant", label: "Chinese Traditional", native: "繁體中文" },
@@ -101,6 +110,7 @@ const TRANSLATE_LANGUAGES: LanguageOption[] = [
 ];
 
 const TRANSLATE_CHOICES: LanguageOption[] = [FOLLOW_OBSIDIAN_TRANSLATE_OPTION, ...TRANSLATE_LANGUAGES];
+const UI_LANGUAGE_CHOICES: LanguageOption[] = [FOLLOW_OBSIDIAN_UI_OPTION, ...TRANSLATE_LANGUAGES];
 const SUPPORT_CODE_ASSETS = [
   { path: "extras/code-1.jpg", label: "支付宝 / Alipay" },
   { path: "extras/code-2.png", label: "币安 / Binance" }
@@ -170,9 +180,2009 @@ interface LanguageOption {
   native: string;
 }
 
+type UiLanguageCode = typeof TRANSLATE_LANGUAGES[number]["code"];
+type UiTextKey =
+  | "uiLanguage"
+  | "uiLanguageDesc"
+  | "followObsidian"
+  | "coreEntry"
+  | "coreEntryDesc"
+  | "homePage"
+  | "homePageDesc"
+  | "searchUrl"
+  | "searchUrlDesc"
+  | "noteBrowserCurrentUrl"
+  | "noteBrowserCurrentUrlDesc"
+  | "openBrowser"
+  | "openBrowserDesc"
+  | "openOnStartup"
+  | "openOnStartupDesc"
+  | "interfaceRendering"
+  | "interfaceRenderingDesc"
+  | "compactMobileToolbar"
+  | "compactMobileToolbarDesc"
+  | "showNoteDrawMagicWand"
+  | "showNoteDrawMagicWandDesc"
+  | "readerHint"
+  | "readerHintDesc"
+  | "liveBrowserFirst"
+  | "liveBrowserFirstDesc"
+  | "frontendMode"
+  | "frontendModeDesc"
+  | "editableNote"
+  | "fullWebPage"
+  | "autoSaveWebNotes"
+  | "autoSaveWebNotesDesc"
+  | "webNoteFolder"
+  | "webNoteFolderDesc"
+  | "pageZoom"
+  | "pageZoomDesc"
+  | "readerFontSize"
+  | "readerFontSizeDesc"
+  | "desktopView"
+  | "desktopViewDesc"
+  | "userAgent"
+  | "userAgentDesc"
+  | "mobile"
+  | "desktop"
+  | "download"
+  | "downloadDesc"
+  | "downloadFolder"
+  | "downloadFolderDesc"
+  | "downloadConnections"
+  | "downloadConnectionsDesc"
+  | "browserMode"
+  | "browserModeDesc"
+  | "nightMode"
+  | "nightModeDesc"
+  | "eyeProtection"
+  | "eyeProtectionDesc"
+  | "adBlock"
+  | "adBlockDesc"
+  | "markAds"
+  | "markAdsDesc"
+  | "incognito"
+  | "incognitoDesc"
+  | "disableJavaScript"
+  | "disableJavaScriptDesc"
+  | "rotateScreen"
+  | "rotateScreenDesc"
+  | "dataImportExport"
+  | "dataImportExportDesc"
+  | "universalExport"
+  | "universalExportDesc"
+  | "exportJson"
+  | "copyJson"
+  | "universalImport"
+  | "universalImportDesc"
+  | "importClipboard"
+  | "translation"
+  | "translationDesc"
+  | "defaultTranslationLanguage"
+  | "defaultTranslationLanguageDesc"
+  | "scriptsReader"
+  | "scriptsReaderDesc"
+  | "readerUserScripts"
+  | "readerUserScriptsDesc"
+  | "readerCss"
+  | "readerCssDesc"
+  | "readerJavascript"
+  | "readerJavascriptDesc"
+  | "userScriptRules"
+  | "rulesCount"
+  | "rulesDesc"
+  | "addRule"
+  | "ruleName"
+  | "delete"
+  | "match"
+  | "matchDesc"
+  | "css"
+  | "cssDesc"
+  | "javascript"
+  | "javascriptDesc"
+  | "autofill"
+  | "autofillDesc"
+  | "autofillName"
+  | "autofillEmail"
+  | "autofillPhone"
+  | "autofillAddress"
+  | "autofillFieldDesc"
+  | "dataMaintenance"
+  | "dataMaintenanceDesc"
+  | "clearHistory"
+  | "clearReaderCache"
+  | "clearDownloads"
+  | "readingList"
+  | "clearConsole"
+  | "clearBrowsingData"
+  | "clearBrowsingDataDesc"
+  | "exportBookmarkNote"
+  | "exportBookmarkNoteDesc"
+  | "clear"
+  | "create"
+  | "savedEntries"
+  | "cachedPages"
+  | "downloadRecords"
+  | "savedPages"
+  | "consoleEntries"
+  | "supportCodes"
+  | "supportCodesDesc"
+  | "searchOrEnterUrl"
+  | "go"
+  | "more"
+  | "closeMore"
+  | "ready"
+  | "bookmarks"
+  | "history"
+  | "reading"
+  | "downloads"
+  | "console"
+  | "closePanel"
+  | "back"
+  | "forward"
+  | "reload"
+  | "home"
+  | "note"
+  | "web"
+  | "noteBrowser"
+  | "saveMd"
+  | "bookmark"
+  | "saveLink"
+  | "settings"
+  | "noBookmarksYet"
+  | "noReadingListYet"
+  | "noHistoryYet"
+  | "noDownloadsYet"
+  | "noConsoleLogs"
+  | "search"
+  | "searchBing"
+  | "searching"
+  | "searchingBing"
+  | "resultsCount"
+  | "moreResults"
+  | "loading"
+  | "loadFailedRetry"
+  | "nativeLightHome"
+  | "reader"
+  | "readingStatus"
+  | "pageTools"
+  | "copyLink"
+  | "doodle"
+  | "closeDoodle"
+  | "editableWebNote"
+  | "links"
+  | "autoSavedPlugin"
+  | "saving"
+  | "savedPlugin"
+  | "savedMarkdown"
+  | "webNoteSaved"
+  | "savedTo"
+  | "bookmarkAdded"
+  | "bookmarkRemoved"
+  | "noPreviousPage"
+  | "noNextPage"
+  | "internalBrowserTab"
+  | "refresh"
+  | "openCancip"
+  | "all"
+  | "completed"
+  | "failed"
+  | "today"
+  | "latest"
+  | "noEntries"
+  | "open"
+  | "copy"
+  | "downloadState"
+  | "openFile"
+  | "copyPath"
+  | "location"
+  | "source"
+  | "cancipDetected"
+  | "cancipNotEnabled"
+  | "cancipDetectedDesc"
+  | "cancipNotEnabledDesc"
+  | "copyCurrentContext"
+  | "cancipContextPrompt"
+  | "copiedCancipContext"
+  | "downloadComplete"
+  | "newTab"
+  | "openLink"
+  | "openInNewTab"
+  | "downloadLink"
+  | "downloadSavedTo"
+  | "tabs"
+  | "page"
+  | "view"
+  | "save"
+  | "tools"
+  | "downloadPage"
+  | "bookmarksCount"
+  | "historyCount"
+  | "readingCount"
+  | "consoleCount"
+  | "downloadsCount"
+  | "newObTab"
+  | "openNoteWeb"
+  | "openInBrowser"
+  | "share"
+  | "browserStatus"
+  | "zoomIn"
+  | "zoomOut"
+  | "mobileVersion"
+  | "desktopVersion"
+  | "dayMode"
+  | "closeEyeProtection"
+  | "closeAdBlock"
+  | "adBlocking"
+  | "unmarkAds"
+  | "closeIncognito"
+  | "exitFullscreen"
+  | "fullscreen"
+  | "enableJs"
+  | "disableJs"
+  | "closeLandscape"
+  | "landscape"
+  | "fontSize"
+  | "downloadFile"
+  | "saveHtml"
+  | "saveMht"
+  | "offlinePage"
+  | "desktopShortcut"
+  | "removeBookmark"
+  | "addBookmark"
+  | "addReadingList"
+  | "autofillPage"
+  | "scriptsCount"
+  | "mediaSniff"
+  | "pageAssets"
+  | "copySource"
+  | "viewSource"
+  | "translateAction"
+  | "readAloud"
+  | "qrCode"
+  | "report"
+  | "copyLogs"
+  | "clearCache"
+  | "siteSettings"
+  | "toolStatus"
+  | "clearBrowsingDataAction"
+  | "runningAction"
+  | "completedAction"
+  | "failedAction"
+  | "downloadFinished"
+  | "saved"
+  | "addedReadingList"
+  | "mediaCopied"
+  | "resourcesCopied"
+  | "sourceCopied"
+  | "consoleCopied"
+  | "cacheCleared"
+  | "browsingDataCleared"
+  | "translatePageTo"
+  | "newObsidianTab"
+  | "address"
+  | "webResultsTab"
+  | "imageResultsTab"
+  | "videoResultsTab"
+  | "academicTab"
+  | "dictionaryTab"
+  | "mapsTab"
+  | "moreTab"
+  | "aboutResults"
+  | "learnMoreAbout"
+  | "webNotePlaceholder"
+  | "fallbackEditableNote"
+  | "loadingValue"
+  | "yes"
+  | "no"
+  | "downloadDirectory"
+  | "copiedLink"
+  | "cancipAi"
+  | "currentOpen"
+  | "readerExtracting"
+  | "insertedLink"
+  | "copiedMarkdownLink"
+  | "noteDrawDisabled"
+  | "readerNoteNotReady"
+  | "noWebNoteToExport"
+  | "jsonCopied"
+  | "clipboardEmpty"
+  | "fileMissingPathCopied"
+  | "htmlSaveFailed"
+  | "mhtSaveFailed"
+  | "shareTextCopied"
+  | "downloadFailed"
+  | "cancipDisabled"
+  | "noWebLinkFound"
+  | "bookmarkNoteCreated"
+  | "emptyConsoleDesc"
+  | "pageSource"
+  | "copyReport"
+  | "reportUrl"
+  | "reportCopied"
+  | "urlCopied"
+  | "translatePage"
+  | "noSavedPages"
+  | "noResourcesFound"
+  | "disabled"
+  | "noMatchingScripts"
+  | "findInPage"
+  | "previous"
+  | "next"
+  | "close"
+  | "pageLoadLimited";
+
+type UiDictionary = Partial<Record<UiTextKey, string>>;
+
+const UI_TEXT_EN: Record<UiTextKey, string> = {
+  uiLanguage: "Interface language",
+  uiLanguageDesc: "Default follows Obsidian/system language. You can also pin a fixed language for this plugin.",
+  followObsidian: "Follow Obsidian language",
+  coreEntry: "Core entry",
+  coreEntryDesc: "Home page, search, browser entries, and startup behavior.",
+  homePage: "Home page",
+  homePageDesc: "Default page opened by the home button.",
+  searchUrl: "Search URL",
+  searchUrlDesc: "Use {{query}} as the encoded search text placeholder.",
+  noteBrowserCurrentUrl: "Note Browser current URL",
+  noteBrowserCurrentUrlDesc: "The URL restored when opening the note-based browser.",
+  openBrowser: "Open browser",
+  openBrowserDesc: "Quickly open the note-based browser from settings.",
+  openOnStartup: "Open on startup",
+  openOnStartupDesc: "Open the note-based browser in reading view after Obsidian layout is ready.",
+  interfaceRendering: "Interface and rendering",
+  interfaceRenderingDesc: "Control the mobile toolbar, NoteDraw wand, reader layer, and page scale.",
+  compactMobileToolbar: "Compact mobile toolbar",
+  compactMobileToolbarDesc: "Use smaller controls for phone screens.",
+  showNoteDrawMagicWand: "Show NoteDraw magic wand",
+  showNoteDrawMagicWandDesc: "Show the wand button in Mobile Webviewer surfaces when NoteDraw is available.",
+  readerHint: "Reader hint",
+  readerHintDesc: "Show reader-layer hints when the internal browser renders note-like pages.",
+  liveBrowserFirst: "Live browser first",
+  liveBrowserFirstDesc: "Show the live WebView surface above the note-style reader layer.",
+  frontendMode: "Frontend mode",
+  frontendModeDesc: "Default foreground: editable note or full web page.",
+  editableNote: "Editable note",
+  fullWebPage: "Full web page",
+  autoSaveWebNotes: "Auto-save web notes",
+  autoSaveWebNotesDesc: "Auto-save edited reader text and doodles into plugin data only. Use Save MD to add a Markdown file to the vault.",
+  webNoteFolder: "Web note folder",
+  webNoteFolderDesc: "Manual Save MD exports are saved here inside the vault.",
+  pageZoom: "Page zoom",
+  pageZoomDesc: "Default zoom for live browser surfaces.",
+  readerFontSize: "Reader font size",
+  readerFontSizeDesc: "Reader/cache layer font size.",
+  desktopView: "Desktop view",
+  desktopViewDesc: "Use a wider live browser surface.",
+  userAgent: "User agent",
+  userAgentDesc: "Used by internal fetch/search/download requests and the live browser surface where Obsidian exposes control.",
+  mobile: "Mobile",
+  desktop: "Desktop",
+  download: "Download",
+  downloadDesc: "Save files, HTML, MHT, and offline pages.",
+  downloadFolder: "Download folder",
+  downloadFolderDesc: "Files saved by More > Download, HTML, and MHT.",
+  downloadConnections: "Download connections",
+  downloadConnectionsDesc: "Parallel byte-range connections when the server supports resumable downloads.",
+  browserMode: "Browser modes",
+  browserModeDesc: "These switches affect Browser View and Note Browser internal rendering.",
+  nightMode: "Night mode",
+  nightModeDesc: "Darkens internal browser shell and reader surfaces.",
+  eyeProtection: "Eye protection",
+  eyeProtectionDesc: "Applies a softer reading tint.",
+  adBlock: "Ad block",
+  adBlockDesc: "Removes common ad containers where the page is accessible.",
+  markAds: "Mark ads",
+  markAdsDesc: "Marks likely ad containers where the page is accessible.",
+  incognito: "Incognito",
+  incognitoDesc: "Stops history and reader cache writes.",
+  disableJavaScript: "Disable JavaScript",
+  disableJavaScriptDesc: "Reloads live pages without allow-scripts in the sandbox.",
+  rotateScreen: "Rotate screen",
+  rotateScreenDesc: "Uses a wider landscape-like browser surface.",
+  dataImportExport: "Data import and export",
+  dataImportExportDesc: "Bookmarks, reading list, history, downloads, script rules, web notes, and common settings.",
+  universalExport: "Universal export",
+  universalExportDesc: "Save a portable Mobile Webviewer JSON package into the download folder.",
+  exportJson: "Export JSON",
+  copyJson: "Copy JSON",
+  universalImport: "Universal import",
+  universalImportDesc: "Import Mobile Webviewer JSON, common bookmark HTML, or plain URL lines from the clipboard. Existing data is merged.",
+  importClipboard: "Import clipboard",
+  translation: "Translation",
+  translationDesc: "Default follows Obsidian language, or choose a fixed target language.",
+  defaultTranslationLanguage: "Default translation language",
+  defaultTranslationLanguageDesc: "Used by More > Translate and the language picker. Follow Obsidian language keeps translation tied to Obsidian's current UI language.",
+  scriptsReader: "Scripts and reader layer",
+  scriptsReaderDesc: "Reader-layer CSS, JavaScript, and URL-matched script rules.",
+  readerUserScripts: "Reader user scripts",
+  readerUserScriptsDesc: "Apply custom CSS and JavaScript to the internal reader layer.",
+  readerCss: "Reader CSS",
+  readerCssDesc: "CSS injected into rendered reader/cache pages.",
+  readerJavascript: "Reader JavaScript",
+  readerJavascriptDesc: "Runs with container, page, and hostName available.",
+  userScriptRules: "User script rules",
+  rulesCount: "Rules ({count})",
+  rulesDesc: "URL-matched CSS and JavaScript for the internal reader layer.",
+  addRule: "Add rule",
+  ruleName: "Rule name",
+  delete: "Delete",
+  match: "Match",
+  matchDesc: "Supports substring or wildcard, for example *://*.example.com/*",
+  css: "CSS",
+  cssDesc: "Injected into matched reader pages.",
+  javascript: "JavaScript",
+  javascriptDesc: "Runs with container, page, hostName, and rule available.",
+  autofill: "Autofill",
+  autofillDesc: "Used by More > Autofill page; fills only accessible empty fields.",
+  autofillName: "Autofill name",
+  autofillEmail: "Autofill email",
+  autofillPhone: "Autofill phone",
+  autofillAddress: "Autofill address",
+  autofillFieldDesc: "Used by More > Autofill page.",
+  dataMaintenance: "Data maintenance",
+  dataMaintenanceDesc: "Clear browsing history, reader cache, downloads, and console logs.",
+  clearHistory: "Clear history",
+  clearReaderCache: "Clear reader cache",
+  clearDownloads: "Clear downloads",
+  readingList: "Reading list",
+  clearConsole: "Clear console",
+  clearBrowsingData: "Clear browsing data",
+  clearBrowsingDataDesc: "Clear history, reader cache, and console entries. Bookmarks, reading list, and files are kept.",
+  exportBookmarkNote: "Export bookmark note",
+  exportBookmarkNoteDesc: "Create a Markdown note containing current bookmarks.",
+  clear: "Clear",
+  create: "Create",
+  savedEntries: "{count} saved entries.",
+  cachedPages: "{count} cached pages.",
+  downloadRecords: "{count} saved download records. Files are not removed.",
+  savedPages: "{count} saved pages.",
+  consoleEntries: "{count} console entries.",
+  supportCodes: "Support codes",
+  supportCodesDesc: "If this plugin helps you, scan a code to support continued maintenance.",
+  searchOrEnterUrl: "Search or enter URL",
+  go: "Go",
+  more: "More",
+  closeMore: "Close More",
+  ready: "Ready",
+  bookmarks: "Bookmarks",
+  history: "History",
+  reading: "Reading",
+  downloads: "Downloads",
+  console: "Console",
+  closePanel: "Close panel",
+  back: "Back",
+  forward: "Forward",
+  reload: "Reload",
+  home: "Home",
+  note: "Note",
+  web: "Web",
+  noteBrowser: "Note Browser",
+  saveMd: "Save MD",
+  bookmark: "Bookmark",
+  saveLink: "Save link",
+  settings: "Settings",
+  noBookmarksYet: "No bookmarks yet",
+  noReadingListYet: "No reading list yet",
+  noHistoryYet: "No history yet",
+  noDownloadsYet: "No downloads yet",
+  noConsoleLogs: "No console logs",
+  search: "Search",
+  searchBing: "Search Bing",
+  searching: "Searching...",
+  searchingBing: "Searching Bing...",
+  resultsCount: "{count} result(s)",
+  moreResults: "More results",
+  loading: "Loading...",
+  loadFailedRetry: "Load failed, retry",
+  nativeLightHome: "Native light home",
+  reader: "Reader",
+  readingStatus: "Reading...",
+  pageTools: "Page tools",
+  copyLink: "Copy link",
+  doodle: "Doodle",
+  closeDoodle: "Close doodle",
+  editableWebNote: "Editable web note",
+  links: "Links",
+  autoSavedPlugin: "Auto-saved to plugin",
+  saving: "Saving...",
+  savedPlugin: "Saved to plugin",
+  savedMarkdown: "Saved to {path}",
+  webNoteSaved: "Web note saved in plugin data",
+  savedTo: "Saved to {path}",
+  bookmarkAdded: "Bookmark added",
+  bookmarkRemoved: "Bookmark removed",
+  noPreviousPage: "No previous page",
+  noNextPage: "No next page",
+  internalBrowserTab: "Internal browser tab",
+  refresh: "Refresh",
+  openCancip: "Open Cancip",
+  all: "All",
+  completed: "Completed",
+  failed: "Failed",
+  today: "Today",
+  latest: "Latest",
+  noEntries: "No entries",
+  open: "Open",
+  copy: "Copy",
+  downloadState: "{status} · {progress}%",
+  openFile: "Open",
+  copyPath: "Copy path",
+  location: "Location",
+  source: "Source",
+  cancipDetected: "Cancip AI detected",
+  cancipNotEnabled: "Cancip AI is not enabled",
+  cancipDetectedDesc: "Version {version}; open the AI panel from here.",
+  cancipNotEnabledDesc: "After installing or enabling Cancip, Mobile Webviewer can provide the current web context as an AI entry.",
+  copyCurrentContext: "Copy current web context",
+  cancipContextPrompt: "Use this web context to analyze, organize, excerpt, or generate notes.",
+  copiedCancipContext: "Copied Cancip context",
+  downloadComplete: "Download complete: {path}",
+  newTab: "New tab",
+  openLink: "Open link",
+  openInNewTab: "Open in new tab",
+  downloadLink: "Download link",
+  downloadSavedTo: "Downloads saved to: {folder}",
+  tabs: "Tabs",
+  page: "Page",
+  view: "View",
+  save: "Save",
+  tools: "Tools",
+  downloadPage: "Downloads ({count})",
+  bookmarksCount: "Bookmarks ({count})",
+  historyCount: "History ({count})",
+  readingCount: "Reading ({count})",
+  consoleCount: "Logs ({count})",
+  downloadsCount: "Downloads ({count})",
+  newObTab: "New OB tab",
+  openNoteWeb: "Open Note Web",
+  openInBrowser: "Open in browser",
+  share: "Share",
+  browserStatus: "Browser status",
+  zoomIn: "Zoom in {value}%",
+  zoomOut: "Zoom out",
+  mobileVersion: "Mobile version",
+  desktopVersion: "Desktop version",
+  dayMode: "Day mode",
+  closeEyeProtection: "Close eye protection",
+  closeAdBlock: "Disable ad block",
+  adBlocking: "Ad block",
+  unmarkAds: "Unmark ads",
+  closeIncognito: "Close incognito",
+  exitFullscreen: "Exit fullscreen",
+  fullscreen: "Fullscreen",
+  enableJs: "Enable JS",
+  disableJs: "Disable JS",
+  closeLandscape: "Close landscape",
+  landscape: "Landscape",
+  fontSize: "Font size {value}%",
+  downloadFile: "Download file",
+  saveHtml: "Save HTML",
+  saveMht: "Save MHT",
+  offlinePage: "Offline page",
+  desktopShortcut: "Desktop shortcut",
+  removeBookmark: "Remove bookmark",
+  addBookmark: "Add bookmark",
+  addReadingList: "Add to reading list",
+  autofillPage: "Autofill page",
+  scriptsCount: "Scripts ({count})",
+  mediaSniff: "Media sniff",
+  pageAssets: "Page assets",
+  copySource: "Copy source",
+  viewSource: "View source",
+  translateAction: "Translate",
+  readAloud: "Read aloud",
+  qrCode: "QR code",
+  report: "Report",
+  copyLogs: "Copy logs",
+  clearCache: "Clear cache ({count})",
+  siteSettings: "Site settings",
+  toolStatus: "Tool status",
+  clearBrowsingDataAction: "Clear browsing data",
+  runningAction: "Running: {label}",
+  completedAction: "Completed: {label}",
+  failedAction: "{label} failed: {message}",
+  downloadFinished: "Download finished: {path}",
+  saved: "Saved: {path}",
+  addedReadingList: "Added to reading list",
+  mediaCopied: "Media copied: {count}",
+  resourcesCopied: "Resources copied",
+  sourceCopied: "Source copied",
+  consoleCopied: "Console copied",
+  cacheCleared: "Cache cleared",
+  browsingDataCleared: "Browsing data cleared",
+  translatePageTo: "Translate page to...",
+  newObsidianTab: "New Obsidian tab",
+  address: "Address",
+  webResultsTab: "Web",
+  imageResultsTab: "Images",
+  videoResultsTab: "Videos",
+  academicTab: "Academic",
+  dictionaryTab: "Dictionary",
+  mapsTab: "Maps",
+  moreTab: "More",
+  aboutResults: "About {count} results",
+  learnMoreAbout: "Learn more about {query}",
+  webNotePlaceholder: "Web note",
+  fallbackEditableNote: "Page loading is limited; an editable note layer is kept.",
+  loadingValue: "Loading: {value}",
+  yes: "Yes",
+  no: "No",
+  downloadDirectory: "Download directory: {folder}",
+  copiedLink: "Copied link",
+  cancipAi: "Cancip AI",
+  currentOpen: "Open current",
+  readerExtracting: "Extracting page summary...",
+  insertedLink: "Inserted link",
+  copiedMarkdownLink: "Copied Markdown link",
+  noteDrawDisabled: "NoteDraw plugin is not enabled.",
+  readerNoteNotReady: "Reader note is not ready yet",
+  noWebNoteToExport: "No web note to export",
+  jsonCopied: "Mobile Webviewer JSON copied",
+  clipboardEmpty: "Clipboard is empty",
+  fileMissingPathCopied: "File not found in vault; path copied",
+  htmlSaveFailed: "HTML save failed",
+  mhtSaveFailed: "MHT save failed",
+  shareTextCopied: "Share text copied",
+  downloadFailed: "Download failed",
+  cancipDisabled: "Cancip plugin is not enabled",
+  noWebLinkFound: "No web link found",
+  bookmarkNoteCreated: "Bookmark note created",
+  emptyConsoleDesc: "No logs yet. Search, downloads, saves, and scripts will appear here.",
+  pageSource: "Page source",
+  copyReport: "Copy report",
+  reportUrl: "Report URL",
+  reportCopied: "Report copied",
+  urlCopied: "URL copied",
+  translatePage: "Translate page",
+  noSavedPages: "No saved pages",
+  noResourcesFound: "No resources found",
+  disabled: "Disabled",
+  noMatchingScripts: "No matching scripts",
+  findInPage: "Find in page",
+  previous: "Previous",
+  next: "Next",
+  close: "Close",
+  pageLoadLimited: "Page loading is limited; an editable note layer is kept."
+};
+
+const UI_TEXT_ZH_HANS: UiDictionary = {
+  uiLanguage: "界面语言",
+  uiLanguageDesc: "默认跟随 Obsidian/系统语言，也可以给插件固定一种语言。",
+  followObsidian: "跟随 Obsidian 语言",
+  coreEntry: "核心入口",
+  coreEntryDesc: "首页、搜索、两个浏览器入口和启动行为。",
+  homePage: "首页",
+  homePageDesc: "主页按钮默认打开的页面。",
+  searchUrl: "搜索 URL",
+  searchUrlDesc: "用 {{query}} 作为已编码搜索词占位符。",
+  noteBrowserCurrentUrl: "Note Browser 当前网址",
+  noteBrowserCurrentUrlDesc: "打开笔记浏览器时恢复的网址。",
+  openBrowser: "打开浏览器",
+  openBrowserDesc: "从设置里快速打开笔记浏览器。",
+  openOnStartup: "启动时打开",
+  openOnStartupDesc: "Obsidian 布局就绪后用阅读视图打开笔记浏览器。",
+  interfaceRendering: "界面和渲染",
+  interfaceRenderingDesc: "控制手机工具栏、NoteDraw 魔法棒、阅读层和页面比例。",
+  compactMobileToolbar: "紧凑手机工具栏",
+  compactMobileToolbarDesc: "手机屏幕使用更小的控件。",
+  showNoteDrawMagicWand: "显示 NoteDraw 魔法棒",
+  showNoteDrawMagicWandDesc: "NoteDraw 可用时在 Mobile Webviewer 界面显示魔法棒。",
+  readerHint: "阅读层提示",
+  readerHintDesc: "内部浏览器渲染笔记化页面时显示阅读层提示。",
+  liveBrowserFirst: "真实浏览器优先",
+  liveBrowserFirstDesc: "把实时 WebView 放在笔记化阅读层上方。",
+  frontendMode: "前端模式",
+  frontendModeDesc: "默认前景：可编辑笔记或完整网页。",
+  editableNote: "可编辑笔记",
+  fullWebPage: "完整网页",
+  autoSaveWebNotes: "自动保存网页笔记",
+  autoSaveWebNotesDesc: "自动把阅读层文字和涂鸦保存到插件数据；用 存 MD 再加入 Vault。",
+  webNoteFolder: "网页笔记文件夹",
+  webNoteFolderDesc: "手动存 MD 导出会保存到 Vault 内这个文件夹。",
+  pageZoom: "页面缩放",
+  pageZoomDesc: "真实浏览器界面的默认缩放。",
+  readerFontSize: "阅读字体大小",
+  readerFontSizeDesc: "阅读/缓存层字体大小。",
+  desktopView: "桌面视图",
+  desktopViewDesc: "使用更宽的真实浏览器界面。",
+  userAgent: "User Agent",
+  userAgentDesc: "用于内部获取、搜索、下载请求，以及 Obsidian 允许控制的真实浏览器界面。",
+  mobile: "手机",
+  desktop: "桌面",
+  download: "下载",
+  downloadDesc: "保存文件、HTML、MHT 和离线页面。",
+  downloadFolder: "下载文件夹",
+  downloadFolderDesc: "更多 > 下载、HTML、MHT 保存到这里。",
+  downloadConnections: "下载连接数",
+  downloadConnectionsDesc: "服务器支持断点续传时使用的并行分段连接数。",
+  browserMode: "浏览模式",
+  browserModeDesc: "这些开关会影响 Browser View 和 Note Browser 的内部渲染。",
+  nightMode: "夜间模式",
+  nightModeDesc: "加深内部浏览器外壳和阅读层。",
+  eyeProtection: "护眼模式",
+  eyeProtectionDesc: "应用更柔和的阅读底色。",
+  adBlock: "广告拦截",
+  adBlockDesc: "在可访问页面中移除常见广告容器。",
+  markAds: "标记广告",
+  markAdsDesc: "在可访问页面中标记疑似广告容器。",
+  incognito: "无痕",
+  incognitoDesc: "停止写入历史和阅读缓存。",
+  disableJavaScript: "禁用 JavaScript",
+  disableJavaScriptDesc: "用无 allow-scripts 沙盒重新加载实时页面。",
+  rotateScreen: "横屏",
+  rotateScreenDesc: "使用更宽的横屏式浏览器界面。",
+  dataImportExport: "数据导入导出",
+  dataImportExportDesc: "收藏、稍后读、历史、下载记录、脚本规则、网页笔记和常用设置。",
+  universalExport: "通用导出",
+  universalExportDesc: "把可迁移的 Mobile Webviewer JSON 包保存到下载文件夹。",
+  exportJson: "导出 JSON",
+  copyJson: "复制 JSON",
+  universalImport: "通用导入",
+  universalImportDesc: "从剪贴板导入 Mobile Webviewer JSON、通用书签 HTML 或纯 URL 列表；会合并现有数据。",
+  importClipboard: "导入剪贴板",
+  translation: "翻译",
+  translationDesc: "默认跟随 Obsidian 语言，也可以指定固定目标语言。",
+  defaultTranslationLanguage: "默认翻译语言",
+  defaultTranslationLanguageDesc: "用于 更多 > 翻译 和语言选择器。跟随 Obsidian 会让翻译目标跟着 Obsidian 界面语言走。",
+  scriptsReader: "脚本和阅读层",
+  scriptsReaderDesc: "Reader 层 CSS、JavaScript 和按网址匹配的脚本规则。",
+  readerUserScripts: "阅读层用户脚本",
+  readerUserScriptsDesc: "把自定义 CSS 和 JavaScript 应用到内部阅读层。",
+  readerCss: "阅读层 CSS",
+  readerCssDesc: "注入到渲染的阅读/缓存页面。",
+  readerJavascript: "阅读层 JavaScript",
+  readerJavascriptDesc: "运行时可用 container、page、hostName。",
+  userScriptRules: "用户脚本规则",
+  rulesCount: "规则（{count}）",
+  rulesDesc: "按 URL 匹配的阅读层 CSS 和 JavaScript。",
+  addRule: "添加规则",
+  ruleName: "规则名称",
+  delete: "删除",
+  match: "匹配",
+  matchDesc: "支持子串或通配符，例如 *://*.example.com/*",
+  css: "CSS",
+  cssDesc: "注入到匹配的阅读页面。",
+  javascript: "JavaScript",
+  javascriptDesc: "运行时可用 container、page、hostName、rule。",
+  autofill: "自动填充",
+  autofillDesc: "用于 更多 > 自动填表，只填可访问页面里的空字段。",
+  autofillName: "自动填充姓名",
+  autofillEmail: "自动填充邮箱",
+  autofillPhone: "自动填充电话",
+  autofillAddress: "自动填充地址",
+  autofillFieldDesc: "用于 更多 > 自动填表。",
+  dataMaintenance: "数据维护",
+  dataMaintenanceDesc: "清理浏览记录、阅读缓存、下载记录和控制台日志。",
+  clearHistory: "清理历史",
+  clearReaderCache: "清理阅读缓存",
+  clearDownloads: "清理下载记录",
+  readingList: "稍后读",
+  clearConsole: "清理控制台",
+  clearBrowsingData: "清理浏览数据",
+  clearBrowsingDataDesc: "清理历史、阅读缓存和控制台；收藏、稍后读和文件保留。",
+  exportBookmarkNote: "导出收藏笔记",
+  exportBookmarkNoteDesc: "创建包含当前收藏的 Markdown 笔记。",
+  clear: "清理",
+  create: "创建",
+  savedEntries: "{count} 条保存记录。",
+  cachedPages: "{count} 个缓存页面。",
+  downloadRecords: "{count} 条下载记录。文件不会删除。",
+  savedPages: "{count} 个保存页面。",
+  consoleEntries: "{count} 条控制台记录。",
+  supportCodes: "支持双码",
+  supportCodesDesc: "如果这个插件帮到你，可以扫码支持继续维护。",
+  searchOrEnterUrl: "搜索或输入网址",
+  go: "前往",
+  more: "更多",
+  closeMore: "关闭更多",
+  ready: "就绪",
+  bookmarks: "收藏",
+  history: "历史",
+  reading: "稍后读",
+  downloads: "下载",
+  console: "日志",
+  closePanel: "关闭面板",
+  back: "后退",
+  forward: "前进",
+  reload: "刷新",
+  home: "主页",
+  note: "笔记",
+  web: "网页",
+  noteBrowser: "笔记浏览器",
+  saveMd: "存 MD",
+  bookmark: "收藏",
+  saveLink: "保存链接",
+  settings: "设置",
+  noBookmarksYet: "还没有收藏",
+  noReadingListYet: "还没有稍后读",
+  noHistoryYet: "还没有历史",
+  noDownloadsYet: "还没有下载",
+  noConsoleLogs: "还没有日志",
+  search: "搜索",
+  searchBing: "搜索 Bing",
+  searching: "搜索中...",
+  searchingBing: "正在搜索 Bing...",
+  resultsCount: "{count} 个结果",
+  moreResults: "更多结果",
+  loading: "加载中...",
+  loadFailedRetry: "加载失败，重试",
+  nativeLightHome: "轻量原生主页",
+  reader: "阅读",
+  readingStatus: "阅读中...",
+  pageTools: "页面工具",
+  copyLink: "复制链接",
+  doodle: "涂鸦",
+  closeDoodle: "关闭涂鸦",
+  editableWebNote: "可编辑网页笔记",
+  links: "链接",
+  autoSavedPlugin: "自动保存到插件",
+  saving: "保存中...",
+  savedPlugin: "已自动保存到插件",
+  savedMarkdown: "已入库 {path}",
+  webNoteSaved: "网页笔记已保存到插件数据",
+  savedTo: "已保存到 {path}",
+  bookmarkAdded: "已添加收藏",
+  bookmarkRemoved: "已移除收藏",
+  noPreviousPage: "没有上一页",
+  noNextPage: "没有下一页",
+  internalBrowserTab: "内部浏览器标签",
+  refresh: "刷新",
+  openCancip: "打开 Cancip",
+  all: "全部",
+  completed: "完成",
+  failed: "失败",
+  today: "今天",
+  latest: "最近",
+  noEntries: "没有条目",
+  open: "打开",
+  copy: "复制",
+  downloadState: "{status} · {progress}%",
+  openFile: "打开",
+  copyPath: "复制路径",
+  location: "位置",
+  source: "来源",
+  cancipDetected: "已检测到 Cancip AI",
+  cancipNotEnabled: "Cancip AI 未启用",
+  cancipDetectedDesc: "版本 {version}，可从这里打开 AI 面板。",
+  cancipNotEnabledDesc: "安装或启用 Cancip 后，Mobile Webviewer 会把网页上下文作为 AI 入口提供。",
+  copyCurrentContext: "复制当前网页上下文",
+  cancipContextPrompt: "请基于这个网页上下文继续分析、整理、摘录或生成笔记。",
+  copiedCancipContext: "已复制 Cancip 上下文",
+  downloadComplete: "下载完成：{path}",
+  newTab: "新标签",
+  openLink: "打开链接",
+  openInNewTab: "新标签打开",
+  downloadLink: "下载链接",
+  downloadSavedTo: "下载保存到：{folder}",
+  tabs: "标签",
+  page: "页面",
+  view: "视图",
+  save: "保存",
+  tools: "工具",
+  downloadPage: "下载页（{count}）",
+  bookmarksCount: "收藏（{count}）",
+  historyCount: "历史（{count}）",
+  readingCount: "稍后读（{count}）",
+  consoleCount: "反馈日志（{count}）",
+  downloadsCount: "下载页（{count}）",
+  newObTab: "新 OB 标签",
+  openNoteWeb: "打开 Note Web",
+  openInBrowser: "用浏览器打开",
+  share: "分享",
+  browserStatus: "浏览器状态",
+  zoomIn: "放大 {value}%",
+  zoomOut: "缩小",
+  mobileVersion: "手机版",
+  desktopVersion: "桌面版",
+  dayMode: "日间模式",
+  closeEyeProtection: "关闭护眼",
+  closeAdBlock: "关闭拦截",
+  adBlocking: "广告拦截",
+  unmarkAds: "取消标记广告",
+  closeIncognito: "关闭无痕",
+  exitFullscreen: "退出全屏",
+  fullscreen: "全屏",
+  enableJs: "启用 JS",
+  disableJs: "禁用 JS",
+  closeLandscape: "关闭横屏",
+  landscape: "横屏",
+  fontSize: "字号 {value}%",
+  downloadFile: "下载文件",
+  saveHtml: "保存 HTML",
+  saveMht: "保存 MHT",
+  offlinePage: "离线页面",
+  desktopShortcut: "桌面快捷方式",
+  removeBookmark: "移除书签",
+  addBookmark: "添加书签",
+  addReadingList: "加入稍后读",
+  autofillPage: "自动填表",
+  scriptsCount: "脚本（{count}）",
+  mediaSniff: "媒体嗅探",
+  pageAssets: "页面资源",
+  copySource: "复制源码",
+  viewSource: "查看源码",
+  translateAction: "翻译",
+  readAloud: "朗读",
+  qrCode: "二维码",
+  report: "反馈报告",
+  copyLogs: "复制日志",
+  clearCache: "清缓存（{count}）",
+  siteSettings: "站点设置",
+  toolStatus: "工具状态",
+  clearBrowsingDataAction: "清浏览数据",
+  runningAction: "正在执行：{label}",
+  completedAction: "已完成：{label}",
+  failedAction: "{label} 失败：{message}",
+  downloadFinished: "下载完成：{path}",
+  saved: "已保存：{path}",
+  addedReadingList: "已加入稍后读",
+  mediaCopied: "媒体已复制：{count}",
+  resourcesCopied: "资源已复制",
+  sourceCopied: "源码已复制",
+  consoleCopied: "日志已复制",
+  cacheCleared: "缓存已清理",
+  browsingDataCleared: "浏览数据已清理",
+  translatePageTo: "把页面翻译为...",
+  newObsidianTab: "新 Obsidian 标签",
+  address: "地址",
+  webResultsTab: "网页",
+  imageResultsTab: "图片",
+  videoResultsTab: "视频",
+  academicTab: "学术",
+  dictionaryTab: "词典",
+  mapsTab: "地图",
+  moreTab: "更多",
+  aboutResults: "约 {count} 个结果",
+  learnMoreAbout: "深入了解 {query}",
+  webNotePlaceholder: "网页笔记",
+  fallbackEditableNote: "页面加载受限，已保留可编辑笔记层。",
+  loadingValue: "加载中：{value}",
+  yes: "是",
+  no: "否",
+  downloadDirectory: "下载目录：{folder}",
+  copiedLink: "已复制链接",
+  cancipAi: "Cancip AI",
+  currentOpen: "当前打开",
+  readerExtracting: "正在提取页面摘要...",
+  insertedLink: "已插入链接",
+  copiedMarkdownLink: "已复制 Markdown 链接",
+  noteDrawDisabled: "NoteDraw 插件未启用。",
+  readerNoteNotReady: "阅读笔记还没准备好",
+  noWebNoteToExport: "没有可导出的网页笔记",
+  jsonCopied: "Mobile Webviewer JSON 已复制",
+  clipboardEmpty: "剪贴板为空",
+  fileMissingPathCopied: "Vault 中找不到文件，已复制路径",
+  htmlSaveFailed: "HTML 保存失败",
+  mhtSaveFailed: "MHT 保存失败",
+  shareTextCopied: "分享文本已复制",
+  downloadFailed: "下载失败",
+  cancipDisabled: "Cancip 插件未启用",
+  noWebLinkFound: "没有找到网页链接",
+  bookmarkNoteCreated: "收藏笔记已创建",
+  emptyConsoleDesc: "暂无日志。执行搜索、下载、保存、脚本后会出现在这里。",
+  pageSource: "页面源码",
+  copyReport: "复制报告",
+  reportUrl: "报告网址",
+  reportCopied: "报告已复制",
+  urlCopied: "网址已复制",
+  translatePage: "翻译页面",
+  noSavedPages: "还没有保存页面",
+  noResourcesFound: "没有找到资源",
+  disabled: "已禁用",
+  noMatchingScripts: "没有匹配脚本",
+  findInPage: "页内查找",
+  previous: "上一个",
+  next: "下一个",
+  close: "关闭",
+  pageLoadLimited: "页面加载受限，已保留可编辑笔记层。"
+};
+
+const UI_TEXT_ZH_HANT: UiDictionary = {
+  ...UI_TEXT_ZH_HANS,
+  followObsidian: "跟隨 Obsidian 語言",
+  uiLanguage: "介面語言",
+  uiLanguageDesc: "預設跟隨 Obsidian/系統語言，也可以固定插件語言。",
+  coreEntry: "核心入口",
+  interfaceRendering: "介面和渲染",
+  autoSaveWebNotesDesc: "自動把閱讀層文字和塗鴉儲存到插件資料；用存 MD 再加入 Vault。",
+  download: "下載",
+  dataImportExport: "資料匯入匯出",
+  dataMaintenance: "資料維護",
+  bookmarks: "書籤",
+  history: "歷史",
+  reading: "稍後讀",
+  downloads: "下載",
+  settings: "設定",
+  searchOrEnterUrl: "搜尋或輸入網址",
+  more: "更多",
+  saveMd: "存 MD",
+  noBookmarksYet: "尚無書籤",
+  noHistoryYet: "尚無歷史",
+  noDownloadsYet: "尚無下載",
+  moreResults: "更多結果",
+  loading: "載入中...",
+  loadFailedRetry: "載入失敗，重試",
+  saving: "儲存中...",
+  savedPlugin: "已自動儲存到插件",
+  bookmarkAdded: "已加入書籤",
+  bookmarkRemoved: "已移除書籤",
+  openLink: "開啟連結",
+  openInNewTab: "新標籤開啟",
+  tabs: "標籤",
+  page: "頁面",
+  view: "檢視",
+  save: "儲存",
+  tools: "工具",
+  addBookmark: "加入書籤",
+  removeBookmark: "移除書籤",
+  copiedLink: "已複製連結"
+};
+
+const UI_TEXT_UG: UiDictionary = {
+  uiLanguage: "كۆرۈنمە يۈزى تىلى",
+  uiLanguageDesc: "سۈكۈتتە Obsidian ياكى سىستېما تىلىغا ئەگىشىدۇ؛ خالىسىڭىز مۇقىم تىل تاللاڭ.",
+  followObsidian: "Obsidian تىلىغا ئەگىشىش",
+  coreEntry: "ئاساسىي كىرىش",
+  coreEntryDesc: "باش بەت، ئىزدەش، كۆرگۈچ كىرىشى ۋە قوزغىلىش ھەرىكىتى.",
+  homePage: "باش بەت",
+  searchUrl: "ئىزدەش URL",
+  openBrowser: "كۆرگۈچنى ئېچىش",
+  openOnStartup: "قوزغالغاندا ئېچىش",
+  interfaceRendering: "كۆرۈنمە يۈز ۋە رەندر",
+  compactMobileToolbar: "ئىخچام موبىل قورال بالداق",
+  showNoteDrawMagicWand: "NoteDraw سېھىرلىك تاياقچىسىنى كۆرسىتىش",
+  frontendMode: "ئالدى يۈز ھالىتى",
+  editableNote: "تەھرىرلىنىدىغان خاتىرە",
+  fullWebPage: "تولۇق توربەت",
+  autoSaveWebNotes: "تور خاتىرىلىرىنى ئاپتوماتىك ساقلاش",
+  pageZoom: "بەت چوڭايتىش",
+  userAgent: "User Agent",
+  mobile: "موبىل",
+  desktop: "ئۈستەلئۈستى",
+  download: "چۈشۈرۈش",
+  downloadFolder: "چۈشۈرۈش قىسقۇچى",
+  browserMode: "كۆرگۈچ ھالەتلىرى",
+  nightMode: "كېچە ھالىتى",
+  eyeProtection: "كۆز قوغداش",
+  adBlock: "ئېلان توسۇش",
+  markAds: "ئېلاننى بەلگىلەش",
+  incognito: "ئىز قالدۇرماسلىق",
+  disableJavaScript: "JavaScript نى چەكلەش",
+  dataImportExport: "سانلىق مەلۇمات كىرگۈزۈش/چىقىرىش",
+  translation: "تەرجىمە",
+  scriptsReader: "سىكريپت ۋە ئوقۇش قەۋىتى",
+  autofill: "ئاپتوماتىك تولدۇرۇش",
+  dataMaintenance: "سانلىق مەلۇمات ئاسراش",
+  clear: "تازىلاش",
+  create: "قۇرۇش",
+  supportCodes: "قوللاش كودلىرى",
+  searchOrEnterUrl: "ئىزدەڭ ياكى URL كىرگۈزۈڭ",
+  go: "بېرىش",
+  more: "تېخىمۇ كۆپ",
+  ready: "تەييار",
+  bookmarks: "خەتكۈش",
+  history: "تارىخ",
+  reading: "كېيىن ئوقۇش",
+  downloads: "چۈشۈرۈشلەر",
+  console: "خاتىرە",
+  back: "قايتىش",
+  forward: "ئالدىغا",
+  reload: "قايتا يۈكلەش",
+  home: "باش بەت",
+  note: "خاتىرە",
+  web: "تور",
+  noteBrowser: "خاتىرە كۆرگۈچ",
+  saveMd: "MD ساقلاش",
+  bookmark: "خەتكۈش",
+  settings: "تەڭشەكلەر",
+  search: "ئىزدەش",
+  searchBing: "Bing دا ئىزدەش",
+  searching: "ئىزدەۋاتىدۇ...",
+  moreResults: "تېخىمۇ كۆپ نەتىجە",
+  loading: "يۈكلەۋاتىدۇ...",
+  reader: "ئوقۇش",
+  copyLink: "ئۇلىنىشنى كۆچۈرۈش",
+  doodle: "سىزىش",
+  links: "ئۇلىنىشلەر",
+  saving: "ساقلاۋاتىدۇ...",
+  savedPlugin: "پلاگىنغا ساقلانغان",
+  open: "ئېچىش",
+  copy: "كۆچۈرۈش",
+  source: "مەنبە",
+  tabs: "بەتكۈچلەر",
+  page: "بەت",
+  view: "كۆرۈنۈش",
+  save: "ساقلاش",
+  tools: "قوراللار",
+  openInBrowser: "كۆرگۈچتە ئېچىش",
+  share: "ھەمبەھىرلەش",
+  zoomOut: "كىچىكلىتىش",
+  addBookmark: "خەتكۈشكە قوشۇش",
+  removeBookmark: "خەتكۈشتىن ئۆچۈرۈش",
+  translateAction: "تەرجىمە",
+  qrCode: "QR كود",
+  copiedLink: "ئۇلىنىش كۆچۈرۈلدى"
+};
+
+function commonUi(values: UiDictionary): UiDictionary {
+  return values;
+}
+
+const UI_TEXT_AR = commonUi({
+  uiLanguage: "لغة الواجهة",
+  followObsidian: "اتباع لغة Obsidian",
+  homePage: "الصفحة الرئيسية",
+  searchUrl: "رابط البحث",
+  openBrowser: "فتح المتصفح",
+  settings: "الإعدادات",
+  more: "المزيد",
+  search: "بحث",
+  searchBing: "البحث في Bing",
+  bookmarks: "الإشارات",
+  history: "السجل",
+  reading: "قائمة القراءة",
+  downloads: "التنزيلات",
+  console: "السجل",
+  back: "رجوع",
+  forward: "تقدم",
+  reload: "تحديث",
+  home: "الرئيسية",
+  note: "ملاحظة",
+  web: "ويب",
+  noteBrowser: "متصفح الملاحظات",
+  saveMd: "حفظ MD",
+  download: "تنزيل",
+  open: "فتح",
+  copy: "نسخ",
+  save: "حفظ",
+  tools: "أدوات",
+  page: "صفحة",
+  view: "عرض",
+  close: "إغلاق",
+  translateAction: "ترجمة",
+  qrCode: "رمز QR",
+  copyLink: "نسخ الرابط",
+  copiedLink: "تم نسخ الرابط",
+  loading: "جار التحميل...",
+  searching: "جار البحث...",
+  moreResults: "المزيد من النتائج",
+  noEntries: "لا توجد عناصر",
+  noDownloadsYet: "لا توجد تنزيلات",
+  noHistoryYet: "لا يوجد سجل",
+  noBookmarksYet: "لا توجد إشارات",
+  addBookmark: "إضافة إشارة",
+  removeBookmark: "إزالة الإشارة",
+  mobileVersion: "نسخة الهاتف",
+  desktopVersion: "نسخة سطح المكتب",
+  fullscreen: "ملء الشاشة",
+  exitFullscreen: "الخروج من ملء الشاشة",
+  reader: "قارئ",
+  links: "روابط"
+});
+
+const UI_TEXT_RU = commonUi({
+  uiLanguage: "Язык интерфейса",
+  followObsidian: "Следовать языку Obsidian",
+  homePage: "Домашняя страница",
+  searchUrl: "URL поиска",
+  openBrowser: "Открыть браузер",
+  settings: "Настройки",
+  more: "Ещё",
+  search: "Поиск",
+  searchBing: "Искать в Bing",
+  bookmarks: "Закладки",
+  history: "История",
+  reading: "Список чтения",
+  downloads: "Загрузки",
+  console: "Журнал",
+  back: "Назад",
+  forward: "Вперёд",
+  reload: "Обновить",
+  home: "Домой",
+  note: "Заметка",
+  web: "Веб",
+  noteBrowser: "Браузер заметок",
+  saveMd: "Сохранить MD",
+  download: "Загрузка",
+  open: "Открыть",
+  copy: "Копировать",
+  save: "Сохранить",
+  tools: "Инструменты",
+  page: "Страница",
+  view: "Вид",
+  close: "Закрыть",
+  translateAction: "Перевести",
+  qrCode: "QR-код",
+  copyLink: "Копировать ссылку",
+  copiedLink: "Ссылка скопирована",
+  loading: "Загрузка...",
+  searching: "Поиск...",
+  moreResults: "Ещё результаты",
+  noEntries: "Нет записей",
+  noDownloadsYet: "Нет загрузок",
+  noHistoryYet: "Истории нет",
+  noBookmarksYet: "Закладок нет",
+  addBookmark: "Добавить закладку",
+  removeBookmark: "Удалить закладку",
+  mobileVersion: "Мобильная версия",
+  desktopVersion: "Версия для ПК",
+  fullscreen: "Во весь экран",
+  exitFullscreen: "Выйти из полноэкранного режима",
+  reader: "Чтение",
+  links: "Ссылки"
+});
+
+const UI_TEXT_TR = commonUi({
+  uiLanguage: "Arayüz dili",
+  followObsidian: "Obsidian dilini izle",
+  homePage: "Ana sayfa",
+  searchUrl: "Arama URL'si",
+  openBrowser: "Tarayıcıyı aç",
+  settings: "Ayarlar",
+  more: "Daha fazla",
+  search: "Ara",
+  searchBing: "Bing'de ara",
+  bookmarks: "Yer imleri",
+  history: "Geçmiş",
+  reading: "Okuma listesi",
+  downloads: "İndirilenler",
+  console: "Günlük",
+  back: "Geri",
+  forward: "İleri",
+  reload: "Yenile",
+  home: "Ana sayfa",
+  note: "Not",
+  web: "Web",
+  noteBrowser: "Not tarayıcı",
+  saveMd: "MD kaydet",
+  download: "İndir",
+  open: "Aç",
+  copy: "Kopyala",
+  save: "Kaydet",
+  tools: "Araçlar",
+  page: "Sayfa",
+  view: "Görünüm",
+  close: "Kapat",
+  translateAction: "Çevir",
+  qrCode: "QR kod",
+  copyLink: "Bağlantıyı kopyala",
+  copiedLink: "Bağlantı kopyalandı",
+  loading: "Yükleniyor...",
+  searching: "Aranıyor...",
+  moreResults: "Daha fazla sonuç",
+  noEntries: "Kayıt yok",
+  noDownloadsYet: "İndirme yok",
+  noHistoryYet: "Geçmiş yok",
+  noBookmarksYet: "Yer imi yok",
+  addBookmark: "Yer imi ekle",
+  removeBookmark: "Yer imini kaldır",
+  mobileVersion: "Mobil sürüm",
+  desktopVersion: "Masaüstü sürüm",
+  fullscreen: "Tam ekran",
+  exitFullscreen: "Tam ekrandan çık",
+  reader: "Okuyucu",
+  links: "Bağlantılar"
+});
+
+const UI_TEXT_JA = commonUi({
+  uiLanguage: "表示言語",
+  followObsidian: "Obsidian の言語に従う",
+  homePage: "ホームページ",
+  searchUrl: "検索 URL",
+  openBrowser: "ブラウザを開く",
+  settings: "設定",
+  more: "その他",
+  search: "検索",
+  searchBing: "Bing で検索",
+  bookmarks: "ブックマーク",
+  history: "履歴",
+  reading: "リーディングリスト",
+  downloads: "ダウンロード",
+  console: "ログ",
+  back: "戻る",
+  forward: "進む",
+  reload: "再読み込み",
+  home: "ホーム",
+  note: "ノート",
+  web: "Web",
+  noteBrowser: "ノートブラウザ",
+  saveMd: "MD 保存",
+  download: "ダウンロード",
+  open: "開く",
+  copy: "コピー",
+  save: "保存",
+  tools: "ツール",
+  page: "ページ",
+  view: "表示",
+  close: "閉じる",
+  translateAction: "翻訳",
+  qrCode: "QR コード",
+  copyLink: "リンクをコピー",
+  copiedLink: "リンクをコピーしました",
+  loading: "読み込み中...",
+  searching: "検索中...",
+  moreResults: "さらに表示",
+  noEntries: "項目はありません",
+  noDownloadsYet: "ダウンロードはありません",
+  noHistoryYet: "履歴はありません",
+  noBookmarksYet: "ブックマークはありません",
+  addBookmark: "ブックマークに追加",
+  removeBookmark: "ブックマークを削除",
+  mobileVersion: "モバイル版",
+  desktopVersion: "デスクトップ版",
+  fullscreen: "全画面",
+  exitFullscreen: "全画面を終了",
+  reader: "リーダー",
+  links: "リンク"
+});
+
+const UI_TEXT_KO = commonUi({
+  uiLanguage: "인터페이스 언어",
+  followObsidian: "Obsidian 언어 따르기",
+  homePage: "홈페이지",
+  searchUrl: "검색 URL",
+  openBrowser: "브라우저 열기",
+  settings: "설정",
+  more: "더보기",
+  search: "검색",
+  searchBing: "Bing 검색",
+  bookmarks: "북마크",
+  history: "기록",
+  reading: "읽기 목록",
+  downloads: "다운로드",
+  console: "로그",
+  back: "뒤로",
+  forward: "앞으로",
+  reload: "새로고침",
+  home: "홈",
+  note: "노트",
+  web: "웹",
+  noteBrowser: "노트 브라우저",
+  saveMd: "MD 저장",
+  download: "다운로드",
+  open: "열기",
+  copy: "복사",
+  save: "저장",
+  tools: "도구",
+  page: "페이지",
+  view: "보기",
+  close: "닫기",
+  translateAction: "번역",
+  qrCode: "QR 코드",
+  copyLink: "링크 복사",
+  copiedLink: "링크가 복사됨",
+  loading: "불러오는 중...",
+  searching: "검색 중...",
+  moreResults: "결과 더보기",
+  noEntries: "항목 없음",
+  noDownloadsYet: "다운로드 없음",
+  noHistoryYet: "기록 없음",
+  noBookmarksYet: "북마크 없음",
+  addBookmark: "북마크 추가",
+  removeBookmark: "북마크 제거",
+  mobileVersion: "모바일 버전",
+  desktopVersion: "데스크톱 버전",
+  fullscreen: "전체 화면",
+  exitFullscreen: "전체 화면 종료",
+  reader: "리더",
+  links: "링크"
+});
+
+const UI_TEXT_FR = commonUi({
+  uiLanguage: "Langue de l'interface",
+  followObsidian: "Suivre la langue d'Obsidian",
+  homePage: "Page d'accueil",
+  searchUrl: "URL de recherche",
+  openBrowser: "Ouvrir le navigateur",
+  settings: "Réglages",
+  more: "Plus",
+  search: "Rechercher",
+  searchBing: "Rechercher sur Bing",
+  bookmarks: "Favoris",
+  history: "Historique",
+  reading: "Liste de lecture",
+  downloads: "Téléchargements",
+  console: "Journal",
+  back: "Retour",
+  forward: "Suivant",
+  reload: "Actualiser",
+  home: "Accueil",
+  note: "Note",
+  web: "Web",
+  noteBrowser: "Navigateur de notes",
+  saveMd: "Enregistrer MD",
+  download: "Télécharger",
+  open: "Ouvrir",
+  copy: "Copier",
+  save: "Enregistrer",
+  tools: "Outils",
+  page: "Page",
+  view: "Affichage",
+  close: "Fermer",
+  translateAction: "Traduire",
+  qrCode: "QR code",
+  copyLink: "Copier le lien",
+  copiedLink: "Lien copié",
+  loading: "Chargement...",
+  searching: "Recherche...",
+  moreResults: "Plus de résultats",
+  noEntries: "Aucune entrée",
+  noDownloadsYet: "Aucun téléchargement",
+  noHistoryYet: "Aucun historique",
+  noBookmarksYet: "Aucun favori",
+  addBookmark: "Ajouter aux favoris",
+  removeBookmark: "Retirer le favori",
+  mobileVersion: "Version mobile",
+  desktopVersion: "Version bureau",
+  fullscreen: "Plein écran",
+  exitFullscreen: "Quitter le plein écran",
+  reader: "Lecteur",
+  links: "Liens"
+});
+
+const UI_TEXT_DE = commonUi({
+  uiLanguage: "Oberflächensprache",
+  followObsidian: "Obsidian-Sprache folgen",
+  homePage: "Startseite",
+  searchUrl: "Such-URL",
+  openBrowser: "Browser öffnen",
+  settings: "Einstellungen",
+  more: "Mehr",
+  search: "Suchen",
+  searchBing: "Mit Bing suchen",
+  bookmarks: "Lesezeichen",
+  history: "Verlauf",
+  reading: "Leseliste",
+  downloads: "Downloads",
+  console: "Protokoll",
+  back: "Zurück",
+  forward: "Vor",
+  reload: "Neu laden",
+  home: "Start",
+  note: "Notiz",
+  web: "Web",
+  noteBrowser: "Notizbrowser",
+  saveMd: "MD speichern",
+  download: "Download",
+  open: "Öffnen",
+  copy: "Kopieren",
+  save: "Speichern",
+  tools: "Werkzeuge",
+  page: "Seite",
+  view: "Ansicht",
+  close: "Schließen",
+  translateAction: "Übersetzen",
+  qrCode: "QR-Code",
+  copyLink: "Link kopieren",
+  copiedLink: "Link kopiert",
+  loading: "Laden...",
+  searching: "Suchen...",
+  moreResults: "Weitere Ergebnisse",
+  noEntries: "Keine Einträge",
+  noDownloadsYet: "Keine Downloads",
+  noHistoryYet: "Kein Verlauf",
+  noBookmarksYet: "Keine Lesezeichen",
+  addBookmark: "Lesezeichen hinzufügen",
+  removeBookmark: "Lesezeichen entfernen",
+  mobileVersion: "Mobile Version",
+  desktopVersion: "Desktop-Version",
+  fullscreen: "Vollbild",
+  exitFullscreen: "Vollbild beenden",
+  reader: "Leser",
+  links: "Links"
+});
+
+const UI_TEXT_ES = commonUi({
+  uiLanguage: "Idioma de interfaz",
+  followObsidian: "Seguir idioma de Obsidian",
+  homePage: "Página inicial",
+  searchUrl: "URL de búsqueda",
+  openBrowser: "Abrir navegador",
+  settings: "Ajustes",
+  more: "Más",
+  search: "Buscar",
+  searchBing: "Buscar en Bing",
+  bookmarks: "Marcadores",
+  history: "Historial",
+  reading: "Lista de lectura",
+  downloads: "Descargas",
+  console: "Registro",
+  back: "Atrás",
+  forward: "Adelante",
+  reload: "Recargar",
+  home: "Inicio",
+  note: "Nota",
+  web: "Web",
+  noteBrowser: "Navegador de notas",
+  saveMd: "Guardar MD",
+  download: "Descargar",
+  open: "Abrir",
+  copy: "Copiar",
+  save: "Guardar",
+  tools: "Herramientas",
+  page: "Página",
+  view: "Vista",
+  close: "Cerrar",
+  translateAction: "Traducir",
+  qrCode: "Código QR",
+  copyLink: "Copiar enlace",
+  copiedLink: "Enlace copiado",
+  loading: "Cargando...",
+  searching: "Buscando...",
+  moreResults: "Más resultados",
+  noEntries: "Sin entradas",
+  noDownloadsYet: "Sin descargas",
+  noHistoryYet: "Sin historial",
+  noBookmarksYet: "Sin marcadores",
+  addBookmark: "Añadir marcador",
+  removeBookmark: "Quitar marcador",
+  mobileVersion: "Versión móvil",
+  desktopVersion: "Versión de escritorio",
+  fullscreen: "Pantalla completa",
+  exitFullscreen: "Salir de pantalla completa",
+  reader: "Lector",
+  links: "Enlaces"
+});
+
+const UI_TEXT_PT = commonUi({
+  ...UI_TEXT_ES,
+  uiLanguage: "Idioma da interface",
+  followObsidian: "Seguir idioma do Obsidian",
+  homePage: "Página inicial",
+  searchUrl: "URL de pesquisa",
+  openBrowser: "Abrir navegador",
+  settings: "Configurações",
+  more: "Mais",
+  search: "Pesquisar",
+  searchBing: "Pesquisar no Bing",
+  bookmarks: "Favoritos",
+  history: "Histórico",
+  reading: "Lista de leitura",
+  downloads: "Downloads",
+  console: "Registro",
+  back: "Voltar",
+  forward: "Avançar",
+  reload: "Recarregar",
+  open: "Abrir",
+  copy: "Copiar",
+  save: "Salvar",
+  tools: "Ferramentas",
+  close: "Fechar",
+  translateAction: "Traduzir",
+  copyLink: "Copiar link",
+  copiedLink: "Link copiado",
+  loading: "Carregando...",
+  searching: "Pesquisando...",
+  moreResults: "Mais resultados",
+  noEntries: "Sem entradas",
+  addBookmark: "Adicionar favorito",
+  removeBookmark: "Remover favorito"
+});
+
+const UI_TEXT_IT = commonUi({
+  ...UI_TEXT_ES,
+  uiLanguage: "Lingua interfaccia",
+  followObsidian: "Segui la lingua di Obsidian",
+  homePage: "Pagina iniziale",
+  searchUrl: "URL di ricerca",
+  openBrowser: "Apri browser",
+  settings: "Impostazioni",
+  more: "Altro",
+  search: "Cerca",
+  searchBing: "Cerca con Bing",
+  bookmarks: "Segnalibri",
+  history: "Cronologia",
+  reading: "Elenco lettura",
+  downloads: "Download",
+  console: "Registro",
+  back: "Indietro",
+  forward: "Avanti",
+  reload: "Ricarica",
+  open: "Apri",
+  copy: "Copia",
+  save: "Salva",
+  tools: "Strumenti",
+  close: "Chiudi",
+  translateAction: "Traduci",
+  copyLink: "Copia link",
+  copiedLink: "Link copiato",
+  loading: "Caricamento...",
+  searching: "Ricerca...",
+  moreResults: "Altri risultati",
+  noEntries: "Nessuna voce",
+  addBookmark: "Aggiungi segnalibro",
+  removeBookmark: "Rimuovi segnalibro"
+});
+
+const UI_TEXT_HI = commonUi({
+  uiLanguage: "इंटरफेस भाषा",
+  followObsidian: "Obsidian भाषा का पालन करें",
+  homePage: "होम पेज",
+  searchUrl: "खोज URL",
+  openBrowser: "ब्राउज़र खोलें",
+  settings: "सेटिंग्स",
+  more: "अधिक",
+  search: "खोजें",
+  searchBing: "Bing में खोजें",
+  bookmarks: "बुकमार्क",
+  history: "इतिहास",
+  reading: "रीडिंग सूची",
+  downloads: "डाउनलोड",
+  console: "लॉग",
+  back: "पीछे",
+  forward: "आगे",
+  reload: "रीलोड",
+  home: "होम",
+  note: "नोट",
+  web: "वेब",
+  noteBrowser: "नोट ब्राउज़र",
+  saveMd: "MD सहेजें",
+  download: "डाउनलोड",
+  open: "खोलें",
+  copy: "कॉपी",
+  save: "सहेजें",
+  tools: "टूल",
+  page: "पेज",
+  view: "देखें",
+  close: "बंद करें",
+  translateAction: "अनुवाद",
+  qrCode: "QR कोड",
+  copyLink: "लिंक कॉपी करें",
+  copiedLink: "लिंक कॉपी हुआ",
+  loading: "लोड हो रहा है...",
+  searching: "खोज जारी...",
+  moreResults: "और परिणाम",
+  noEntries: "कोई प्रविष्टि नहीं",
+  reader: "रीडर",
+  links: "लिंक"
+});
+
+const UI_TEXT_FA = commonUi({
+  ...UI_TEXT_AR,
+  uiLanguage: "زبان رابط",
+  followObsidian: "پیروی از زبان Obsidian",
+  homePage: "خانه",
+  searchUrl: "نشانی جستجو",
+  openBrowser: "باز کردن مرورگر",
+  settings: "تنظیمات",
+  more: "بیشتر",
+  search: "جستجو",
+  searchBing: "جستجو در Bing",
+  bookmarks: "نشانک‌ها",
+  history: "تاریخچه",
+  reading: "فهرست خواندن",
+  downloads: "دانلودها",
+  back: "بازگشت",
+  forward: "جلو",
+  reload: "بارگذاری دوباره",
+  open: "باز کردن",
+  copy: "کپی",
+  save: "ذخیره",
+  tools: "ابزارها",
+  close: "بستن",
+  translateAction: "ترجمه",
+  copyLink: "کپی پیوند",
+  copiedLink: "پیوند کپی شد",
+  loading: "در حال بارگذاری...",
+  searching: "در حال جستجو..."
+});
+
+const UI_TEXT_UR = commonUi({
+  ...UI_TEXT_AR,
+  uiLanguage: "انٹرفیس زبان",
+  followObsidian: "Obsidian زبان کی پیروی",
+  homePage: "مرکزی صفحہ",
+  searchUrl: "تلاش URL",
+  openBrowser: "براؤزر کھولیں",
+  settings: "ترتیبات",
+  more: "مزید",
+  search: "تلاش",
+  searchBing: "Bing میں تلاش",
+  bookmarks: "بک مارکس",
+  history: "ہسٹری",
+  reading: "پڑھنے کی فہرست",
+  downloads: "ڈاؤن لوڈز",
+  back: "پیچھے",
+  forward: "آگے",
+  reload: "دوبارہ لوڈ",
+  open: "کھولیں",
+  copy: "کاپی",
+  save: "محفوظ",
+  tools: "اوزار",
+  close: "بند",
+  translateAction: "ترجمہ",
+  copyLink: "لنک کاپی",
+  copiedLink: "لنک کاپی ہو گیا",
+  loading: "لوڈ ہو رہا ہے...",
+  searching: "تلاش جاری..."
+});
+
+const UI_TEXT_KK = commonUi({
+  ...UI_TEXT_RU,
+  uiLanguage: "Интерфейс тілі",
+  followObsidian: "Obsidian тілімен жүру",
+  homePage: "Басты бет",
+  searchUrl: "Іздеу URL",
+  openBrowser: "Браузерді ашу",
+  settings: "Баптаулар",
+  more: "Көбірек",
+  search: "Іздеу",
+  searchBing: "Bing арқылы іздеу",
+  bookmarks: "Бетбелгілер",
+  history: "Тарих",
+  reading: "Оқу тізімі",
+  downloads: "Жүктеулер",
+  back: "Артқа",
+  forward: "Алға",
+  reload: "Жаңарту",
+  open: "Ашу",
+  copy: "Көшіру",
+  save: "Сақтау",
+  tools: "Құралдар",
+  close: "Жабу",
+  translateAction: "Аудару",
+  copiedLink: "Сілтеме көшірілді",
+  loading: "Жүктелуде...",
+  searching: "Ізделуде..."
+});
+
+const UI_TEXT_KY = commonUi({
+  ...UI_TEXT_RU,
+  uiLanguage: "Интерфейс тили",
+  followObsidian: "Obsidian тилин ээрчүү",
+  homePage: "Башкы бет",
+  searchUrl: "Издөө URL",
+  openBrowser: "Браузерди ачуу",
+  settings: "Жөндөөлөр",
+  more: "Көбүрөөк",
+  search: "Издөө",
+  searchBing: "Bing менен издөө",
+  bookmarks: "Кыстармалар",
+  history: "Тарых",
+  reading: "Окуу тизмеси",
+  downloads: "Жүктөөлөр",
+  back: "Артка",
+  forward: "Алга",
+  reload: "Жаңыртуу",
+  open: "Ачуу",
+  copy: "Көчүрүү",
+  save: "Сактоо",
+  tools: "Куралдар",
+  close: "Жабуу",
+  translateAction: "Которуу",
+  copiedLink: "Шилтеме көчүрүлдү",
+  loading: "Жүктөлүүдө...",
+  searching: "Изделүүдө..."
+});
+
+const UI_TEXT_UZ = commonUi({
+  ...UI_TEXT_TR,
+  uiLanguage: "Interfeys tili",
+  followObsidian: "Obsidian tiliga ergashish",
+  homePage: "Bosh sahifa",
+  searchUrl: "Qidiruv URL",
+  openBrowser: "Brauzerni ochish",
+  settings: "Sozlamalar",
+  more: "Ko'proq",
+  search: "Qidirish",
+  searchBing: "Bing orqali qidirish",
+  bookmarks: "Xatcho'plar",
+  history: "Tarix",
+  reading: "O'qish ro'yxati",
+  downloads: "Yuklamalar",
+  back: "Orqaga",
+  forward: "Oldinga",
+  reload: "Yangilash",
+  open: "Ochish",
+  copy: "Nusxa olish",
+  save: "Saqlash",
+  tools: "Asboblar",
+  close: "Yopish",
+  translateAction: "Tarjima",
+  copiedLink: "Havola nusxalandi",
+  loading: "Yuklanmoqda...",
+  searching: "Qidirilmoqda..."
+});
+
+const UI_TEXT_ID = commonUi({
+  ...UI_TEXT_EN,
+  uiLanguage: "Bahasa antarmuka",
+  followObsidian: "Ikuti bahasa Obsidian",
+  homePage: "Beranda",
+  searchUrl: "URL pencarian",
+  openBrowser: "Buka browser",
+  settings: "Pengaturan",
+  more: "Lainnya",
+  search: "Cari",
+  searchBing: "Cari di Bing",
+  bookmarks: "Markah",
+  history: "Riwayat",
+  reading: "Daftar baca",
+  downloads: "Unduhan",
+  back: "Kembali",
+  forward: "Maju",
+  reload: "Muat ulang",
+  open: "Buka",
+  copy: "Salin",
+  save: "Simpan",
+  tools: "Alat",
+  close: "Tutup",
+  translateAction: "Terjemahkan",
+  copiedLink: "Tautan disalin",
+  loading: "Memuat...",
+  searching: "Mencari..."
+});
+
+const UI_TEXT_MS = commonUi({
+  ...UI_TEXT_ID,
+  uiLanguage: "Bahasa antara muka",
+  homePage: "Laman utama",
+  searchUrl: "URL carian",
+  openBrowser: "Buka pelayar",
+  settings: "Tetapan",
+  search: "Cari",
+  bookmarks: "Penanda halaman",
+  history: "Sejarah",
+  reading: "Senarai bacaan",
+  downloads: "Muat turun",
+  back: "Kembali",
+  forward: "Ke depan",
+  reload: "Muat semula",
+  copiedLink: "Pautan disalin"
+});
+
+const UI_TEXT_TH = commonUi({
+  uiLanguage: "ภาษาอินเทอร์เฟซ",
+  followObsidian: "ตามภาษา Obsidian",
+  homePage: "หน้าแรก",
+  searchUrl: "URL ค้นหา",
+  openBrowser: "เปิดเบราว์เซอร์",
+  settings: "การตั้งค่า",
+  more: "เพิ่มเติม",
+  search: "ค้นหา",
+  searchBing: "ค้นหาด้วย Bing",
+  bookmarks: "บุ๊กมาร์ก",
+  history: "ประวัติ",
+  reading: "รายการอ่าน",
+  downloads: "ดาวน์โหลด",
+  console: "บันทึก",
+  back: "กลับ",
+  forward: "ถัดไป",
+  reload: "โหลดใหม่",
+  home: "หน้าแรก",
+  note: "โน้ต",
+  web: "เว็บ",
+  noteBrowser: "เบราว์เซอร์โน้ต",
+  saveMd: "บันทึก MD",
+  download: "ดาวน์โหลด",
+  open: "เปิด",
+  copy: "คัดลอก",
+  save: "บันทึก",
+  tools: "เครื่องมือ",
+  page: "หน้า",
+  view: "มุมมอง",
+  close: "ปิด",
+  translateAction: "แปล",
+  qrCode: "QR โค้ด",
+  copyLink: "คัดลอกลิงก์",
+  copiedLink: "คัดลอกลิงก์แล้ว",
+  loading: "กำลังโหลด...",
+  searching: "กำลังค้นหา...",
+  moreResults: "ผลลัพธ์เพิ่มเติม",
+  noEntries: "ไม่มีรายการ",
+  reader: "ตัวอ่าน",
+  links: "ลิงก์"
+});
+
+const UI_TEXT_VI = commonUi({
+  uiLanguage: "Ngôn ngữ giao diện",
+  followObsidian: "Theo ngôn ngữ Obsidian",
+  homePage: "Trang chủ",
+  searchUrl: "URL tìm kiếm",
+  openBrowser: "Mở trình duyệt",
+  settings: "Cài đặt",
+  more: "Thêm",
+  search: "Tìm kiếm",
+  searchBing: "Tìm bằng Bing",
+  bookmarks: "Dấu trang",
+  history: "Lịch sử",
+  reading: "Danh sách đọc",
+  downloads: "Tải xuống",
+  console: "Nhật ký",
+  back: "Quay lại",
+  forward: "Tiếp",
+  reload: "Tải lại",
+  home: "Trang chủ",
+  note: "Ghi chú",
+  web: "Web",
+  noteBrowser: "Trình duyệt ghi chú",
+  saveMd: "Lưu MD",
+  download: "Tải xuống",
+  open: "Mở",
+  copy: "Sao chép",
+  save: "Lưu",
+  tools: "Công cụ",
+  page: "Trang",
+  view: "Xem",
+  close: "Đóng",
+  translateAction: "Dịch",
+  qrCode: "Mã QR",
+  copyLink: "Sao chép liên kết",
+  copiedLink: "Đã sao chép liên kết",
+  loading: "Đang tải...",
+  searching: "Đang tìm...",
+  moreResults: "Thêm kết quả",
+  noEntries: "Không có mục",
+  noDownloadsYet: "Chưa có tải xuống",
+  noHistoryYet: "Chưa có lịch sử",
+  noBookmarksYet: "Chưa có dấu trang",
+  addBookmark: "Thêm dấu trang",
+  removeBookmark: "Xóa dấu trang",
+  reader: "Trình đọc",
+  links: "Liên kết"
+});
+
+const UI_TEXT_COMMON_LANGUAGE: UiDictionary = {
+  uiLanguage: "Interface language",
+  followObsidian: "Follow Obsidian language",
+  homePage: "Home page",
+  searchUrl: "Search URL",
+  openBrowser: "Open browser",
+  settings: "Settings",
+  more: "More",
+  search: "Search",
+  searchBing: "Search Bing",
+  bookmarks: "Bookmarks",
+  history: "History",
+  reading: "Reading",
+  downloads: "Downloads",
+  back: "Back",
+  forward: "Forward",
+  reload: "Reload",
+  home: "Home",
+  note: "Note",
+  web: "Web",
+  saveMd: "Save MD",
+  download: "Download",
+  open: "Open",
+  copy: "Copy",
+  save: "Save",
+  tools: "Tools",
+  translateAction: "Translate"
+};
+
+const UI_DICTIONARIES: Record<string, UiDictionary> = {
+  en: UI_TEXT_EN,
+  "zh-Hans": UI_TEXT_ZH_HANS,
+  "zh-Hant": UI_TEXT_ZH_HANT,
+  ug: UI_TEXT_UG,
+  ar: UI_TEXT_AR,
+  ru: UI_TEXT_RU,
+  tr: UI_TEXT_TR,
+  ja: UI_TEXT_JA,
+  ko: UI_TEXT_KO,
+  fr: UI_TEXT_FR,
+  de: UI_TEXT_DE,
+  es: UI_TEXT_ES,
+  pt: UI_TEXT_PT,
+  it: UI_TEXT_IT,
+  hi: UI_TEXT_HI,
+  fa: UI_TEXT_FA,
+  ur: UI_TEXT_UR,
+  kk: UI_TEXT_KK,
+  ky: UI_TEXT_KY,
+  uz: UI_TEXT_UZ,
+  id: UI_TEXT_ID,
+  ms: UI_TEXT_MS,
+  th: UI_TEXT_TH,
+  vi: UI_TEXT_VI
+};
+
 interface MobileWebviewerSettings {
   homeUrl: string;
   searchUrl: string;
+  uiLanguage: string;
   openOnStartup: boolean;
   noteBrowserStartupDefaultVersion?: string;
   compactToolbar: boolean;
@@ -223,6 +2233,7 @@ interface MobileWebviewerSettings {
 const PORTABLE_SETTING_KEYS = [
   "homeUrl",
   "searchUrl",
+  "uiLanguage",
   "openOnStartup",
   "compactToolbar",
   "showReaderHint",
@@ -422,6 +2433,7 @@ interface MobileWebviewerSyntheticEvent extends Event {
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   homeUrl: DEFAULT_HOME,
   searchUrl: DEFAULT_SEARCH,
+  uiLanguage: DEFAULT_UI_LANGUAGE,
   openOnStartup: true,
   compactToolbar: true,
   showReaderHint: true,
@@ -520,7 +2532,6 @@ function internalUtilityContextUrl(url: string | undefined): string {
     }
   }
 }
-
 function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
   const base = `${MWV_INTERNAL_SCHEME}${kind}`;
   return /^https?:\/\//i.test(contextUrl) ? `${base}?url=${encodeURIComponent(contextUrl)}` : base;
@@ -540,6 +2551,23 @@ function utilityPageTitle(kind: UtilityPageKind): string {
       return "Console";
     case "cancip":
       return "Cancip AI";
+  }
+}
+
+function utilityPageTitleKey(kind: UtilityPageKind): UiTextKey {
+  switch (kind) {
+    case "bookmarks":
+      return "bookmarks";
+    case "history":
+      return "history";
+    case "reading":
+      return "readingList";
+    case "downloads":
+      return "downloads";
+    case "console":
+      return "console";
+    case "cancip":
+      return "cancipAi";
   }
 }
 
@@ -778,6 +2806,48 @@ function appendSafeDoodleSvg(svg: SVGSVGElement, markup: string): void {
   });
 }
 
+function appDocument(): Document {
+  return window.activeDocument ?? window.document;
+}
+
+function ownerWindow(value: unknown): (Window & typeof globalThis) | null {
+  if (!value || typeof value !== "object" || !("ownerDocument" in value)) return null;
+  const doc = (value as Node).ownerDocument;
+  return (doc?.defaultView ?? null) as (Window & typeof globalThis) | null;
+}
+
+function isHtmlElement(value: unknown): value is HTMLElement {
+  const win = ownerWindow(value);
+  return Boolean(win?.HTMLElement && value instanceof win.HTMLElement);
+}
+
+function isAnchorElement(value: unknown): value is HTMLAnchorElement {
+  const win = ownerWindow(value);
+  return Boolean(win?.HTMLAnchorElement && value instanceof win.HTMLAnchorElement);
+}
+
+function createHostDiv(): HTMLDivElement {
+  return appDocument().createElement("div");
+}
+
+function runAsync(task: () => Promise<void>): void {
+  void task().catch((error) => {
+    console.error("[mobile-webviewer] async UI action failed", error);
+  });
+}
+
+function asyncTask(task: () => Promise<void>): () => void {
+  return () => runAsync(task);
+}
+
+function asyncValue<T>(task: (value: T) => Promise<void>): (value: T) => void {
+  return (value) => runAsync(() => task(value));
+}
+
+function asyncEvent<T extends Event>(task: (event: T) => Promise<void>): (event: T) => void {
+  return (event) => runAsync(() => task(event));
+}
+
 function resultTitleFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -989,8 +3059,8 @@ function createBuiltInUserScriptRules(): UserScriptRule[] {
       enabled: true,
       css: [
         ".mwv-note-surface, .mwv-note-surface * {",
-        "  -webkit-user-select: text !important;",
-        "  user-select: text !important;",
+        "  -webkit-user-select: text ;",
+        "  user-select: text ;",
         "}",
         ".mwv-note-surface a, .mwv-note-surface button {",
         "  -webkit-touch-callout: default;",
@@ -1031,8 +3101,8 @@ function createBuiltInUserScriptRules(): UserScriptRule[] {
       enabled: true,
       css: [
         ".mwv-md-content img {",
-        "  max-width: 100% !important;",
-        "  height: auto !important;",
+        "  max-width: 100% ;",
+        "  height: auto ;",
         "  border-radius: 6px;",
         "  cursor: zoom-in;",
         "}",
@@ -1065,7 +3135,7 @@ function createBuiltInUserScriptRules(): UserScriptRule[] {
       js: [
         "container.querySelectorAll('table').forEach((table) => {",
         "  if (table.parentElement?.classList.contains('mwv-table-scroll')) return;",
-        "  const wrap = document.createElement('div');",
+        "  const wrap = container.ownerDocument.createElement('div');",
         "  wrap.className = 'mwv-table-scroll';",
         "  table.parentElement?.insertBefore(wrap, table);",
         "  wrap.appendChild(table);",
@@ -1085,8 +3155,10 @@ function wildcardMatch(pattern: string, value: string): boolean {
 }
 
 function sanitizeFileName(value: string, fallback = "download"): string {
-  const clean = value
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
+  const safe = Array.from(value, (char) =>
+    INVALID_FILE_NAME_CHARS.has(char) || char.charCodeAt(0) < 32 ? " " : char
+  ).join("");
+  const clean = safe
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 110);
@@ -1140,10 +3212,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 function textToArrayBuffer(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer;
-}
-
-function arrayBufferToText(buffer: ArrayBuffer): string {
-  return new TextDecoder("utf-8").decode(buffer);
 }
 
 function concatArrayBuffers(parts: ArrayBuffer[]): ArrayBuffer {
@@ -1213,7 +3281,7 @@ function htmlToMarkdownFromElement(root: HTMLElement): string {
       if (text) lines.push(text);
       return;
     }
-    if (!(node instanceof HTMLElement)) return;
+    if (!isHtmlElement(node)) return;
     if (node.closest(".mwv-note-actions, .mwv-note-source, .mwv-doodle-layer, .mwv-webnote-meta")) return;
     const tag = node.tagName.toLowerCase();
     const text = escapeMarkdownText(node.innerText ?? node.textContent ?? "");
@@ -1284,7 +3352,49 @@ function normalizeTranslateLanguageCode(code: string): string {
 }
 
 function getObsidianLanguageCode(): string {
-  return normalizeTranslateLanguageCode(document.documentElement.lang || navigator.language || "en");
+  const doc = window.activeDocument ?? document;
+  return normalizeTranslateLanguageCode(doc.documentElement.lang || navigator.language || "en");
+}
+
+function isUiLanguage(code: string): boolean {
+  return code === DEFAULT_UI_LANGUAGE || TRANSLATE_LANGUAGES.some((item) => item.code === code);
+}
+
+function resolveUiLanguageCode(target: string): string {
+  return target === DEFAULT_UI_LANGUAGE ? getObsidianLanguageCode() : normalizeTranslateLanguageCode(target);
+}
+
+function uiLanguageLabel(code: string): string {
+  if (code === DEFAULT_UI_LANGUAGE) return FOLLOW_OBSIDIAN_UI_OPTION.native;
+  return translateLanguage(code).native;
+}
+
+function translateUiText(language: string, key: UiTextKey, values: Record<string, string | number> = {}): string {
+  const resolved = resolveUiLanguageCode(language);
+  const dictionary = UI_DICTIONARIES[resolved] ?? UI_TEXT_EN;
+  const template = dictionary[key] ?? UI_TEXT_EN[key] ?? key;
+  return template.replace(/\{(\w+)\}/g, (_match, name: string) => String(values[name] ?? `{${name}}`));
+}
+
+function isRtlUiLanguage(language: string): boolean {
+  return ["ar", "fa", "ur", "ug"].includes(resolveUiLanguageCode(language));
+}
+
+function acceptLanguageHeader(language: string): string {
+  const resolved = resolveUiLanguageCode(language);
+  const browser = navigator.language || "en";
+  switch (resolved) {
+    case "zh-Hans":
+      return "zh-CN,zh;q=0.9,en;q=0.7";
+    case "zh-Hant":
+      return "zh-TW,zh-Hant;q=0.9,zh;q=0.8,en;q=0.7";
+    case "ug":
+      return "ug-CN,ug;q=0.9,zh-CN;q=0.7,en;q=0.6";
+    case "en":
+      return "en-US,en;q=0.9";
+    default:
+      return `${resolved},${browser};q=0.8,en;q=0.6`;
+  }
 }
 
 function resolveTranslateTargetCode(target: string): string {
@@ -1348,12 +3458,16 @@ class MobileWebviewerView extends ItemView {
     this.plugin = plugin;
   }
 
+  tr(key: UiTextKey, values: Record<string, string | number> = {}): string {
+    return this.plugin.tr(key, values);
+  }
+
   getViewType(): string {
     return VIEW_TYPE;
   }
 
   getDisplayText(): string {
-    return "Mobile Webviewer Browser";
+    return this.plugin.tr("noteBrowser");
   }
 
   getIcon(): string {
@@ -1392,17 +3506,17 @@ class MobileWebviewerView extends ItemView {
         autocomplete: "off",
         autocapitalize: "off",
         spellcheck: "false",
-        placeholder: "Search or enter URL"
+        placeholder: this.plugin.tr("searchOrEnterUrl")
       }
     });
     const goButton = form.createEl("button", {
       cls: "mwv-icon-button mwv-primary",
-      attr: { type: "submit", "aria-label": "Go" }
+      attr: { type: "submit", "aria-label": this.plugin.tr("go") }
     });
     setIcon(goButton, "arrow-right");
     const moreButton = form.createEl("button", {
       cls: "mwv-icon-button",
-      attr: { type: "button", "aria-label": "More", title: "More" }
+      attr: { type: "button", "aria-label": this.plugin.tr("more"), title: this.plugin.tr("more") }
     });
     setIcon(moreButton, "more-horizontal");
     moreButton.addEventListener("click", (event) => {
@@ -1417,15 +3531,15 @@ class MobileWebviewerView extends ItemView {
     });
 
     const meta = header.createDiv({ cls: "mwv-meta" });
-    this.titleEl = meta.createDiv({ cls: "mwv-title", text: "Mobile Webviewer Browser" });
-    this.subtitleEl = meta.createDiv({ cls: "mwv-subtitle", text: "Ready" });
+    this.titleEl = meta.createDiv({ cls: "mwv-title", text: this.plugin.tr("noteBrowser") });
+    this.subtitleEl = meta.createDiv({ cls: "mwv-subtitle", text: this.plugin.tr("ready") });
     this.tabStripEl = header.createDiv({ cls: "mwv-tab-strip" });
 
     const frameWrap = root.createDiv({ cls: "mwv-frame-wrap" });
     this.homeEl = frameWrap.createDiv({ cls: "mwv-home mwv-virtual-md" });
     this.buildHome();
 
-    this.surfaceEl = this.plugin.createBrowserSurface(frameWrap, "", "mwv-frame", "Mobile Webviewer Browser", {
+    this.surfaceEl = this.plugin.createBrowserSurface(frameWrap, "", "mwv-frame", this.plugin.tr("noteBrowser"), {
       onReady: () => this.handleSurfaceReady(),
       onNavigate: (url) => this.handleSurfaceNavigate(url),
       onTitle: (title) => this.handleSurfaceTitle(title),
@@ -1451,14 +3565,14 @@ class MobileWebviewerView extends ItemView {
     this.drawerEl = root.createDiv({ cls: "mwv-drawer" });
     const drawerHead = this.drawerEl.createDiv({ cls: "mwv-drawer-head" });
     const tabs = drawerHead.createDiv({ cls: "mwv-tabs" });
-    this.bookmarksTabEl = tabs.createEl("button", { cls: "mwv-tab is-active", text: "Bookmarks" });
-    this.historyTabEl = tabs.createEl("button", { cls: "mwv-tab", text: "History" });
-    this.readingTabEl = tabs.createEl("button", { cls: "mwv-tab", text: "Reading" });
-    this.downloadsTabEl = tabs.createEl("button", { cls: "mwv-tab", text: "Downloads" });
-    this.consoleTabEl = tabs.createEl("button", { cls: "mwv-tab", text: "Console" });
+    this.bookmarksTabEl = tabs.createEl("button", { cls: "mwv-tab is-active", text: this.plugin.tr("bookmarks") });
+    this.historyTabEl = tabs.createEl("button", { cls: "mwv-tab", text: this.plugin.tr("history") });
+    this.readingTabEl = tabs.createEl("button", { cls: "mwv-tab", text: this.plugin.tr("reading") });
+    this.downloadsTabEl = tabs.createEl("button", { cls: "mwv-tab", text: this.plugin.tr("downloads") });
+    this.consoleTabEl = tabs.createEl("button", { cls: "mwv-tab", text: this.plugin.tr("console") });
     const closeDrawer = drawerHead.createEl("button", {
       cls: "mwv-icon-button",
-      attr: { type: "button", "aria-label": "Close panel" }
+      attr: { type: "button", "aria-label": this.plugin.tr("closePanel") }
     });
     setIcon(closeDrawer, "x");
     this.listEl = this.drawerEl.createDiv({ cls: "mwv-list" });
@@ -1481,20 +3595,20 @@ class MobileWebviewerView extends ItemView {
     });
 
     const toolbar = root.createDiv({ cls: "mwv-toolbar" });
-    this.makeToolButton(toolbar, "arrow-left", "Back", () => this.goBack());
-    this.makeToolButton(toolbar, "arrow-right", "Forward", () => this.goForward());
-    this.makeToolButton(toolbar, "rotate-cw", "Reload", () => this.reload());
-    this.makeToolButton(toolbar, "home", "Home", () => this.navigate(this.plugin.settings.homeUrl, true));
-    this.makeModeButton(toolbar, "file-text", "笔记", "note");
-    this.makeModeButton(toolbar, "globe-2", "网页", "web");
-    this.makeToolButton(toolbar, "notebook-tabs", "Note Browser", () => void this.openCurrentInNoteBrowser());
-    this.makeToolButton(toolbar, "file-down", "存 MD", () => void this.exportCurrentWebNote());
-    this.makeToolButton(toolbar, "star", "Bookmark", () => this.toggleBookmark());
-    this.makeToolButton(toolbar, "book-open", "Bookmarks", () => void this.openUtilityTab("bookmarks"));
-    this.makeToolButton(toolbar, "history", "History", () => void this.openUtilityTab("history"));
-    this.makeToolButton(toolbar, "download", "Downloads", () => void this.openUtilityTab("downloads"));
-    this.makeToolButton(toolbar, "plus-square", "Save link", () => this.captureLink());
-    this.makeToolButton(toolbar, "settings", "Settings", () => this.plugin.openSettings());
+    this.makeToolButton(toolbar, "arrow-left", this.plugin.tr("back"), () => this.goBack());
+    this.makeToolButton(toolbar, "arrow-right", this.plugin.tr("forward"), () => this.goForward());
+    this.makeToolButton(toolbar, "rotate-cw", this.plugin.tr("reload"), () => this.reload());
+    this.makeToolButton(toolbar, "home", this.plugin.tr("home"), () => this.navigate(this.plugin.settings.homeUrl, true));
+    this.makeModeButton(toolbar, "file-text", this.plugin.tr("note"), "note");
+    this.makeModeButton(toolbar, "globe-2", this.plugin.tr("web"), "web");
+    this.makeToolButton(toolbar, "notebook-tabs", this.plugin.tr("noteBrowser"), () => void this.openCurrentInNoteBrowser());
+    this.makeToolButton(toolbar, "file-down", this.plugin.tr("saveMd"), () => void this.exportCurrentWebNote());
+    this.makeToolButton(toolbar, "star", this.plugin.tr("bookmark"), () => this.toggleBookmark());
+    this.makeToolButton(toolbar, "book-open", this.plugin.tr("bookmarks"), () => void this.openUtilityTab("bookmarks"));
+    this.makeToolButton(toolbar, "history", this.plugin.tr("history"), () => void this.openUtilityTab("history"));
+    this.makeToolButton(toolbar, "download", this.plugin.tr("downloads"), () => void this.openUtilityTab("downloads"));
+    this.makeToolButton(toolbar, "plus-square", this.plugin.tr("saveLink"), () => this.captureLink());
+    this.makeToolButton(toolbar, "settings", this.plugin.tr("settings"), () => this.plugin.openSettings());
 
     this.renderDrawer("bookmarks");
     this.syncSurfaceIdentity();
@@ -1583,7 +3697,7 @@ class MobileWebviewerView extends ItemView {
   async handleSurfaceDownload(url: string): Promise<void> {
     await this.plugin.addConsole("info", `Detected download link: ${url}`, this.currentUrl);
     const entry = await this.plugin.downloadUrlFile(url);
-    new Notice(`Download complete: ${entry.path || entry.message}`);
+    new Notice(this.plugin.tr("downloadComplete", { path: entry.path || entry.message }));
     await this.openUtilityTab("downloads");
   }
 
@@ -1647,21 +3761,21 @@ class MobileWebviewerView extends ItemView {
       item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
       const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
       setIcon(close, "x");
-      item.addEventListener("click", async (event) => {
+      item.addEventListener("click", (event) => {
         const target = event.target as HTMLElement | null;
         event.preventDefault();
         event.stopPropagation();
         if (target?.closest(".mwv-browser-tab-close")) {
-          await this.closeBrowserTab(tab.id);
+          runAsync(() => this.closeBrowserTab(tab.id));
         } else {
-          await this.switchBrowserTab(tab.id);
+          runAsync(() => this.switchBrowserTab(tab.id));
         }
       });
     }
 
     const add = this.tabStripEl.createEl("button", {
       cls: "mwv-browser-tab-add",
-      attr: { type: "button", title: "New Obsidian tab", "aria-label": "New Obsidian tab" }
+      attr: { type: "button", title: this.plugin.tr("newObsidianTab"), "aria-label": this.plugin.tr("newObsidianTab") }
     });
     setIcon(add, "plus");
     add.addEventListener("click", (event) => {
@@ -1773,10 +3887,10 @@ class MobileWebviewerView extends ItemView {
     if (!entries.length) {
       const label =
         kind === "bookmarks"
-          ? "No bookmarks yet"
+          ? this.plugin.tr("noBookmarksYet")
           : kind === "reading"
-            ? "No reading list yet"
-            : "No history yet";
+            ? this.plugin.tr("noReadingListYet")
+            : this.plugin.tr("noHistoryYet");
       this.listEl.createDiv({ cls: "mwv-empty", text: label });
       return;
     }
@@ -1805,7 +3919,7 @@ class MobileWebviewerView extends ItemView {
 
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface mwv-search-note" });
     article.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer / Bing backend" });
-    article.createEl("h1", { text: query ? `Search: ${query}` : "Search" });
+    article.createEl("h1", { text: query ? `${this.plugin.tr("search")}: ${query}` : this.plugin.tr("search") });
 
     const form = article.createEl("form", { cls: "mwv-home-search" });
     const icon = form.createSpan({ cls: "mwv-home-search-icon", attr: { "aria-hidden": "true" } });
@@ -1815,11 +3929,11 @@ class MobileWebviewerView extends ItemView {
       value: query,
       attr: {
         type: "search",
-        placeholder: "Search Bing",
+        placeholder: this.plugin.tr("searchBing"),
         autocomplete: "off"
       }
     });
-    const button = form.createEl("button", { cls: "mwv-home-go", attr: { type: "submit", "aria-label": "Search" } });
+    const button = form.createEl("button", { cls: "mwv-home-go", attr: { type: "submit", "aria-label": this.plugin.tr("search") } });
     setIcon(button, "arrow-right");
 
     form.addEventListener("submit", (event) => {
@@ -1847,22 +3961,22 @@ class MobileWebviewerView extends ItemView {
       if (query.trim() && results.length < 80) {
         const more = list.createEl("button", {
           cls: "mwv-more-results",
-          text: "更多结果",
+          text: this.plugin.tr("moreResults"),
           attr: { type: "button" }
         });
         more.addEventListener("click", async () => {
           more.disabled = true;
-          more.setText("加载中...");
+          more.setText(this.tr("loading"));
           const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
           const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
           try {
             const expanded = await this.plugin.searchBing(query, nextPages, nextMax);
-            this.subtitleEl.setText(`${expanded.length} result(s)`);
+            this.subtitleEl.setText(this.plugin.tr("resultsCount", { count: expanded.length }));
             this.buildHome(query, expanded);
           } catch (error) {
             console.error("[mobile-webviewer] Bing more results failed", error);
             more.disabled = false;
-            more.setText("加载失败，重试");
+            more.setText(this.tr("loadFailedRetry"));
           }
         });
       }
@@ -1895,7 +4009,7 @@ class MobileWebviewerView extends ItemView {
     consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `反馈日志 · ${hostName(url)}` });
     const entries = this.plugin.settings.consoleEntries.slice(0, 30);
     if (!entries.length) {
-      consolePanel.createDiv({ cls: "mwv-console-empty", text: "暂无日志。执行搜索、下载、保存、脚本后会出现在这里。" });
+      consolePanel.createDiv({ cls: "mwv-console-empty", text: this.plugin.tr("emptyConsoleDesc") });
       return;
     }
     for (const entry of entries) {
@@ -1932,7 +4046,7 @@ class MobileWebviewerView extends ItemView {
     }
     this.removeMoreUtilityPanels(panel);
     const toolsPanel = panel.createDiv({ cls: "mwv-tools-panel mwv-more-wide-panel" });
-    toolsPanel.createDiv({ cls: "mwv-tools-title", text: "浏览器状态" });
+    toolsPanel.createDiv({ cls: "mwv-tools-title", text: this.plugin.tr("browserStatus") });
     for (const row of this.plugin.describeBrowserSurface(this.surfaceEl, url)) {
       toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
     }
@@ -1953,22 +4067,22 @@ class MobileWebviewerView extends ItemView {
     event.preventDefault();
     const menu = new Menu();
     menu.addItem((item) => item
-      .setTitle("打开链接")
+      .setTitle(this.plugin.tr("openLink"))
       .setIcon("arrow-right")
       .onClick(() => this.navigate(url, true)));
     menu.addItem((item) => item
-      .setTitle("新标签打开")
+      .setTitle(this.plugin.tr("openInNewTab"))
       .setIcon("plus")
       .onClick(() => void this.newBrowserTab(url)));
     menu.addItem((item) => item
-      .setTitle("复制链接")
+      .setTitle(this.plugin.tr("copyLink"))
       .setIcon("copy")
       .onClick(async () => {
         await navigator.clipboard.writeText(`[${title || hostName(url)}](${url})`);
-        new Notice("Copied link");
+        new Notice(this.tr("copiedLink"));
       }));
     menu.addItem((item) => item
-      .setTitle("下载链接")
+      .setTitle(this.plugin.tr("downloadLink"))
       .setIcon("download")
       .onClick(() => void this.handleSurfaceDownload(url)));
     menu.showAtMouseEvent(event);
@@ -2010,7 +4124,7 @@ class MobileWebviewerView extends ItemView {
     this.currentTitle = hostName(nextUrl);
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
-    this.subtitleEl.setText("Reading...");
+    this.subtitleEl.setText(this.plugin.tr("readingStatus"));
     this.syncSurfaceIdentity();
     this.renderUrlAsNote(nextUrl);
     void this.syncActiveBrowserTab();
@@ -2030,7 +4144,7 @@ class MobileWebviewerView extends ItemView {
     }
     const previous = this.backStack.pop();
     if (!previous) {
-      new Notice("No previous page");
+      new Notice(this.plugin.tr("noPreviousPage"));
       return;
     }
     if (this.currentUrl) this.forwardStack.push(this.currentUrl);
@@ -2045,7 +4159,7 @@ class MobileWebviewerView extends ItemView {
     }
     const next = this.forwardStack.pop();
     if (!next) {
-      new Notice("No next page");
+      new Notice(this.plugin.tr("noNextPage"));
       return;
     }
     if (this.currentUrl) this.backStack.push(this.currentUrl);
@@ -2074,7 +4188,7 @@ class MobileWebviewerView extends ItemView {
     this.currentTitle = hostName(url);
     this.addressEl.value = url;
     this.titleEl.setText(this.currentTitle);
-    this.subtitleEl.setText("Reading...");
+    this.subtitleEl.setText(this.plugin.tr("readingStatus"));
     this.syncSurfaceIdentity();
     this.renderUrlAsNote(url);
     void this.syncActiveBrowserTab();
@@ -2138,7 +4252,7 @@ class MobileWebviewerView extends ItemView {
     this.currentTitle = "Bing";
     this.addressEl.value = url;
     this.titleEl.setText("Bing");
-    this.subtitleEl.setText("Native light home");
+    this.subtitleEl.setText(this.plugin.tr("nativeLightHome"));
     this.syncSurfaceIdentity();
     this.setLiveFrameMode(false);
     this.buildHome();
@@ -2166,7 +4280,7 @@ class MobileWebviewerView extends ItemView {
     this.lastQuery = cleanQuery;
     this.addressEl.value = cleanQuery;
     this.titleEl.setText(this.currentTitle);
-    this.subtitleEl.setText("Searching Bing...");
+    this.subtitleEl.setText(this.plugin.tr("searchingBing"));
     this.syncSurfaceIdentity(searchUrl, this.currentTitle);
     this.setLiveFrameMode(false);
     this.buildHome(cleanQuery, []);
@@ -2175,7 +4289,7 @@ class MobileWebviewerView extends ItemView {
 
     try {
       const results = await this.plugin.searchBing(cleanQuery);
-      this.subtitleEl.setText(`${results.length} result(s)`);
+      this.subtitleEl.setText(this.plugin.tr("resultsCount", { count: results.length }));
       this.buildHome(cleanQuery, results);
     } catch (error) {
       console.error("[mobile-webviewer] Bing search failed", error);
@@ -2221,7 +4335,7 @@ class MobileWebviewerView extends ItemView {
     this.currentTitle = utilityPageTitle(kind);
     this.addressEl.value = url;
     this.titleEl.setText(this.currentTitle);
-    this.subtitleEl.setText("Internal browser tab");
+    this.subtitleEl.setText(this.plugin.tr("internalBrowserTab"));
     this.syncSurfaceIdentity(url, this.currentTitle);
     this.setLiveFrameMode(false);
     this.homeEl.removeClass("mwv-reader-strip");
@@ -2232,11 +4346,11 @@ class MobileWebviewerView extends ItemView {
     article.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
     article.createEl("h1", { text: this.currentTitle });
     const actions = article.createDiv({ cls: "mwv-note-actions" });
-    const refresh = actions.createEl("button", { attr: { type: "button", title: "Refresh", "aria-label": "Refresh" } });
+    const refresh = actions.createEl("button", { attr: { type: "button", title: this.plugin.tr("refresh"), "aria-label": this.plugin.tr("refresh") } });
     setIcon(refresh, "rotate-cw");
     refresh.addEventListener("click", () => this.renderUtilityTab(kind, url));
     if (kind === "cancip") {
-      const open = actions.createEl("button", { attr: { type: "button", title: "Open Cancip", "aria-label": "Open Cancip" } });
+      const open = actions.createEl("button", { attr: { type: "button", title: this.plugin.tr("openCancip"), "aria-label": this.plugin.tr("openCancip") } });
       setIcon(open, "bot");
       open.addEventListener("click", () => void this.plugin.openCancip());
     }
@@ -2249,9 +4363,9 @@ class MobileWebviewerView extends ItemView {
   renderUtilityContent(parent: HTMLElement, kind: UtilityPageKind): void {
     if (kind === "downloads") {
       this.renderUtilitySummary(parent, [
-        ["全部", String(this.plugin.settings.downloads.length)],
-        ["完成", String(this.plugin.settings.downloads.filter((entry) => entry.status === "completed").length)],
-        ["失败", String(this.plugin.settings.downloads.filter((entry) => entry.status === "error").length)]
+        [this.plugin.tr("all"), String(this.plugin.settings.downloads.length)],
+        [this.plugin.tr("completed"), String(this.plugin.settings.downloads.filter((entry) => entry.status === "completed").length)],
+        [this.plugin.tr("failed"), String(this.plugin.settings.downloads.filter((entry) => entry.status === "error").length)]
       ]);
       this.renderDownloadsList(parent, this.plugin.settings.downloads, true);
       return;
@@ -2273,9 +4387,9 @@ class MobileWebviewerView extends ItemView {
     if (kind === "history") {
       const today = new Date().toDateString();
       this.renderUtilitySummary(parent, [
-        ["全部", String(entries.length)],
-        ["今天", String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
-        ["最近", entries[0] ? hostName(entries[0].url) : "-"]
+        [this.plugin.tr("all"), String(entries.length)],
+        [this.plugin.tr("today"), String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
+        [this.plugin.tr("latest"), entries[0] ? hostName(entries[0].url) : "-"]
       ]);
     }
     this.renderWebEntryList(parent, entries, entries.length ? "" : `No ${utilityPageTitle(kind).toLowerCase()} yet`);
@@ -2292,7 +4406,7 @@ class MobileWebviewerView extends ItemView {
 
   renderWebEntryList(parent: HTMLElement, entries: WebEntry[], emptyText: string): void {
     if (!entries.length) {
-      parent.createDiv({ cls: "mwv-empty", text: emptyText || "No entries" });
+      parent.createDiv({ cls: "mwv-empty", text: emptyText || this.plugin.tr("noEntries") });
       return;
     }
     const list = parent.createDiv({ cls: "mwv-utility-list" });
@@ -2306,14 +4420,14 @@ class MobileWebviewerView extends ItemView {
       main.createDiv({ cls: "mwv-utility-url", text: entry.url });
       main.addEventListener("click", () => void this.newBrowserTab(entry.url));
       const row = item.createDiv({ cls: "mwv-utility-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: "Open" } });
+      const open = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: this.plugin.tr("open") } });
       setIcon(open, "arrow-right");
       open.addEventListener("click", () => void this.newBrowserTab(entry.url));
-      const copy = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: "Copy" } });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: this.plugin.tr("copy") } });
       setIcon(copy, "copy");
       copy.addEventListener("click", async () => {
         await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
-        new Notice("Copied link");
+        new Notice(this.tr("copiedLink"));
       });
     }
   }
@@ -2321,7 +4435,7 @@ class MobileWebviewerView extends ItemView {
   renderDownloadsList(parent: HTMLElement, entries: DownloadEntry[], full = false): void {
     const visible = entries.slice(0, full ? 120 : 40);
     if (!visible.length) {
-      parent.createDiv({ cls: "mwv-empty", text: "No downloads yet" });
+      parent.createDiv({ cls: "mwv-empty", text: this.plugin.tr("noDownloadsYet") });
       return;
     }
     const list = parent.createDiv({ cls: "mwv-download-list" });
@@ -2329,33 +4443,33 @@ class MobileWebviewerView extends ItemView {
       const item = list.createDiv({ cls: `mwv-download-list-item is-${entry.status}` });
       const top = item.createDiv({ cls: "mwv-download-list-top" });
       top.createDiv({ cls: "mwv-download-list-title", text: entry.fileName || hostName(entry.url) });
-      top.createDiv({ cls: "mwv-download-list-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
+      top.createDiv({ cls: "mwv-download-list-state", text: this.plugin.tr("downloadState", { status: entry.status, progress: Math.round(entry.progress) }) });
       const progress = item.createDiv({ cls: "mwv-download-progress" });
       progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
       item.createDiv({ cls: "mwv-download-list-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()} · ${new Date(entry.time).toLocaleString()}` });
       item.createDiv({ cls: "mwv-download-list-url", text: entry.url });
       item.createDiv({ cls: "mwv-download-list-path", text: entry.path || entry.message });
       const row = item.createDiv({ cls: "mwv-download-list-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("openFile"), attr: { type: "button" } });
       open.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         void this.plugin.openDownloadEntry(entry);
       });
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("copyPath"), attr: { type: "button" } });
       copy.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         void this.plugin.copyDownloadPath(entry);
       });
-      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("location"), attr: { type: "button" } });
       locate.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         void this.plugin.revealDownloadEntry(entry);
       });
       if (entry.url && /^https?:\/\//i.test(entry.url)) {
-        const source = row.createEl("button", { cls: "mwv-mini-action", text: "来源", attr: { type: "button" } });
+        const source = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("source"), attr: { type: "button" } });
         source.addEventListener("click", () => void this.newBrowserTab(entry.url));
       }
     }
@@ -2365,7 +4479,7 @@ class MobileWebviewerView extends ItemView {
     parent.empty();
     const visible = entries.slice(0, full ? 120 : 30);
     if (!visible.length) {
-      parent.createDiv({ cls: "mwv-empty", text: "No console logs" });
+      parent.createDiv({ cls: "mwv-empty", text: this.plugin.tr("noConsoleLogs") });
       return;
     }
     for (const entry of visible) {
@@ -2384,23 +4498,23 @@ class MobileWebviewerView extends ItemView {
     const status = this.plugin.getCancipStatus();
     const contextUrl = internalUtilityContextUrl(this.currentUrl) || this.currentUrl || this.plugin.settings.homeUrl;
     const card = parent.createDiv({ cls: "mwv-cancip-card" });
-    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? "Cancip AI 已检测到" : "Cancip AI 未启用" });
-    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? `版本 ${status.version || "unknown"}，可从这里打开 AI 面板。` : "安装或启用 Cancip 后，Mobile Webviewer 会把网页上下文作为可复制上下文入口提供。" });
+    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? this.plugin.tr("cancipDetected") : this.plugin.tr("cancipNotEnabled") });
+    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? this.plugin.tr("cancipDetectedDesc", { version: status.version || "unknown" }) : this.plugin.tr("cancipNotEnabledDesc") });
     const row = card.createDiv({ cls: "mwv-utility-actions" });
-    const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开 Cancip", attr: { type: "button" } });
+    const open = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("openCancip"), attr: { type: "button" } });
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.plugin.openCancip());
-    const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制当前网页上下文", attr: { type: "button" } });
+    const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("copyCurrentContext"), attr: { type: "button" } });
     copy.addEventListener("click", async () => {
       const text = [
         "Mobile Webviewer context",
         `Title: ${hostName(contextUrl)}`,
         `URL: ${contextUrl}`,
         "",
-        "请基于这个网页上下文继续分析、整理、摘录或生成笔记。"
+        this.plugin.tr("cancipContextPrompt")
       ].join("\n");
       await navigator.clipboard.writeText(text);
-      new Notice("Copied Cancip context");
+      new Notice(this.plugin.tr("copiedCancipContext"));
     });
   }
 
@@ -2461,7 +4575,7 @@ class MobileWebviewerView extends ItemView {
     this.homeEl.empty();
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface" });
     article.createDiv({ cls: "mwv-note-source", text: hostName(url) });
-    article.createEl("h1", { text: "Reader" });
+    article.createEl("h1", { text: this.plugin.tr("reader") });
     article.createEl("p", { text: url });
   }
 
@@ -2471,12 +4585,12 @@ class MobileWebviewerView extends ItemView {
     this.homeEl.empty();
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface" });
     article.createDiv({ cls: "mwv-note-source", text: hostName(url) });
-    article.createEl("h1", { text: "Page tools" });
+    article.createEl("h1", { text: this.plugin.tr("pageTools") });
     const actions = article.createDiv({ cls: "mwv-note-actions" });
-    const copyButton = actions.createEl("button", { text: "Copy link", attr: { type: "button" } });
+    const copyButton = actions.createEl("button", { text: this.plugin.tr("copyLink"), attr: { type: "button" } });
     copyButton.addEventListener("click", async () => {
       await navigator.clipboard.writeText(url);
-      new Notice("Copied link");
+      new Notice(this.tr("copiedLink"));
     });
   }
 
@@ -2489,20 +4603,20 @@ class MobileWebviewerView extends ItemView {
     article.createEl("h1", { text: page.title || hostName(page.url) });
 
     const actions = article.createDiv({ cls: "mwv-note-actions" });
-    const copyButton = actions.createEl("button", { text: "Copy link", attr: { type: "button" } });
+    const copyButton = actions.createEl("button", { text: this.plugin.tr("copyLink"), attr: { type: "button" } });
     copyButton.addEventListener("click", async () => {
       await navigator.clipboard.writeText(`[${page.title}](${page.url})`);
-      new Notice("Copied link");
+      new Notice(this.tr("copiedLink"));
     });
     const doodleButton = actions.createEl("button", {
       cls: "mwv-note-action-icon",
-      attr: { type: "button", title: "Doodle", "aria-label": "Doodle" }
+      attr: { type: "button", title: this.plugin.tr("doodle"), "aria-label": this.plugin.tr("doodle") }
     });
     setIcon(doodleButton, "pen-line");
     doodleButton.dataset.mwvDoodleToggle = "true";
     doodleButton.setAttribute("aria-pressed", "false");
     doodleButton.addEventListener("click", () => this.toggleDoodleLayer(article, doodleButton));
-    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已入库 ${note.markdownPath}` : "自动保存到插件" });
+    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? this.tr("savedMarkdown", { path: note.markdownPath }) : this.tr("autoSavedPlugin") });
 
     const noteWrap = article.createDiv({ cls: "mwv-webnote-wrap" });
     const content = noteWrap.createDiv({
@@ -2510,11 +4624,11 @@ class MobileWebviewerView extends ItemView {
       attr: {
         contenteditable: "true",
         spellcheck: "true",
-        "aria-label": "Editable web note"
+        "aria-label": this.plugin.tr("editableWebNote")
       }
     });
     this.populateWebNoteContent(content, page, note);
-    const doodleLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const doodleLayer = content.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
     doodleLayer.addClass("mwv-doodle-layer");
     doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
     doodleLayer.setAttribute("preserveAspectRatio", "none");
@@ -2529,7 +4643,7 @@ class MobileWebviewerView extends ItemView {
 
     if (page.links.length) {
       const related = article.createDiv({ cls: "mwv-note-related" });
-      related.createEl("h2", { text: "Links" });
+      related.createEl("h2", { text: this.plugin.tr("links") });
       for (const link of page.links.slice(0, 8)) {
         const button = related.createEl("button", { cls: "mwv-note-link", attr: { type: "button" } });
         button.createDiv({ cls: "mwv-note-link-title", text: link.title });
@@ -2564,7 +4678,7 @@ class MobileWebviewerView extends ItemView {
 
   bindWebNoteEditor(content: HTMLElement, status: HTMLElement): void {
     const markDirty = () => {
-      status.setText("保存中...");
+      status.setText(this.tr("saving"));
       this.queueWebNoteSave(status);
     };
     content.addEventListener("input", markDirty, true);
@@ -2628,8 +4742,8 @@ class MobileWebviewerView extends ItemView {
       updatedAt: Date.now()
     };
     this.currentWebNote = await this.plugin.saveWebNote(updated);
-    status?.setText(this.currentWebNote.markdownPath ? `已自动保存，已入库 ${this.currentWebNote.markdownPath}` : "已自动保存到插件");
-    if (showNotice) new Notice("Web note saved in plugin data");
+    status?.setText(this.currentWebNote.markdownPath ? this.plugin.tr("savedMarkdown", { path: this.currentWebNote.markdownPath }) : this.plugin.tr("savedPlugin"));
+    if (showNotice) new Notice(this.plugin.tr("webNoteSaved"));
     return this.currentWebNote;
   }
 
@@ -2638,8 +4752,8 @@ class MobileWebviewerView extends ItemView {
     if (!saved) return;
     const exported = await this.plugin.exportWebNoteMarkdown(saved);
     this.currentWebNote = exported;
-    status?.setText(`已入库 ${exported.markdownPath}`);
-    new Notice(`Saved to ${exported.markdownPath}`);
+    status?.setText(this.plugin.tr("savedMarkdown", { path: exported.markdownPath }));
+    new Notice(this.tr("savedTo", { path: exported.markdownPath }));
   }
 
   async openCurrentInNoteBrowser(): Promise<void> {
@@ -2651,8 +4765,8 @@ class MobileWebviewerView extends ItemView {
   setDoodleToggleState(button: HTMLButtonElement, enabled: boolean): void {
     button.toggleClass("is-active", enabled);
     button.setAttribute("aria-pressed", enabled ? "true" : "false");
-    button.setAttribute("title", enabled ? "Close doodle" : "Doodle");
-    button.setAttribute("aria-label", enabled ? "Close doodle" : "Doodle");
+    button.setAttribute("title", enabled ? this.plugin.tr("closeDoodle") : this.plugin.tr("doodle"));
+    button.setAttribute("aria-label", enabled ? this.plugin.tr("closeDoodle") : this.plugin.tr("doodle"));
   }
 
   resetDoodleControls(root: ParentNode): void {
@@ -2731,7 +4845,7 @@ class MobileWebviewerView extends ItemView {
         this.queueWebNoteSave(status);
       }
       const [x, y] = point(event);
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      const path = svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", `M ${x.toFixed(1)} ${y.toFixed(1)}`);
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", "var(--interactive-accent)");
@@ -2759,7 +4873,7 @@ class MobileWebviewerView extends ItemView {
       event.stopPropagation();
       const [x, y] = point(event);
       this.activeDoodlePath.setAttribute("d", `${this.activeDoodlePath.getAttribute("d")} L ${x.toFixed(1)} ${y.toFixed(1)}`);
-      status.setText("保存中...");
+      status.setText(this.tr("saving"));
       this.queueWebNoteDoodleSave(status);
     });
     const finish = (event: PointerEvent) => {
@@ -2795,7 +4909,7 @@ class MobileWebviewerView extends ItemView {
   async toggleBookmark(): Promise<void> {
     if (!this.currentUrl) return;
     const added = await this.plugin.toggleBookmarkEntry(this.currentUrl, this.currentTitle || hostName(this.currentUrl));
-    new Notice(added ? "Bookmark added" : "Bookmark removed");
+    new Notice(added ? this.tr("bookmarkAdded") : this.tr("bookmarkRemoved"));
     this.renderDrawer(this.currentDrawer);
   }
 
@@ -2813,15 +4927,15 @@ class MobileWebviewerView extends ItemView {
     this.morePanelEl = panel;
 
     const head = panel.createDiv({ cls: "mwv-more-head" });
-    head.createDiv({ cls: "mwv-more-title", text: "More" });
-    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": "Close More" } });
+    head.createDiv({ cls: "mwv-more-title", text: this.plugin.tr("more") });
+    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": this.plugin.tr("closeMore") } });
     setIcon(close, "x");
     close.addEventListener("click", () => this.closeMorePanel());
 
     const body = panel.createDiv({ cls: "mwv-more-body" });
     const feedback = body.createDiv({
       cls: "mwv-more-feedback",
-      text: `下载保存到: ${this.plugin.normalizeDownloadFolder()}`
+      text: this.plugin.tr("downloadSavedTo", { folder: this.plugin.normalizeDownloadFolder() })
     });
     const sections = body.createDiv({ cls: "mwv-more-sections" });
     const setFeedback = (message: string, isError = false) => {
@@ -2833,11 +4947,11 @@ class MobileWebviewerView extends ItemView {
       section.createDiv({ cls: "mwv-more-section-title", text: title });
       return section.createDiv({ cls: "mwv-more-actions" });
     };
-    const tabActions = addGroup("标签");
-    const pageActions = addGroup("页面");
-    const viewActions = addGroup("视图");
-    const saveActions = addGroup("保存");
-    const toolActions = addGroup("工具");
+    const tabActions = addGroup(this.plugin.tr("tabs"));
+    const pageActions = addGroup(this.plugin.tr("page"));
+    const viewActions = addGroup(this.plugin.tr("view"));
+    const saveActions = addGroup(this.plugin.tr("save"));
+    const toolActions = addGroup(this.plugin.tr("tools"));
     const addAction = (group: HTMLElement, icon: string, label: string, onClick: () => void | Promise<void>): HTMLButtonElement => {
       const button = group.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
       setIcon(button, icon);
@@ -2846,12 +4960,12 @@ class MobileWebviewerView extends ItemView {
         event.preventDefault();
         event.stopPropagation();
         button.disabled = true;
-        setFeedback(`正在执行: ${label}`);
+        setFeedback(this.plugin.tr("runningAction", { label }));
         Promise.resolve(onClick())
-          .then(() => setFeedback(`已完成: ${label}`))
+          .then(() => setFeedback(this.plugin.tr("completedAction", { label })))
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            setFeedback(`${label} 失败: ${message}`, true);
+            setFeedback(this.plugin.tr("failedAction", { label, message }), true);
             void this.plugin.addConsole("error", `${label} failed: ${message}`, url);
             new Notice(`${label} failed`);
           })
@@ -2862,44 +4976,44 @@ class MobileWebviewerView extends ItemView {
       return button;
     };
 
-    addAction(tabActions, "download", `下载页 (${this.plugin.settings.downloads.length})`, () => void this.openUtilityTab("downloads"));
-    addAction(tabActions, "history", `历史 (${this.plugin.settings.history.length})`, () => void this.openUtilityTab("history"));
-    addAction(tabActions, "book-open", `收藏 (${this.plugin.settings.bookmarks.length})`, () => void this.openUtilityTab("bookmarks"));
-    addAction(tabActions, "library", `稍后读 (${this.plugin.settings.readingList.length})`, () => void this.openUtilityTab("reading"));
-    addAction(tabActions, "terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => void this.openUtilityTab("console"));
+    addAction(tabActions, "download", this.plugin.tr("downloadsCount", { count: this.plugin.settings.downloads.length }), () => void this.openUtilityTab("downloads"));
+    addAction(tabActions, "history", this.plugin.tr("historyCount", { count: this.plugin.settings.history.length }), () => void this.openUtilityTab("history"));
+    addAction(tabActions, "book-open", this.plugin.tr("bookmarksCount", { count: this.plugin.settings.bookmarks.length }), () => void this.openUtilityTab("bookmarks"));
+    addAction(tabActions, "library", this.plugin.tr("readingCount", { count: this.plugin.settings.readingList.length }), () => void this.openUtilityTab("reading"));
+    addAction(tabActions, "terminal", this.plugin.tr("consoleCount", { count: this.plugin.settings.consoleEntries.length }), () => void this.openUtilityTab("console"));
     addAction(tabActions, "bot", "Cancip AI", () => void this.openUtilityTab("cancip"));
-    addAction(tabActions, "plus", "新 OB 标签", () => this.newBrowserTab());
-    addAction(tabActions, "file-text", "打开 Note Web", async () => {
+    addAction(tabActions, "plus", this.plugin.tr("newObTab"), () => this.newBrowserTab());
+    addAction(tabActions, "file-text", this.plugin.tr("openNoteWeb"), async () => {
       this.closeMorePanel();
       await this.plugin.openNoteBrowser(url);
     });
 
-    addAction(pageActions, "external-link", "用浏览器打开", () => {
+    addAction(pageActions, "external-link", this.plugin.tr("openInBrowser"), () => {
       window.open(url, "_blank");
     });
-    addAction(pageActions, "copy", "复制链接", async () => {
+    addAction(pageActions, "copy", this.plugin.tr("copyLink"), async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
-      new Notice("Copied link");
+      new Notice(this.tr("copiedLink"));
     });
-    addAction(pageActions, "share-2", "分享", () => this.plugin.sharePage(url, title));
-    addAction(pageActions, "activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(body, url));
+    addAction(pageActions, "share-2", this.plugin.tr("share"), () => this.plugin.sharePage(url, title));
+    addAction(pageActions, "activity", this.plugin.tr("browserStatus"), () => this.toggleMoreBrowserStatusPanel(body, url));
 
-    addAction(viewActions, "zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
-    addAction(viewActions, "zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
-    addAction(viewActions, "monitor-smartphone", this.plugin.settings.desktopMode ? "手机版" : "桌面版", () => this.plugin.toggleDesktopMode(this.containerEl));
-    addAction(viewActions, "moon", this.plugin.settings.nightMode ? "日间模式" : "夜间模式", () => this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
-    addAction(viewActions, "eye", this.plugin.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", () => this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
-    addAction(viewActions, "shield-check", this.plugin.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
+    addAction(viewActions, "zoom-in", this.plugin.tr("zoomIn", { value: this.plugin.settings.pageZoom }), () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
+    addAction(viewActions, "zoom-out", this.plugin.tr("zoomOut"), () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
+    addAction(viewActions, "monitor-smartphone", this.plugin.settings.desktopMode ? this.plugin.tr("mobileVersion") : this.plugin.tr("desktopVersion"), () => this.plugin.toggleDesktopMode(this.containerEl));
+    addAction(viewActions, "moon", this.plugin.settings.nightMode ? this.plugin.tr("dayMode") : this.plugin.tr("nightMode"), () => this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
+    addAction(viewActions, "eye", this.plugin.settings.eyeProtectionMode ? this.plugin.tr("closeEyeProtection") : this.plugin.tr("eyeProtection"), () => this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
+    addAction(viewActions, "shield-check", this.plugin.settings.adBlockEnabled ? this.plugin.tr("closeAdBlock") : this.plugin.tr("adBlocking"), async () => {
       await this.plugin.setAdMode(!this.plugin.settings.adBlockEnabled, false, this.containerEl);
       this.reload();
     });
-    addAction(viewActions, "scan", this.plugin.settings.markAdsEnabled ? "取消标记广告" : "标记广告", async () => {
+    addAction(viewActions, "scan", this.plugin.settings.markAdsEnabled ? this.plugin.tr("unmarkAds") : this.plugin.tr("markAds"), async () => {
       await this.plugin.setAdMode(false, !this.plugin.settings.markAdsEnabled, this.containerEl);
       this.reload();
     });
-    addAction(viewActions, "glasses", this.plugin.settings.incognitoMode ? "关闭无痕" : "无痕", () => this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
-    addAction(viewActions, "maximize", this.plugin.settings.fullScreenMode ? "退出全屏" : "全屏", () => this.plugin.toggleFullscreen(this.containerEl));
-    addAction(viewActions, "file-x", this.plugin.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
+    addAction(viewActions, "glasses", this.plugin.settings.incognitoMode ? this.plugin.tr("closeIncognito") : this.plugin.tr("incognito"), () => this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
+    addAction(viewActions, "maximize", this.plugin.settings.fullScreenMode ? this.plugin.tr("exitFullscreen") : this.plugin.tr("fullscreen"), () => this.plugin.toggleFullscreen(this.containerEl));
+    addAction(viewActions, "file-x", this.plugin.settings.jsDisabled ? this.plugin.tr("enableJs") : this.plugin.tr("disableJs"), async () => {
       await this.plugin.toggleBooleanMode("jsDisabled", this.containerEl, "JavaScript");
       this.reload();
     });
@@ -2907,78 +5021,78 @@ class MobileWebviewerView extends ItemView {
       await this.plugin.toggleUserAgent(this.containerEl);
       this.reload();
     });
-    addAction(viewActions, "rotate-cw", this.plugin.settings.rotatedMode ? "关闭横屏" : "横屏", () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
-    addAction(viewActions, "type", `字号 ${this.plugin.settings.readerFontScale}%`, () => this.plugin.adjustReaderFont(10, this.containerEl));
+    addAction(viewActions, "rotate-cw", this.plugin.settings.rotatedMode ? this.plugin.tr("closeLandscape") : this.plugin.tr("landscape"), () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
+    addAction(viewActions, "type", this.plugin.tr("fontSize", { value: this.plugin.settings.readerFontScale }), () => this.plugin.adjustReaderFont(10, this.containerEl));
 
-    addAction(saveActions, "download", "下载文件", async () => {
+    addAction(saveActions, "download", this.plugin.tr("downloadFile"), async () => {
       const entry = await this.plugin.downloadUrlFile(url);
-      setFeedback(`下载完成: ${entry.path || entry.message}`);
+      setFeedback(this.plugin.tr("downloadFinished", { path: entry.path || entry.message }));
       this.closeMorePanel();
       await this.openUtilityTab("downloads");
     });
-    addAction(saveActions, "file-code", "保存 HTML", async () => {
+    addAction(saveActions, "file-code", this.plugin.tr("saveHtml"), async () => {
       const entry = await this.plugin.downloadCurrentPageHtml(url, title);
-      setFeedback(`已保存: ${entry.path || entry.message}`);
+      setFeedback(this.plugin.tr("saved", { path: entry.path || entry.message }));
       this.closeMorePanel();
       await this.openUtilityTab("downloads");
     });
-    addAction(saveActions, "archive", "保存 MHT", async () => {
+    addAction(saveActions, "archive", this.plugin.tr("saveMht"), async () => {
       const entry = await this.plugin.downloadCurrentPageMhtml(url, title);
-      setFeedback(`已保存: ${entry.path || entry.message}`);
+      setFeedback(this.plugin.tr("saved", { path: entry.path || entry.message }));
       this.closeMorePanel();
       await this.openUtilityTab("downloads");
     });
-    addAction(saveActions, "file-down", "离线页面", async () => {
+    addAction(saveActions, "file-down", this.plugin.tr("offlinePage"), async () => {
       await this.plugin.saveOfflinePage(url, title);
       this.closeMorePanel();
       await this.openUtilityTab("downloads");
     });
-    addAction(saveActions, "file-symlink", "桌面快捷方式", async () => {
+    addAction(saveActions, "file-symlink", this.plugin.tr("desktopShortcut"), async () => {
       const path = await this.plugin.createShortcutFile(url, title);
-      setFeedback(`已保存: ${path}`);
-      new Notice(`Saved ${path}`);
+      setFeedback(this.plugin.tr("saved", { path }));
+      new Notice(this.plugin.tr("saved", { path }));
     });
-    addAction(saveActions, "star", this.plugin.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签", () => this.toggleBookmark());
-    addAction(saveActions, "book-open", "加入稍后读", async () => {
+    addAction(saveActions, "star", this.plugin.settings.bookmarks.some((entry) => entry.url === url) ? this.plugin.tr("removeBookmark") : this.plugin.tr("addBookmark"), () => this.toggleBookmark());
+    addAction(saveActions, "book-open", this.plugin.tr("addReadingList"), async () => {
       await this.plugin.addReadingList({ title, url, time: Date.now() });
       this.renderDrawer(this.currentDrawer);
-      new Notice("Added to reading list");
+      new Notice(this.plugin.tr("addedReadingList"));
     });
 
-    addAction(toolActions, "text-cursor-input", "自动填表", () => this.autofillCurrentPage());
-    addAction(toolActions, "wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => {
+    addAction(toolActions, "text-cursor-input", this.plugin.tr("autofillPage"), () => this.autofillCurrentPage());
+    addAction(toolActions, "wand-sparkles", this.plugin.tr("scriptsCount", { count: this.plugin.getActiveUserScriptRules(url).length }), () => {
       this.plugin.toggleUserScriptsPanel(body, url);
     });
-    addAction(toolActions, "radio", "媒体嗅探", async () => {
+    addAction(toolActions, "radio", this.plugin.tr("mediaSniff"), async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText(assets.media.join("\n"));
-      new Notice(`Media copied: ${assets.media.length}`);
+      new Notice(this.plugin.tr("mediaCopied", { count: assets.media.length }));
     });
-    addAction(toolActions, "layers", "页面资源", async () => {
+    addAction(toolActions, "layers", this.plugin.tr("pageAssets"), async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText([...assets.links, ...assets.media, ...assets.scripts, ...assets.styles].join("\n"));
-      new Notice("Resources copied");
+      new Notice(this.plugin.tr("resourcesCopied"));
     });
-    addAction(toolActions, "code-2", "复制源码", async () => {
+    addAction(toolActions, "code-2", this.plugin.tr("copySource"), async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText(assets.html);
-      new Notice("Source copied");
+      new Notice(this.plugin.tr("sourceCopied"));
     });
-    addAction(toolActions, "languages", `翻译 (${translateModeLabel(this.plugin.settings.translateTarget)})`, () => {
+    addAction(toolActions, "languages", `${this.plugin.tr("translateAction")} (${translateModeLabel(this.plugin.settings.translateTarget)})`, () => {
       new TranslateLanguageModal(this.app, this.plugin, url, (translateUrl) => this.navigate(translateUrl, true)).open();
     });
-    addAction(toolActions, "volume-2", "朗读", () => this.plugin.readPageAloud(url));
-    addAction(toolActions, "qr-code", "二维码", () => this.plugin.toggleQrPanel(body, url));
-    addAction(toolActions, "shield-alert", "反馈报告", () => this.plugin.toggleReportPanel(body, url));
-    addAction(toolActions, "copy", "复制日志", async () => {
+    addAction(toolActions, "volume-2", this.plugin.tr("readAloud"), () => this.plugin.readPageAloud(url));
+    addAction(toolActions, "qr-code", this.plugin.tr("qrCode"), () => this.plugin.toggleQrPanel(body, url));
+    addAction(toolActions, "shield-alert", this.plugin.tr("report"), () => this.plugin.toggleReportPanel(body, url));
+    addAction(toolActions, "copy", this.plugin.tr("copyLogs"), async () => {
       await navigator.clipboard.writeText(this.plugin.formatConsoleEntries());
-      new Notice("Console copied");
+      new Notice(this.plugin.tr("consoleCopied"));
     });
-    addAction(toolActions, "trash", `清缓存 (${this.plugin.settings.pageCache.length})`, async () => {
+    addAction(toolActions, "trash", this.plugin.tr("clearCache", { count: this.plugin.settings.pageCache.length }), async () => {
       await this.plugin.clearCache();
-      new Notice("Cache cleared");
+      new Notice(this.plugin.tr("cacheCleared"));
     });
-    addAction(toolActions, "settings", "设置", () => this.plugin.openSettings());
+    addAction(toolActions, "settings", this.plugin.tr("settings"), () => this.plugin.openSettings());
   }
 
   async openUtilityTab(kind: UtilityPageKind): Promise<void> {
@@ -3004,13 +5118,13 @@ class MobileWebviewerView extends ItemView {
     this.findPanelEl = panel;
     const input = panel.createEl("input", {
       cls: "mwv-find-input",
-      attr: { type: "search", placeholder: "Find in page", autocomplete: "off" }
+      attr: { type: "search", placeholder: this.tr("findInPage"), autocomplete: "off" }
     });
-    const prev = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Previous" } });
+    const prev = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("previous") } });
     setIcon(prev, "chevron-up");
-    const next = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Next" } });
+    const next = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("next") } });
     setIcon(next, "chevron-down");
-    const close = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Close" } });
+    const close = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("close") } });
     setIcon(close, "x");
     const status = panel.createDiv({ cls: "mwv-find-status", text: "0" });
 
@@ -3045,13 +5159,13 @@ class MobileWebviewerView extends ItemView {
       const editor = this.app.workspace.activeEditor?.editor;
       if (editor) {
         editor.replaceSelection(markdown);
-        new Notice("Inserted link");
+        new Notice(this.plugin.tr("insertedLink"));
         return;
       }
     }
 
     await navigator.clipboard.writeText(markdown);
-    new Notice("Copied Markdown link");
+    new Notice(this.plugin.tr("copiedMarkdownLink"));
   }
 
   triggerNoteDraw(): void {
@@ -3070,6 +5184,14 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
 
+  tr(key: UiTextKey, values: Record<string, string | number> = {}): string {
+    return translateUiText(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE, key, values);
+  }
+
+  resolvedUiLanguage(): string {
+    return resolveUiLanguageCode(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE);
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
 
@@ -3077,25 +5199,25 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerMarkdownPostProcessor((el) => {
       this.processWebviewerEmbeds(el);
     });
-    this.registerDomEvent(document, "click", (event) => {
+    this.registerDomEvent(appDocument(), "click", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
-    this.registerDomEvent(document, "keydown", (event) => {
+    this.registerDomEvent(appDocument(), "keydown", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
-    this.registerDomEvent(document, "input", (event) => {
+    this.registerDomEvent(appDocument(), "input", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
     }, { capture: true });
-    this.registerDomEvent(document, "keyup", (event) => {
+    this.registerDomEvent(appDocument(), "keyup", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
     }, { capture: true });
-    this.registerDomEvent(document, "compositionend", (event) => {
+    this.registerDomEvent(appDocument(), "compositionend", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
     }, { capture: true });
-    this.registerDomEvent(document, "paste", (event) => {
+    this.registerDomEvent(appDocument(), "paste", (event) => {
       window.setTimeout(() => this.handleNoteDrawWebNoteEditEvent(event), 0);
     }, { capture: true });
-    this.registerDomEvent(document, "click", (event) => {
+    this.registerDomEvent(appDocument(), "click", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
     }, { capture: true });
     this.installNoteDrawDedupeObserver();
@@ -3111,7 +5233,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-url-in-mobile-webviewer",
+      id: "open-url",
       name: "Open URL in Note Browser",
       callback: async () => {
         const selected = this.app.workspace.activeEditor?.editor?.getSelection() ?? "";
@@ -3120,7 +5242,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-home-in-mobile-webviewer",
+      id: "open-home",
       name: "Open Note Browser Home",
       callback: () => void this.openNoteBrowser(this.settings.homeUrl)
     });
@@ -3171,11 +5293,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of Array.from(mutation.addedNodes)) {
-          if (!(node instanceof HTMLElement)) continue;
+          if (!isHtmlElement(node)) continue;
           if (!node.matches(NOTEDRAW_BUTTON_SELECTOR) && !node.querySelector(NOTEDRAW_BUTTON_SELECTOR)) continue;
           const root =
             node.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) ??
-            (mutation.target instanceof HTMLElement ? mutation.target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) : null);
+            (isHtmlElement(mutation.target) ? mutation.target.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) : null);
           if (!root) continue;
           this.queueNoteDrawButtonDedupe(root);
           return;
@@ -3288,7 +5410,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   handleNoteDrawWebNoteEditEvent(event: Event): void {
     if ((event as MobileWebviewerSyntheticEvent)._mwvSyntheticWebNoteSave) return;
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    const target = isHtmlElement(event.target) ? event.target : null;
     if (!target) return;
 
     const fromFormatToolbar = Boolean(target.closest(".notedraw-format-toolbar"));
@@ -3689,7 +5811,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       };
     });
     if (!pluginRegistry.plugins?.plugins?.notedraw) {
-      new Notice("NoteDraw plugin is not enabled.");
+      new Notice(this.tr("noteDrawDisabled"));
       return;
     }
 
@@ -3849,7 +5971,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       `<div class="mwv-embed mwv-bing-home" data-url="${this.escapeAttr(this.settings.homeUrl)}" data-mwv-browser-mode="note">`,
       "  <div class=\"mwv-bing-logo\">Bing</div>",
       "  <div class=\"mwv-bing-search\" role=\"search\">",
-      "    <input class=\"mwv-bing-input\" type=\"search\" placeholder=\"搜索 Bing\" autocomplete=\"off\" />",
+      `    <input class="mwv-bing-input" type="search" placeholder="${this.escapeAttr(this.tr("searchBing"))}" autocomplete="off" />`,
       "    <button class=\"mwv-bing-submit\" type=\"button\">→</button>",
       "  </div>",
       "  <div class=\"mwv-bing-results\"></div>",
@@ -3901,7 +6023,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       event.stopImmediatePropagation();
       await navigator.clipboard.writeText(`[${title}](${url})`);
-      new Notice("Copied link");
+      new Notice(this.tr("copiedLink"));
       return;
     }
 
@@ -3913,7 +6035,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (embed && openTarget) {
       const url =
         openTarget.dataset.mwvOpenUrl ??
-        (openTarget instanceof HTMLAnchorElement ? openTarget.href : "");
+        (isAnchorElement(openTarget) ? openTarget.href : "");
       if (!url) return;
       event.preventDefault();
       event.stopPropagation();
@@ -3951,7 +6073,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const searchUrl = DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(query));
     this.pushEmbedHistory(embed, searchUrl);
     resultHost.empty();
-    resultHost.createDiv({ cls: "mwv-bing-status", text: "Searching..." });
+    resultHost.createDiv({ cls: "mwv-bing-status", text: this.tr("searching") });
 
     try {
       const results = await this.searchBing(query);
@@ -3979,14 +6101,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (query.trim() && results.length < 80) {
       const more = main.createEl("button", {
         cls: "mwv-more-results",
-        text: "更多结果",
+        text: this.tr("moreResults"),
         attr: { type: "button" }
       });
       more.addEventListener("click", async (event) => {
         event.preventDefault();
         event.stopPropagation();
         more.disabled = true;
-        more.setText("加载中...");
+        more.setText(this.tr("loading"));
         const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
         const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
         try {
@@ -3995,7 +6117,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         } catch (error) {
           console.error("[mobile-webviewer] Bing more results failed", error);
           more.disabled = false;
-          more.setText("加载失败，重试");
+            more.setText(this.tr("loadFailedRetry"));
         }
       });
     }
@@ -4278,7 +6400,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     const add = strip.createEl("button", {
       cls: "mwv-browser-tab-add",
-      attr: { type: "button", title: "New tab", "aria-label": "New tab" }
+      attr: { type: "button", title: this.tr("newTab"), "aria-label": this.tr("newTab") }
     });
     setIcon(add, "plus");
     add.addEventListener("click", (event) => {
@@ -4296,17 +6418,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.removeClass("mwv-bing-home");
     embed.dataset.url = url;
     embed.setAttribute("data-url", url);
-    this.renderBrowserChrome(embed, url, utilityPageTitle(kind));
+    const title = this.tr(utilityPageTitleKey(kind));
+    this.renderBrowserChrome(embed, url, title);
     const page = embed.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
     page.dataset.url = url;
     page.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
-    page.createEl("h2", { cls: "mwv-page-title", text: utilityPageTitle(kind) });
+    page.createEl("h2", { cls: "mwv-page-title", text: title });
     const content = page.createDiv({ cls: "mwv-utility-content" });
     if (kind === "downloads") {
       this.renderEmbedUtilitySummary(content, [
-        ["全部", String(this.settings.downloads.length)],
-        ["完成", String(this.settings.downloads.filter((entry) => entry.status === "completed").length)],
-        ["失败", String(this.settings.downloads.filter((entry) => entry.status === "error").length)]
+        [this.tr("all"), String(this.settings.downloads.length)],
+        [this.tr("completed"), String(this.settings.downloads.filter((entry) => entry.status === "completed").length)],
+        [this.tr("failed"), String(this.settings.downloads.filter((entry) => entry.status === "error").length)]
       ]);
       this.renderDownloadUtilityList(content, embed, this.settings.downloads);
     } else if (kind === "console") {
@@ -4323,12 +6446,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (kind === "history") {
         const today = new Date().toDateString();
         this.renderEmbedUtilitySummary(content, [
-          ["全部", String(entries.length)],
-          ["今天", String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
-          ["最近", entries[0] ? hostName(entries[0].url) : "-"]
+          [this.tr("all"), String(entries.length)],
+          [this.tr("today"), String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
+          [this.tr("latest"), entries[0] ? hostName(entries[0].url) : "-"]
         ]);
       }
-      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : `No ${utilityPageTitle(kind).toLowerCase()} yet`);
+      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : this.tr("noEntries"));
     }
     this.notifyNoteDrawWebviewChanged(embed);
   }
@@ -4344,7 +6467,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   renderEntryUtilityList(parent: HTMLElement, embed: HTMLElement, entries: WebEntry[], emptyText: string): void {
     if (!entries.length) {
-      parent.createDiv({ cls: "mwv-empty", text: emptyText || "No entries" });
+      parent.createDiv({ cls: "mwv-empty", text: emptyText || this.tr("noEntries") });
       return;
     }
     const list = parent.createDiv({ cls: "mwv-utility-list" });
@@ -4358,21 +6481,21 @@ export default class MobileWebviewerPlugin extends Plugin {
       main.createDiv({ cls: "mwv-utility-url", text: entry.url });
       main.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
       const row = item.createDiv({ cls: "mwv-utility-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: "新标签", attr: { type: "button" } });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("newTab"), attr: { type: "button" } });
       open.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
-      const current = row.createEl("button", { cls: "mwv-mini-action", text: "当前打开", attr: { type: "button" } });
+      const current = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("currentOpen"), attr: { type: "button" } });
       current.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制", attr: { type: "button" } });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copy"), attr: { type: "button" } });
       copy.addEventListener("click", async () => {
         await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
-        new Notice("Copied link");
+        new Notice(this.tr("copiedLink"));
       });
     }
   }
 
   renderDownloadUtilityList(parent: HTMLElement, embed: HTMLElement, entries: DownloadEntry[]): void {
     if (!entries.length) {
-      parent.createDiv({ cls: "mwv-empty", text: "No downloads yet" });
+      parent.createDiv({ cls: "mwv-empty", text: this.tr("noDownloadsYet") });
       return;
     }
     const list = parent.createDiv({ cls: "mwv-download-list" });
@@ -4380,20 +6503,20 @@ export default class MobileWebviewerPlugin extends Plugin {
       const item = list.createDiv({ cls: `mwv-download-item is-${entry.status}` });
       const top = item.createDiv({ cls: "mwv-download-item-top" });
       top.createDiv({ cls: "mwv-download-item-title", text: entry.fileName || hostName(entry.url) });
-      top.createDiv({ cls: "mwv-download-item-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
+      top.createDiv({ cls: "mwv-download-item-state", text: this.tr("downloadState", { status: entry.status, progress: Math.round(entry.progress) }) });
       const progress = item.createDiv({ cls: "mwv-download-progress" });
       progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
       item.createDiv({ cls: "mwv-download-item-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()}` });
       item.createDiv({ cls: "mwv-download-item-path", text: entry.path || entry.message || entry.url });
       const row = item.createDiv({ cls: "mwv-download-list-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("openFile"), attr: { type: "button" } });
       open.addEventListener("click", () => void this.openDownloadEntry(entry));
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copyPath"), attr: { type: "button" } });
       copy.addEventListener("click", () => void this.copyDownloadPath(entry));
-      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("location"), attr: { type: "button" } });
       locate.addEventListener("click", () => void this.revealDownloadEntry(entry));
       if (entry.url && /^https?:\/\//i.test(entry.url)) {
-        const source = row.createEl("button", { cls: "mwv-mini-action", text: "来源", attr: { type: "button" } });
+        const source = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("source"), attr: { type: "button" } });
         source.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
       }
     }
@@ -4402,7 +6525,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   renderConsoleUtilityList(parent: HTMLElement, entries: BrowserConsoleEntry[]): void {
     parent.empty();
     if (!entries.length) {
-      parent.createDiv({ cls: "mwv-empty", text: "No console logs" });
+      parent.createDiv({ cls: "mwv-empty", text: this.tr("noConsoleLogs") });
       return;
     }
     for (const entry of entries.slice(0, 120)) {
@@ -4418,22 +6541,22 @@ export default class MobileWebviewerPlugin extends Plugin {
     const status = this.getCancipStatus();
     const contextUrl = internalUtilityContextUrl(embed.dataset.url) || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const card = parent.createDiv({ cls: "mwv-cancip-card" });
-    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? "Cancip AI 已检测到" : "Cancip AI 未启用" });
-    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? `版本 ${status.version || "unknown"}，可从网页标签直接打开。` : "启用 Cancip 后这里会成为网页上下文到 AI 的入口。" });
+    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? this.tr("cancipDetected") : this.tr("cancipNotEnabled") });
+    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? this.tr("cancipDetectedDesc", { version: status.version || "unknown" }) : this.tr("cancipNotEnabledDesc") });
     const row = card.createDiv({ cls: "mwv-utility-actions" });
-    const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开 Cancip", attr: { type: "button" } });
+    const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("openCancip"), attr: { type: "button" } });
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.openCancip());
-    const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制当前网页上下文", attr: { type: "button" } });
+    const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copyCurrentContext"), attr: { type: "button" } });
     copy.addEventListener("click", async () => {
       await navigator.clipboard.writeText([
         "Mobile Webviewer context",
         `URL: ${contextUrl}`,
         `Title: ${hostName(contextUrl)}`,
         "",
-        "请基于这个网页上下文继续分析、整理、摘录或生成笔记。"
+        this.tr("cancipContextPrompt")
       ].join("\n"));
-      new Notice("Copied Cancip context");
+      new Notice(this.tr("copiedCancipContext"));
     });
   }
 
@@ -4484,13 +6607,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.dataset.url = url;
     embed.setAttribute("data-url", url);
     embed.removeClass("mwv-bing-home");
-    this.renderBrowserChrome(embed, url, "Loading");
+    this.renderBrowserChrome(embed, url, this.tr("loading"));
     this.notifyNoteDrawWebviewChanged(embed);
 
     if (this.settings.liveBrowserFirst) {
       const reader = embed.createDiv({ cls: "mwv-reader-panel is-loading mwv-note-front-panel" });
-      reader.createDiv({ cls: "mwv-reader-panel-title", text: "Reader" });
-      reader.createDiv({ cls: "mwv-reader-loading-text", text: "正在提取页面摘要..." });
+      reader.createDiv({ cls: "mwv-reader-panel-title", text: this.tr("reader") });
+      reader.createDiv({ cls: "mwv-reader-loading-text", text: this.tr("readerExtracting") });
       this.renderLiveBrowserSurface(embed, url);
       try {
         const page = await this.fetchNotePage(url);
@@ -4582,7 +6705,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async handleEmbedDownloadCandidate(embed: HTMLElement, url: string): Promise<void> {
     await this.addConsole("info", `Detected download link: ${url}`, embed.dataset.url || url);
     const entry = await this.downloadUrlFile(url);
-    new Notice(`Download complete: ${entry.path || entry.message}`);
+    new Notice(this.tr("downloadComplete", { path: entry.path || entry.message }));
   }
 
   async syncEmbedReaderFromUrl(embed: HTMLElement, url: string): Promise<void> {
@@ -4650,7 +6773,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   updateEmbedChrome(embed: HTMLElement, url: string, title: string): void {
     embed.dataset.mwvCurrentTitle = title || hostName(url);
     const address = embed.querySelector<HTMLInputElement>(".mwv-browser-url");
-    if (address && document.activeElement !== address && !address.matches(":focus")) {
+    if (address && address.ownerDocument.activeElement !== address && !address.matches(":focus")) {
       address.value = url;
     }
     const form = embed.querySelector<HTMLElement>(".mwv-browser-address");
@@ -4693,11 +6816,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.removeClass("is-loading");
     panel.dataset.url = page.url;
     panel.setAttribute("data-url", page.url);
-    panel.createDiv({ cls: "mwv-reader-panel-title", text: "Reader" });
+    panel.createDiv({ cls: "mwv-reader-panel-title", text: this.tr("reader") });
     panel.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     panel.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
     const actions = panel.createDiv({ cls: "mwv-note-actions" });
-    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? `已入库 ${note.markdownPath}` : "自动保存到插件" });
+    const status = actions.createSpan({ cls: "mwv-webnote-status", text: note?.markdownPath ? this.tr("savedMarkdown", { path: note.markdownPath }) : this.tr("autoSavedPlugin") });
     if (page.images.length) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
@@ -4723,7 +6846,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (clean) content.createEl("p", { text: clean });
       }
     }
-    const doodleLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const doodleLayer = content.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
     doodleLayer.addClass("mwv-doodle-layer");
     doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
     doodleLayer.setAttribute("preserveAspectRatio", "none");
@@ -4746,12 +6869,12 @@ export default class MobileWebviewerPlugin extends Plugin {
         updatedAt: Date.now()
       });
       currentNote = saved;
-      status.setText(saved.markdownPath ? `已自动保存，已入库 ${saved.markdownPath}` : "已自动保存到插件");
+      status.setText(saved.markdownPath ? this.tr("savedMarkdown", { path: saved.markdownPath }) : this.tr("savedPlugin"));
       return saved;
     };
     const queue = () => {
       if (!this.settings.autoSaveWebNotes) return;
-      status.setText("保存中...");
+      status.setText(this.tr("saving"));
       if (statePanel._mwvFlushTimer) window.clearTimeout(statePanel._mwvFlushTimer);
       statePanel._mwvFlushTimer = window.setTimeout(() => void save(), 450);
     };
@@ -4802,7 +6925,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       finishDoodle(event, false);
       const [x, y] = point(event);
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      const path = doodleLayer.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", `M ${x.toFixed(1)} ${y.toFixed(1)}`);
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", "var(--interactive-accent)");
@@ -4824,7 +6947,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       const [x, y] = point(event);
       activePath.setAttribute("d", `${activePath.getAttribute("d")} L ${x.toFixed(1)} ${y.toFixed(1)}`);
-      status.setText("保存中...");
+      status.setText(this.tr("saving"));
       queue();
     });
     doodleLayer.addEventListener("pointerup", finishDoodle);
@@ -4860,11 +6983,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       console.error("[mobile-webviewer] embed fallback failed", error);
       reader.removeClass("is-loading");
       reader.empty();
-      reader.createDiv({ cls: "mwv-reader-panel-title", text: "Reader" });
+      reader.createDiv({ cls: "mwv-reader-panel-title", text: this.tr("reader") });
       reader.createDiv({ cls: "mwv-note-source", text: hostName(url) });
-      reader.createEl("h2", { cls: "mwv-page-title", text: hostName(url) || "Page" });
+      reader.createEl("h2", { cls: "mwv-page-title", text: hostName(url) || this.tr("page") });
       const content = reader.createDiv({ cls: "mwv-md-content mwv-webnote-editor", attr: { contenteditable: "true", spellcheck: "true" } });
-      content.createEl("p", { text: reason || "页面加载受限，已保留可编辑笔记层。" });
+      content.createEl("p", { text: reason || this.tr("pageLoadLimited") });
       content.createEl("p", { text: url });
     }
   }
@@ -4907,7 +7030,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       value: query,
       attr: {
         type: "search",
-        placeholder: "搜索 Bing",
+        placeholder: this.tr("searchBing"),
         autocomplete: "off"
       }
     });
@@ -4919,21 +7042,22 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     if (query.trim()) {
       const tabs = embed.createDiv({ cls: "mwv-bing-tabs" });
-      for (const item of [
-        ["网页", DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(query))],
-        ["图片", `https://www.bing.com/images/search?q=${encodeURIComponent(query)}`],
-        ["视频", `https://www.bing.com/videos/search?q=${encodeURIComponent(query)}`],
-        ["学术", `https://www.bing.com/search?q=${encodeURIComponent(`${query} 学术`)}`],
-        ["词典", `https://www.bing.com/search?q=${encodeURIComponent(`${query} 词典`)}`],
-        ["地图", `https://www.bing.com/maps?q=${encodeURIComponent(query)}`],
-        ["更多", DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(`${query} more`))]
-      ]) {
+      const tabItems = [
+        [this.tr("webResultsTab"), DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(query))],
+        [this.tr("imageResultsTab"), `https://www.bing.com/images/search?q=${encodeURIComponent(query)}`],
+        [this.tr("videoResultsTab"), `https://www.bing.com/videos/search?q=${encodeURIComponent(query)}`],
+        [this.tr("academicTab"), `https://www.bing.com/search?q=${encodeURIComponent(`${query} academic`)}`],
+        [this.tr("dictionaryTab"), `https://www.bing.com/search?q=${encodeURIComponent(`${query} dictionary`)}`],
+        [this.tr("mapsTab"), `https://www.bing.com/maps?q=${encodeURIComponent(query)}`],
+        [this.tr("moreTab"), DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(`${query} more`))]
+      ];
+      tabItems.forEach((item, index) => {
         const tab = tabs.createEl("button", {
-          cls: item[0] === "网页" ? "mwv-bing-tab is-active" : "mwv-bing-tab",
+          cls: index === 0 ? "mwv-bing-tab is-active" : "mwv-bing-tab",
           attr: { type: "button", "data-mwv-open-url": item[1] }
         });
         tab.createSpan({ text: item[0] });
-      }
+      });
     }
 
     const resultHost = embed.createDiv({ cls: "mwv-bing-results" });
@@ -4993,7 +7117,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       value: query,
       attr: { type: "search", placeholder: "Search Bing" }
     });
-    const button = form.createEl("button", { text: "Search", attr: { type: "submit" } });
+    const button = form.createEl("button", { text: this.tr("search"), attr: { type: "submit" } });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const next = DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(input.value.trim()));
@@ -5004,7 +7128,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     if (query) {
       const list = embed.createDiv({ cls: "mwv-md-results" });
-      list.createEl("p", { text: "Searching..." });
+      list.createEl("p", { text: this.tr("searching") });
       this.searchBing(query)
         .then((results) => {
           list.empty();
@@ -5071,13 +7195,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       return button;
     };
 
-    makeNavButton("arrow-left", "Back", () => void this.navigateEmbedBack(embed), this.getEmbedStack(embed, "mwvBack").length === 0);
-    makeNavButton("arrow-right", "Forward", () => void this.navigateEmbedForward(embed), this.getEmbedStack(embed, "mwvForward").length === 0);
-    makeNavButton("rotate-cw", "Reload", () => void this.refreshEmbed(embed));
-    makeNavButton("home", "Home", () => void this.openUrlInEmbed(embed, this.settings.homeUrl));
-    makeModeButton("file-text", "笔记", "note");
-    makeModeButton("globe-2", "网页", "web");
-    makeNavButton("file-down", "存 MD", () => void this.exportEmbedWebNote(embed));
+    makeNavButton("arrow-left", this.tr("back"), () => void this.navigateEmbedBack(embed), this.getEmbedStack(embed, "mwvBack").length === 0);
+    makeNavButton("arrow-right", this.tr("forward"), () => void this.navigateEmbedForward(embed), this.getEmbedStack(embed, "mwvForward").length === 0);
+    makeNavButton("rotate-cw", this.tr("reload"), () => void this.refreshEmbed(embed));
+    makeNavButton("home", this.tr("home"), () => void this.openUrlInEmbed(embed, this.settings.homeUrl));
+    makeModeButton("file-text", this.tr("note"), "note");
+    makeModeButton("globe-2", this.tr("web"), "web");
+    makeNavButton("file-down", this.tr("saveMd"), () => void this.exportEmbedWebNote(embed));
 
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
@@ -5093,12 +7217,12 @@ export default class MobileWebviewerPlugin extends Plugin {
         autocomplete: "off",
         autocapitalize: "off",
         spellcheck: "false",
-        "aria-label": "Address"
+        "aria-label": this.tr("address")
       }
     });
     const go = address.createEl("button", {
       cls: "mwv-browser-go",
-      attr: { type: "submit", title: "Go", "aria-label": "Go" }
+      attr: { type: "submit", title: this.tr("go"), "aria-label": this.tr("go") }
     });
     setIcon(go, "arrow-right");
     address.addEventListener("submit", (event) => {
@@ -5108,7 +7232,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
-    const more = actions.createEl("button", { cls: "mwv-browser-action mwv-browser-more", attr: { type: "button", title: "More", "aria-label": "More" } });
+    const more = actions.createEl("button", { cls: "mwv-browser-action mwv-browser-more", attr: { type: "button", title: this.tr("more"), "aria-label": this.tr("more") } });
     more.dataset.mwvUrl = url;
     more.dataset.mwvTitle = title;
     setIcon(more, "more-horizontal");
@@ -5146,7 +7270,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       for (const mutation of mutations) {
         if (mutation.type !== "childList") continue;
         const touchedChrome = Array.from(mutation.removedNodes).some((node) =>
-          node instanceof HTMLElement &&
+          isHtmlElement(node) &&
           (node.hasClass("mwv-browser-chrome") || node.hasClass("mwv-browser-status") || node.hasClass("mwv-embed-tab-strip") || node.querySelector?.(".mwv-browser-chrome, .mwv-browser-status, .mwv-embed-tab-strip"))
         );
         const missingChrome = !embed.querySelector(":scope > .mwv-browser-chrome") || !embed.querySelector(":scope > .mwv-embed-tab-strip");
@@ -5225,19 +7349,19 @@ export default class MobileWebviewerPlugin extends Plugin {
   async exportEmbedWebNote(embed: HTMLElement): Promise<void> {
     const panel = embed.querySelector<WebNotePanelElement>(".mwv-reader-panel");
     if (!panel) {
-      new Notice("Reader note is not ready yet");
+      new Notice(this.tr("readerNoteNotReady"));
       return;
     }
     await panel._mwvFlushWebNote?.();
     const url = panel.dataset.url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const note = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
     if (!note) {
-      new Notice("No web note to export");
+      new Notice(this.tr("noWebNoteToExport"));
       return;
     }
     const exported = await this.exportWebNoteMarkdown(note);
-    panel.querySelector<HTMLElement>(".mwv-webnote-status")?.setText(`已入库 ${exported.markdownPath}`);
-    new Notice(`Saved to ${exported.markdownPath}`);
+    panel.querySelector<HTMLElement>(".mwv-webnote-status")?.setText(this.tr("savedMarkdown", { path: exported.markdownPath }));
+    new Notice(this.tr("savedTo", { path: exported.markdownPath }));
   }
 
   toggleMorePanel(embed: HTMLElement, chrome: HTMLElement, url: string, title: string): void {
@@ -5250,14 +7374,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     const panel = embed.createDiv({ cls: "mwv-extension-panel" });
     const activeScripts = this.getActiveUserScriptRules(url);
     const head = panel.createDiv({ cls: "mwv-more-head" });
-    head.createDiv({ cls: "mwv-extension-title", text: "More" });
-    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": "Close More" } });
+    head.createDiv({ cls: "mwv-extension-title", text: this.tr("more") });
+    const close = head.createEl("button", { cls: "mwv-more-close", attr: { type: "button", "aria-label": this.tr("closeMore") } });
     setIcon(close, "x");
     close.addEventListener("click", () => panel.remove());
     const body = panel.createDiv({ cls: "mwv-more-body" });
     const feedback = body.createDiv({
       cls: "mwv-more-feedback",
-      text: `下载保存到: ${this.normalizeDownloadFolder()}`
+      text: this.tr("downloadSavedTo", { folder: this.normalizeDownloadFolder() })
     });
     const sections = body.createDiv({ cls: "mwv-more-sections" });
     const setFeedback = (message: string, isError = false) => {
@@ -5269,11 +7393,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       section.createDiv({ cls: "mwv-more-section-title", text: title });
       return section.createDiv({ cls: "mwv-more-actions" });
     };
-    const tabActions = addGroup("标签");
-    const pageActions = addGroup("页面");
-    const viewActions = addGroup("视图");
-    const saveActions = addGroup("保存");
-    const toolActions = addGroup("工具");
+    const tabActions = addGroup(this.tr("tabs"));
+    const pageActions = addGroup(this.tr("page"));
+    const viewActions = addGroup(this.tr("view"));
+    const saveActions = addGroup(this.tr("save"));
+    const toolActions = addGroup(this.tr("tools"));
     const addAction = (
       group: HTMLElement,
       icon: string,
@@ -5288,15 +7412,15 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.preventDefault();
         event.stopPropagation();
         button.disabled = true;
-        setFeedback(`正在执行: ${label}`);
+        setFeedback(this.tr("runningAction", { label }));
         void Promise.resolve(onClick())
           .then(() => {
-            setFeedback(`已完成: ${label}`);
+            setFeedback(this.tr("completedAction", { label }));
             if (closePanel) panel.remove();
           })
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            setFeedback(`${label} 失败: ${message}`, true);
+            setFeedback(this.tr("failedAction", { label, message }), true);
             void this.addConsole("error", `${label} failed: ${message}`, url);
             new Notice(`${label} failed`);
           })
@@ -5307,57 +7431,57 @@ export default class MobileWebviewerPlugin extends Plugin {
       return button;
     };
 
-    addAction(tabActions, "download", `下载页 (${this.settings.downloads.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("downloads")), true);
-    addAction(tabActions, "history", `历史 (${this.settings.history.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("history")), true);
-    addAction(tabActions, "book-open", `收藏 (${this.settings.bookmarks.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("bookmarks")), true);
-    addAction(tabActions, "library", `稍后读 (${this.settings.readingList.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("reading")), true);
-    addAction(tabActions, "terminal", `反馈日志 (${this.settings.consoleEntries.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("console")), true);
-    addAction(tabActions, "bot", "Cancip AI", () => void this.newEmbedBrowserTab(embed, utilityPageUrl("cancip", url)), true);
+    addAction(tabActions, "download", this.tr("downloadsCount", { count: this.settings.downloads.length }), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("downloads")), true);
+    addAction(tabActions, "history", this.tr("historyCount", { count: this.settings.history.length }), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("history")), true);
+    addAction(tabActions, "book-open", this.tr("bookmarksCount", { count: this.settings.bookmarks.length }), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("bookmarks")), true);
+    addAction(tabActions, "library", this.tr("readingCount", { count: this.settings.readingList.length }), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("reading")), true);
+    addAction(tabActions, "terminal", this.tr("consoleCount", { count: this.settings.consoleEntries.length }), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("console")), true);
+    addAction(tabActions, "bot", this.tr("cancipAi"), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("cancip", url)), true);
 
-    addAction(pageActions, "external-link", "用浏览器打开", () => {
+    addAction(pageActions, "external-link", this.tr("openInBrowser"), () => {
       window.open(url, "_blank");
     });
-    addAction(pageActions, "copy", "复制链接", async () => {
+    addAction(pageActions, "copy", this.tr("copyLink"), async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
-      new Notice("Copied link");
+      new Notice(this.tr("copiedLink"));
     });
-    addAction(pageActions, "share-2", "分享", async () => {
+    addAction(pageActions, "share-2", this.tr("share"), async () => {
       await this.sharePage(url, title || hostName(url));
     });
-    addAction(pageActions, "activity", "浏览器状态", () => {
+    addAction(pageActions, "activity", this.tr("browserStatus"), () => {
       this.toggleEmbedBrowserStatusPanel(body, embed, url);
     }, false);
 
-    addAction(viewActions, "zoom-in", `放大 ${this.settings.pageZoom}%`, async () => {
+    addAction(viewActions, "zoom-in", this.tr("zoomIn", { value: this.settings.pageZoom }), async () => {
       await this.setPageZoom(this.settings.pageZoom + 10, embed);
     }, false);
-    addAction(viewActions, "zoom-out", "缩小", async () => {
+    addAction(viewActions, "zoom-out", this.tr("zoomOut"), async () => {
       await this.setPageZoom(this.settings.pageZoom - 10, embed);
     }, false);
-    addAction(viewActions, "monitor-smartphone", this.settings.desktopMode ? "手机版" : "桌面版", async () => {
+    addAction(viewActions, "monitor-smartphone", this.settings.desktopMode ? this.tr("mobileVersion") : this.tr("desktopVersion"), async () => {
       await this.toggleDesktopMode(embed);
     }, false);
-    addAction(viewActions, "moon", this.settings.nightMode ? "日间模式" : "夜间模式", async () => {
+    addAction(viewActions, "moon", this.settings.nightMode ? this.tr("dayMode") : this.tr("nightMode"), async () => {
       await this.toggleBooleanMode("nightMode", embed, "Night mode");
     }, false);
-    addAction(viewActions, "eye", this.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", async () => {
+    addAction(viewActions, "eye", this.settings.eyeProtectionMode ? this.tr("closeEyeProtection") : this.tr("eyeProtection"), async () => {
       await this.toggleBooleanMode("eyeProtectionMode", embed, "Eye mode");
     }, false);
-    addAction(viewActions, "shield-check", this.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
+    addAction(viewActions, "shield-check", this.settings.adBlockEnabled ? this.tr("closeAdBlock") : this.tr("adBlocking"), async () => {
       await this.setAdMode(!this.settings.adBlockEnabled, false, embed);
       await this.refreshEmbed(embed);
     }, false);
-    addAction(viewActions, "scan", this.settings.markAdsEnabled ? "取消标记广告" : "标记广告", async () => {
+    addAction(viewActions, "scan", this.settings.markAdsEnabled ? this.tr("unmarkAds") : this.tr("markAds"), async () => {
       await this.setAdMode(false, !this.settings.markAdsEnabled, embed);
       await this.refreshEmbed(embed);
     }, false);
-    addAction(viewActions, "glasses", this.settings.incognitoMode ? "关闭无痕" : "无痕", async () => {
+    addAction(viewActions, "glasses", this.settings.incognitoMode ? this.tr("closeIncognito") : this.tr("incognito"), async () => {
       await this.toggleBooleanMode("incognitoMode", embed, "Incognito");
     }, false);
-    addAction(viewActions, "maximize", this.settings.fullScreenMode ? "退出全屏" : "全屏", async () => {
+    addAction(viewActions, "maximize", this.settings.fullScreenMode ? this.tr("exitFullscreen") : this.tr("fullscreen"), async () => {
       await this.toggleFullscreen(embed);
     }, false);
-    addAction(viewActions, "file-x", this.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
+    addAction(viewActions, "file-x", this.settings.jsDisabled ? this.tr("enableJs") : this.tr("disableJs"), async () => {
       await this.toggleBooleanMode("jsDisabled", embed, "JavaScript");
       await this.refreshEmbed(embed);
     }, false);
@@ -5365,95 +7489,95 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.toggleUserAgent(embed);
       await this.refreshEmbed(embed);
     }, false);
-    addAction(viewActions, "rotate-cw", this.settings.rotatedMode ? "关闭横屏" : "横屏", async () => {
+    addAction(viewActions, "rotate-cw", this.settings.rotatedMode ? this.tr("closeLandscape") : this.tr("landscape"), async () => {
       await this.toggleBooleanMode("rotatedMode", embed, "Rotate");
     }, false);
-    addAction(viewActions, "type", `字号 ${this.settings.readerFontScale}%`, async () => {
+    addAction(viewActions, "type", this.tr("fontSize", { value: this.settings.readerFontScale }), async () => {
       await this.adjustReaderFont(10, embed);
     }, false);
 
-    addAction(saveActions, "download", "下载文件", async () => {
+    addAction(saveActions, "download", this.tr("downloadFile"), async () => {
       await this.downloadUrlFile(url);
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
-    addAction(saveActions, "file-code", "保存 HTML", async () => {
+    addAction(saveActions, "file-code", this.tr("saveHtml"), async () => {
       await this.downloadCurrentPageHtml(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
-    addAction(saveActions, "archive", "保存 MHT", async () => {
+    addAction(saveActions, "archive", this.tr("saveMht"), async () => {
       await this.downloadCurrentPageMhtml(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
-    addAction(saveActions, "file-down", "离线页面", async () => {
+    addAction(saveActions, "file-down", this.tr("offlinePage"), async () => {
       await this.saveOfflinePage(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
-    addAction(saveActions, "file-symlink", "桌面快捷方式", async () => {
+    addAction(saveActions, "file-symlink", this.tr("desktopShortcut"), async () => {
       const path = await this.createShortcutFile(url, title || hostName(url));
-      this.toggleToolsPanel(body, "Desktop shortcut", [`Saved: ${path}`]);
+      this.toggleToolsPanel(body, this.tr("desktopShortcut"), [this.tr("saved", { path })]);
     }, false);
     addAction(
       saveActions,
       "star",
-      this.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签",
+      this.settings.bookmarks.some((entry) => entry.url === url) ? this.tr("removeBookmark") : this.tr("addBookmark"),
       async () => {
         const added = await this.toggleBookmarkEntry(url, title || hostName(url));
-        new Notice(added ? "Bookmark added" : "Bookmark removed");
+        new Notice(added ? this.tr("bookmarkAdded") : this.tr("bookmarkRemoved"));
       }
     );
-    addAction(saveActions, "book-open", "加入稍后读", async () => {
+    addAction(saveActions, "book-open", this.tr("addReadingList"), async () => {
       await this.addReadingList({ title: title || hostName(url), url, time: Date.now() });
-      new Notice("Added to reading list");
+      new Notice(this.tr("addedReadingList"));
     });
 
-    addAction(toolActions, "text-cursor-input", "自动填表", async () => {
+    addAction(toolActions, "text-cursor-input", this.tr("autofillPage"), async () => {
       const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
       if (!frame) return;
       const count = await this.autofillFrame(frame, url);
-      if (count) new Notice(`Autofilled ${count} field(s)`);
+      if (count) new Notice(this.tr("completedAction", { label: this.tr("autofillPage") }));
     });
-    addAction(toolActions, "wand-sparkles", `脚本 (${activeScripts.length})`, () => {
+    addAction(toolActions, "wand-sparkles", this.tr("scriptsCount", { count: activeScripts.length }), () => {
       this.toggleUserScriptsPanel(body, url);
     }, false);
-    addAction(toolActions, "settings", "站点设置", () => {
+    addAction(toolActions, "settings", this.tr("siteSettings"), () => {
       this.toggleSiteSettingsPanel(body, url);
     }, false);
-    addAction(toolActions, "radio", "媒体嗅探", () => {
+    addAction(toolActions, "radio", this.tr("mediaSniff"), () => {
       void this.toggleAssetsPanel(body, url, "media");
     }, false);
-    addAction(toolActions, "layers", "页面资源", () => {
+    addAction(toolActions, "layers", this.tr("pageAssets"), () => {
       void this.toggleAssetsPanel(body, url, "resources");
     }, false);
-    addAction(toolActions, "code-2", "查看源码", () => {
+    addAction(toolActions, "code-2", this.tr("viewSource"), () => {
       void this.toggleSourcePanel(body, url);
     }, false);
-    addAction(toolActions, "languages", "翻译", () => {
+    addAction(toolActions, "languages", this.tr("translateAction"), () => {
       this.toggleTranslatePanel(body, embed, url);
     }, false);
-    addAction(toolActions, "volume-2", "朗读", async () => {
+    addAction(toolActions, "volume-2", this.tr("readAloud"), async () => {
       await this.readPageAloud(url);
     }, false);
-    addAction(toolActions, "qr-code", "二维码", () => {
+    addAction(toolActions, "qr-code", this.tr("qrCode"), () => {
       this.toggleQrPanel(body, url);
     }, false);
-    addAction(toolActions, "shield-alert", "反馈报告", () => {
+    addAction(toolActions, "shield-alert", this.tr("report"), () => {
       this.toggleReportPanel(body, url);
     }, false);
-    addAction(toolActions, "briefcase", "工具状态", () => {
-      this.toggleToolsPanel(body, "Toolbox", [
-        `Mode: ${this.settings.desktopMode ? "Desktop" : "Mobile"}`,
+    addAction(toolActions, "briefcase", this.tr("toolStatus"), () => {
+      this.toggleToolsPanel(body, this.tr("toolStatus"), [
+        `Mode: ${this.settings.desktopMode ? this.tr("desktop") : this.tr("mobile")}`,
         `UA: ${this.settings.userAgentMode}`,
-        `JavaScript: ${this.settings.jsDisabled ? "Disabled" : "Enabled"}`,
-        `Ad block: ${this.settings.adBlockEnabled ? "On" : "Off"}`
+        `JavaScript: ${this.settings.jsDisabled ? this.tr("disabled") : this.tr("yes")}`,
+        `${this.tr("adBlock")}: ${this.settings.adBlockEnabled ? this.tr("yes") : this.tr("no")}`
       ]);
     }, false);
-    addAction(toolActions, "trash", `清缓存 (${this.settings.pageCache.length})`, async () => {
+    addAction(toolActions, "trash", this.tr("clearCache", { count: this.settings.pageCache.length }), async () => {
       await this.clearCache();
-      this.toggleConsolePanel(body, url, "Cache cleared");
+      this.toggleConsolePanel(body, url, this.tr("cacheCleared"));
     }, false);
-    addAction(toolActions, "trash-2", "清浏览数据", async () => {
+    addAction(toolActions, "trash-2", this.tr("clearBrowsingDataAction"), async () => {
       await this.clearBrowsingData();
-      this.toggleConsolePanel(body, url, "Browsing data cleared");
+      this.toggleConsolePanel(body, url, this.tr("browsingDataCleared"));
     }, false);
 
     const enabled = body.createDiv({ cls: "mwv-extension-grid" });
@@ -5521,10 +7645,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.querySelector<HTMLElement>(".mwv-history-panel")?.remove();
     panel.querySelector<HTMLElement>(".mwv-downloads-panel")?.remove();
     const consolePanel = panel.createDiv({ cls: "mwv-console-panel" });
-    consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `反馈日志 · ${hostName(url)}` });
+    consolePanel.createDiv({ cls: "mwv-console-title", text: message ?? `${this.tr("console")} · ${hostName(url)}` });
     const entries = this.settings.consoleEntries.slice(0, 10);
     if (!entries.length) {
-      consolePanel.createDiv({ cls: "mwv-console-empty", text: "暂无日志。执行搜索、下载、保存、脚本后会出现在这里。" });
+      consolePanel.createDiv({ cls: "mwv-console-empty", text: this.tr("emptyConsoleDesc") });
       return;
     }
     for (const entry of entries) {
@@ -5547,10 +7671,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.querySelector<HTMLElement>(".mwv-history-panel")?.remove();
     panel.querySelector<HTMLElement>(".mwv-downloads-panel")?.remove();
     const readingPanel = panel.createDiv({ cls: "mwv-reading-panel" });
-    readingPanel.createDiv({ cls: "mwv-reading-title", text: "Reading list" });
+    readingPanel.createDiv({ cls: "mwv-reading-title", text: this.tr("readingList") });
     const entries = this.settings.readingList.slice(0, 20);
     if (!entries.length) {
-      readingPanel.createDiv({ cls: "mwv-reading-empty", text: "No saved pages" });
+      readingPanel.createDiv({ cls: "mwv-reading-empty", text: this.tr("noSavedPages") });
       return;
     }
     for (const entry of entries) {
@@ -5574,10 +7698,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.querySelector<HTMLElement>(".mwv-userscript-panel")?.remove();
     panel.querySelector<HTMLElement>(".mwv-downloads-panel")?.remove();
     const historyPanel = panel.createDiv({ cls: "mwv-history-panel" });
-    historyPanel.createDiv({ cls: "mwv-history-title", text: "History" });
+    historyPanel.createDiv({ cls: "mwv-history-title", text: this.tr("history") });
     const entries = this.settings.history.slice(0, 30);
     if (!entries.length) {
-      historyPanel.createDiv({ cls: "mwv-history-empty", text: "No history yet" });
+      historyPanel.createDiv({ cls: "mwv-history-empty", text: this.tr("noHistoryYet") });
       return;
     }
     for (const entry of entries) {
@@ -5602,35 +7726,35 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.querySelector<HTMLElement>(".mwv-userscript-panel")?.remove();
     panel.querySelector<HTMLElement>(".mwv-history-panel")?.remove();
     const downloadsPanel = panel.createDiv({ cls: "mwv-downloads-panel" });
-    downloadsPanel.createDiv({ cls: "mwv-downloads-title", text: message ?? "Downloads" });
+    downloadsPanel.createDiv({ cls: "mwv-downloads-title", text: message ?? this.tr("downloads") });
     const entries = this.settings.downloads.slice(0, 20);
     if (!entries.length) {
-      downloadsPanel.createDiv({ cls: "mwv-downloads-empty", text: "No downloads yet" });
+      downloadsPanel.createDiv({ cls: "mwv-downloads-empty", text: this.tr("noDownloadsYet") });
       return;
     }
     for (const entry of entries) {
       const item = downloadsPanel.createDiv({ cls: `mwv-download-item is-${entry.status}` });
       const top = item.createDiv({ cls: "mwv-download-item-top" });
       top.createDiv({ cls: "mwv-download-item-title", text: entry.fileName || hostName(entry.url) });
-      top.createDiv({ cls: "mwv-download-item-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
+      top.createDiv({ cls: "mwv-download-item-state", text: this.tr("downloadState", { status: entry.status, progress: Math.round(entry.progress) }) });
       const progress = item.createDiv({ cls: "mwv-download-progress" });
       progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
       item.createDiv({ cls: "mwv-download-item-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()}` });
       item.createDiv({ cls: "mwv-download-item-path", text: entry.path || entry.message || entry.url });
       const row = item.createDiv({ cls: "mwv-download-list-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("openFile"), attr: { type: "button" } });
       open.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         void this.openDownloadEntry(entry);
       });
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copyPath"), attr: { type: "button" } });
       copy.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         void this.copyDownloadPath(entry);
       });
-      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("location"), attr: { type: "button" } });
       locate.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -5664,7 +7788,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const translatePanel = panel.createDiv({ cls: "mwv-translate-panel" });
-    translatePanel.createDiv({ cls: "mwv-translate-title", text: "Translate page" });
+    translatePanel.createDiv({ cls: "mwv-translate-title", text: this.tr("translatePage") });
     const grid = translatePanel.createDiv({ cls: "mwv-translate-grid" });
     for (const language of TRANSLATE_CHOICES) {
       const button = grid.createEl("button", {
@@ -5707,7 +7831,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.removeUtilityPanels(panel);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
     const toolsPanel = panel.createDiv({ cls: "mwv-tools-panel" });
-    toolsPanel.createDiv({ cls: "mwv-tools-title", text: "Browser status" });
+    toolsPanel.createDiv({ cls: "mwv-tools-title", text: this.tr("browserStatus") });
     for (const row of this.describeBrowserSurface(surface ?? undefined, embed.dataset.url || url)) {
       toolsPanel.createDiv({ cls: "mwv-tools-row", text: row });
     }
@@ -5723,12 +7847,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const sitePanel = panel.createDiv({ cls: "mwv-site-panel" });
     sitePanel.createDiv({ cls: "mwv-site-title", text: `Site settings · ${hostName(url)}` });
     const rows = [
-      ["JavaScript", this.settings.jsDisabled ? "Disabled" : "Enabled"],
-      ["Ads", this.settings.adBlockEnabled ? "Blocked" : this.settings.markAdsEnabled ? "Marked" : "Allowed"],
-      ["Mode", this.settings.desktopMode ? "Desktop" : "Mobile"],
+      ["JavaScript", this.settings.jsDisabled ? this.tr("disabled") : this.tr("yes")],
+      [this.tr("adBlock"), this.settings.adBlockEnabled ? this.tr("yes") : this.settings.markAdsEnabled ? this.tr("markAds") : this.tr("no")],
+      [this.tr("view"), this.settings.desktopMode ? this.tr("desktop") : this.tr("mobile")],
       ["UA", this.settings.userAgentMode],
-      ["History", this.settings.incognitoMode ? "Incognito" : "Saved"],
-      ["Font", `${this.settings.readerFontScale}%`]
+      [this.tr("history"), this.settings.incognitoMode ? this.tr("incognito") : this.tr("savedPlugin")],
+      [this.tr("fontSize", { value: this.settings.readerFontScale }), `${this.settings.readerFontScale}%`]
     ];
     for (const [name, value] of rows) {
       const row = sitePanel.createDiv({ cls: "mwv-site-row" });
@@ -5745,9 +7869,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const assetsPanel = panel.createDiv({ cls: "mwv-assets-panel" });
-    const title = mode === "media" ? "Media resources" : mode === "developer" ? "Developer tools" : "Page resources";
+    const title = mode === "media" ? this.tr("mediaSniff") : mode === "developer" ? this.tr("tools") : this.tr("pageAssets");
     assetsPanel.createDiv({ cls: "mwv-assets-title", text: title });
-    assetsPanel.createDiv({ cls: "mwv-assets-empty", text: "Loading..." });
+    assetsPanel.createDiv({ cls: "mwv-assets-empty", text: this.tr("loading") });
     try {
       const assets = await this.extractPageAssets(url);
       assetsPanel.empty();
@@ -5759,7 +7883,7 @@ export default class MobileWebviewerPlugin extends Plugin {
             ? [...assets.scripts.map((item) => `JS ${item}`), ...assets.styles.map((item) => `CSS ${item}`), `HTML ${assets.html.length} chars`]
             : [...assets.links.map((item) => `LINK ${item}`), ...assets.media.map((item) => `MEDIA ${item}`), ...assets.scripts.map((item) => `JS ${item}`), ...assets.styles.map((item) => `CSS ${item}`)];
       if (!rows.length) {
-        assetsPanel.createDiv({ cls: "mwv-assets-empty", text: "No resources found" });
+        assetsPanel.createDiv({ cls: "mwv-assets-empty", text: this.tr("noResourcesFound") });
       }
       for (const rowText of rows.slice(0, 60)) {
         const row = assetsPanel.createDiv({ cls: "mwv-assets-row" });
@@ -5780,21 +7904,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const sourcePanel = panel.createDiv({ cls: "mwv-source-panel" });
-    sourcePanel.createDiv({ cls: "mwv-source-title", text: "Page source" });
-    sourcePanel.createDiv({ cls: "mwv-source-code", text: "Loading..." });
+    sourcePanel.createDiv({ cls: "mwv-source-title", text: this.tr("pageSource") });
+    sourcePanel.createDiv({ cls: "mwv-source-code", text: this.tr("loading") });
     try {
       const assets = await this.extractPageAssets(url);
       sourcePanel.empty();
-      sourcePanel.createDiv({ cls: "mwv-source-title", text: "Page source" });
-      const copy = sourcePanel.createEl("button", { cls: "mwv-source-copy", text: "Copy source", attr: { type: "button" } });
+      sourcePanel.createDiv({ cls: "mwv-source-title", text: this.tr("pageSource") });
+      const copy = sourcePanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copySource"), attr: { type: "button" } });
       copy.addEventListener("click", async () => {
         await navigator.clipboard.writeText(assets.html);
-        new Notice("Source copied");
+        new Notice(this.tr("sourceCopied"));
       });
       sourcePanel.createDiv({ cls: "mwv-source-code", text: assets.html.slice(0, 12000) });
     } catch (error) {
       sourcePanel.empty();
-      sourcePanel.createDiv({ cls: "mwv-source-title", text: "Page source" });
+      sourcePanel.createDiv({ cls: "mwv-source-title", text: this.tr("pageSource") });
       sourcePanel.createDiv({ cls: "mwv-source-code", text: error instanceof Error ? error.message : String(error) });
     }
   }
@@ -5807,7 +7931,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const qrPanel = panel.createDiv({ cls: "mwv-qr-panel" });
-    qrPanel.createDiv({ cls: "mwv-qr-title", text: "二维码" });
+    qrPanel.createDiv({ cls: "mwv-qr-title", text: this.tr("qrCode") });
     qrPanel.createEl("img", {
       cls: "mwv-qr-image",
       attr: {
@@ -5816,10 +7940,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     });
     qrPanel.createDiv({ cls: "mwv-qr-url", text: url });
-    const copy = qrPanel.createEl("button", { cls: "mwv-source-copy", text: "复制链接", attr: { type: "button" } });
+    const copy = qrPanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copyLink"), attr: { type: "button" } });
     copy.addEventListener("click", async () => {
       await navigator.clipboard.writeText(url);
-      new Notice("URL copied");
+      new Notice(this.tr("urlCopied"));
     });
   }
 
@@ -5831,13 +7955,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const reportPanel = panel.createDiv({ cls: "mwv-report-panel" });
-    reportPanel.createDiv({ cls: "mwv-report-title", text: "Report URL" });
+    reportPanel.createDiv({ cls: "mwv-report-title", text: this.tr("reportUrl") });
     reportPanel.createDiv({ cls: "mwv-report-row", text: hostName(url) });
     reportPanel.createDiv({ cls: "mwv-report-row", text: url });
-    const copy = reportPanel.createEl("button", { cls: "mwv-source-copy", text: "Copy report", attr: { type: "button" } });
+    const copy = reportPanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copyReport"), attr: { type: "button" } });
     copy.addEventListener("click", async () => {
       await navigator.clipboard.writeText(`Report URL\n${url}`);
-      new Notice("Report copied");
+      new Notice(this.tr("reportCopied"));
     });
   }
 
@@ -5850,22 +7974,22 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.removeUtilityPanels(panel);
     const scriptsPanel = panel.createDiv({ cls: "mwv-userscript-panel" });
     const activeRules = this.getActiveUserScriptRules(url);
-    scriptsPanel.createDiv({ cls: "mwv-userscript-title", text: `User scripts · ${hostName(url)}` });
+    scriptsPanel.createDiv({ cls: "mwv-userscript-title", text: `${this.tr("userScriptRules")} · ${hostName(url)}` });
     if (!this.settings.userScriptsEnabled) {
-      scriptsPanel.createDiv({ cls: "mwv-userscript-empty", text: "Disabled" });
+      scriptsPanel.createDiv({ cls: "mwv-userscript-empty", text: this.tr("disabled") });
       return;
     }
     if (!activeRules.length) {
-      scriptsPanel.createDiv({ cls: "mwv-userscript-empty", text: "No matching scripts" });
+      scriptsPanel.createDiv({ cls: "mwv-userscript-empty", text: this.tr("noMatchingScripts") });
       return;
     }
     for (const rule of activeRules) {
       const item = scriptsPanel.createDiv({ cls: "mwv-userscript-item" });
-      item.createDiv({ cls: "mwv-userscript-name", text: rule.name || "Unnamed script" });
+      item.createDiv({ cls: "mwv-userscript-name", text: rule.name || this.tr("ruleName") });
       item.createDiv({ cls: "mwv-userscript-match", text: rule.match || "*://*/*" });
       const state = item.createDiv({ cls: "mwv-userscript-state" });
-      state.createSpan({ text: rule.css.trim() ? "CSS" : "No CSS" });
-      state.createSpan({ text: rule.js.trim() ? "JS" : "No JS" });
+      state.createSpan({ text: rule.css.trim() ? "CSS" : `${this.tr("no")} CSS` });
+      state.createSpan({ text: rule.js.trim() ? "JS" : `${this.tr("no")} JS` });
     }
   }
 
@@ -5878,17 +8002,17 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     const chrome = embed.querySelector<HTMLElement>(".mwv-browser-chrome");
-    const panel = document.createElement("div");
+    const panel = embed.ownerDocument.createElement("div");
     panel.addClass("mwv-find-panel");
     const input = panel.createEl("input", {
       cls: "mwv-find-input",
-      attr: { type: "search", placeholder: "Find in page", autocomplete: "off" }
+      attr: { type: "search", placeholder: this.tr("findInPage"), autocomplete: "off" }
     });
-    const prev = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Previous" } });
+    const prev = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("previous") } });
     setIcon(prev, "chevron-up");
-    const next = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Next" } });
+    const next = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("next") } });
     setIcon(next, "chevron-down");
-    const close = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: "Close" } });
+    const close = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("close") } });
     setIcon(close, "x");
     const status = panel.createDiv({ cls: "mwv-find-status", text: "0" });
     chrome?.insertAdjacentElement("afterend", panel) ?? embed.prepend(panel);
@@ -5949,7 +8073,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     if (page.links.length) {
       const links = embed.createDiv({ cls: "mwv-page-links" });
-      links.createEl("h3", { text: "Links" });
+      links.createEl("h3", { text: this.tr("links") });
       for (const link of page.links.slice(0, 8)) {
         const item = links.createEl("button", {
           cls: "mwv-page-link",
@@ -6117,7 +8241,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   notePageToHtml(page: NotePage): string {
-    const temp = document.createElement("div");
+    const temp = createHostDiv();
     const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
     for (const block of blocks.slice(0, 100)) {
       if (/^#{1,3}\s+/.test(block)) {
@@ -6214,7 +8338,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async copyPortableExport(): Promise<void> {
     const text = JSON.stringify(this.createPortableExport(), null, 2);
     await navigator.clipboard.writeText(text);
-    new Notice("Mobile Webviewer JSON copied");
+    new Notice(this.tr("jsonCopied"));
     await this.addConsole("info", "Portable export copied");
   }
 
@@ -6225,7 +8349,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const path = await this.uniqueVaultPath(folder, `mobile-webviewer-export-${stamp}.json`);
     await this.app.vault.adapter.write(path, JSON.stringify(this.createPortableExport(), null, 2));
     await this.addConsole("info", `Portable export saved: ${path}`);
-    new Notice(`Export saved: ${path}`);
+    new Notice(this.tr("saved", { path }));
     return path;
   }
 
@@ -6257,11 +8381,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   async importPortableDataFromClipboard(): Promise<void> {
     const text = await navigator.clipboard.readText();
     if (!text.trim()) {
-      new Notice("Clipboard is empty");
+      new Notice(this.tr("clipboardEmpty"));
       return;
     }
     const summary = await this.importPortableDataText(text);
-    new Notice(`Imported: ${summary.bookmarks} bookmarks, ${summary.scripts} scripts, ${summary.notes} notes`);
+    new Notice(this.tr("completedAction", { label: this.tr("universalImport") }));
   }
 
   async addConsole(level: BrowserConsoleEntry["level"], message: string, url?: string): Promise<void> {
@@ -6400,7 +8524,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       return;
     }
     await this.copyDownloadPath(entry);
-    new Notice("File not found in vault; path copied");
+    new Notice(this.tr("fileMissingPathCopied"));
     await this.addConsole("warn", `Download file not found: ${entry.path}`, entry.url);
   }
 
@@ -6451,7 +8575,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const message = error instanceof Error ? error.message : String(error);
       await this.updateDownload(entry.id, { status: "error", message, progress: 0 });
       await this.addConsole("error", `HTML save failed: ${message}`, url);
-      new Notice("HTML save failed");
+      new Notice(this.tr("htmlSaveFailed"));
       return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
     }
   }
@@ -6482,7 +8606,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const message = error instanceof Error ? error.message : String(error);
       await this.updateDownload(entry.id, { status: "error", message, progress: 0 });
       await this.addConsole("error", `MHT save failed: ${message}`, url);
-      new Notice("MHT save failed");
+      new Notice(this.tr("mhtSaveFailed"));
       return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
     }
   }
@@ -6513,7 +8637,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       await nav.share({ title: title || hostName(url), text: title || hostName(url), url });
     } else {
       await navigator.clipboard.writeText(text);
-      new Notice("Share text copied");
+      new Notice(this.tr("shareTextCopied"));
     }
     await this.addConsole("info", "Share prepared", url);
   }
@@ -6641,7 +8765,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const message = error instanceof Error ? error.message : String(error);
       await this.updateDownload(entry.id, { status: "error", message });
       await this.addConsole("error", `Download failed: ${message}`, cleanUrl);
-      new Notice("Download failed");
+      new Notice(this.tr("downloadFailed"));
       return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
     }
   }
@@ -6777,13 +8901,14 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   supportsElectronWebview(): boolean {
-    if (!document?.createElement) return false;
+    const doc = appDocument();
+    if (!doc?.createElement) return false;
     const platform = typeof process !== "undefined" ? (process as NodeJS.Process & { versions?: Record<string, string> }).versions : undefined;
     if (!platform?.electron) return false;
     try {
-      const probe = document.createElement("webview") as ElectronWebviewElement;
+      const probe = doc.createElement("webview") as ElectronWebviewElement;
       probe.addClass("mwv-webview-probe");
-      document.body?.appendChild(probe);
+      doc.body?.appendChild(probe);
       const supported =
         typeof probe === "object" &&
         probe.tagName.toLowerCase() === "webview" &&
@@ -6803,7 +8928,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     callbacks: BrowserSurfaceCallbacks = {}
   ): BrowserSurfaceElement {
     if (this.supportsElectronWebview()) {
-      const webview = document.createElement("webview") as ElectronWebviewElement;
+      const webview = parent.ownerDocument.createElement("webview") as ElectronWebviewElement;
       webview.addClass(className);
       webview.addClass("mwv-real-webview");
       webview.setAttribute("title", title);
@@ -7093,11 +9218,12 @@ export default class MobileWebviewerPlugin extends Plugin {
           if (anchor && anchor.href) send("context-link", anchor.href, anchor.textContent || "");
         }, true);
         const installWebNoteOverlay = () => {
-          if (document.getElementById("mwv-page-note-root")) return;
-          const style = document.createElement("style");
+          const doc = document;
+          if (doc.getElementById("mwv-page-note-root")) return;
+          const style = doc.createElement("style");
           style.id = "mwv-page-note-style";
           style.textContent = \`
-            html.mwv-page-text-editing [contenteditable="true"]:not(#mwv-page-note-editor){outline:2px solid rgba(37,99,235,.35)!important;outline-offset:2px!important;}
+            html.mwv-page-text-editing [contenteditable="true"]:not(#mwv-page-note-editor){outline:2px solid rgba(37,99,235,.35);outline-offset:2px;}
             #mwv-page-note-root{position:absolute;top:0;left:0;right:0;height:var(--mwv-page-note-height,100vh);z-index:2147483000;pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
             #mwv-page-note-bar{position:sticky;top:8px;margin:8px 8px 0 auto;width:max-content;display:flex;gap:6px;pointer-events:auto;}
             #mwv-page-note-bar button{width:34px;height:34px;border:1px solid rgba(120,120,120,.32);border-radius:10px;background:rgba(255,255,255,.92);color:#111827;box-shadow:0 6px 18px rgba(0,0,0,.18);font:600 12px system-ui;}
@@ -7113,38 +9239,38 @@ export default class MobileWebviewerPlugin extends Plugin {
               #mwv-page-note-panel{background:rgba(24,24,27,.96);color:#f8fafc;border-color:rgba(255,255,255,.16);}
             }
           \`;
-          document.documentElement.appendChild(style);
-          const root = document.createElement("div");
+          doc.documentElement.appendChild(style);
+          const root = doc.createElement("div");
           root.id = "mwv-page-note-root";
           root.setAttribute("data-url", location.href);
-          const bar = document.createElement("div");
+          const bar = doc.createElement("div");
           bar.id = "mwv-page-note-bar";
-          const noteButton = document.createElement("button");
+          const noteButton = doc.createElement("button");
           noteButton.type = "button";
           noteButton.textContent = "T";
           noteButton.title = "Edit page note";
-          const textButton = document.createElement("button");
+          const textButton = doc.createElement("button");
           textButton.type = "button";
           textButton.textContent = "A";
           textButton.title = "Edit page text";
-          const drawButton = document.createElement("button");
+          const drawButton = doc.createElement("button");
           drawButton.type = "button";
           drawButton.textContent = "✎";
           drawButton.title = "Doodle on page";
           bar.append(noteButton, textButton, drawButton);
-          const panel = document.createElement("div");
+          const panel = doc.createElement("div");
           panel.id = "mwv-page-note-panel";
-          const editor = document.createElement("div");
+          const editor = doc.createElement("div");
           editor.id = "mwv-page-note-editor";
           editor.contentEditable = "true";
           editor.spellcheck = true;
           panel.appendChild(editor);
-          const canvas = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          const canvas = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
           canvas.id = "mwv-page-note-canvas";
           canvas.setAttribute("viewBox", "0 0 1000 1000");
           canvas.setAttribute("preserveAspectRatio", "none");
           root.append(bar, panel, canvas);
-          document.body.prepend(root);
+          doc.body.prepend(root);
           let saveTimer = 0;
           let textEditEnabled = false;
           let pageEdited = false;
@@ -7153,11 +9279,11 @@ export default class MobileWebviewerPlugin extends Plugin {
           let pageSaveTimer = 0;
           let appliedSavedPageHtml = false;
           const resize = () => {
-            const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, window.innerHeight);
+            const height = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight, window.innerHeight);
             root.style.setProperty("--mwv-page-note-height", height + "px");
           };
           const pageSnapshot = () => {
-            const clone = document.body.cloneNode(true);
+            const clone = doc.body.cloneNode(true);
             if (clone && clone.querySelector) {
               clone.querySelector("#mwv-page-note-root")?.remove();
               clone.querySelectorAll("[data-mwv-prev-contenteditable]").forEach((el) => {
@@ -7169,7 +9295,7 @@ export default class MobileWebviewerPlugin extends Plugin {
             }
             return {
               html: clone && "innerHTML" in clone ? clone.innerHTML : "",
-              text: clone && "innerText" in clone ? clone.innerText || "" : document.body.innerText || ""
+              text: clone && "innerText" in clone ? clone.innerText || "" : doc.body.innerText || ""
             };
           };
           const sendNote = () => {
@@ -7197,13 +9323,13 @@ export default class MobileWebviewerPlugin extends Plugin {
             clearTimeout(saveTimer);
             saveTimer = setTimeout(sendNote, 450);
           };
-          const pageEditableTargets = () => Array.from(document.body.querySelectorAll("main,article,section,p,li,h1,h2,h3,h4,h5,h6,blockquote,figcaption,td,th,span,div"))
-            .filter((el) => !root.contains(el) && el instanceof HTMLElement && (el.innerText || "").trim().length > 0)
+          const pageEditableTargets = () => Array.from(doc.body.querySelectorAll("main,article,section,p,li,h1,h2,h3,h4,h5,h6,blockquote,figcaption,td,th,span,div"))
+            .filter((el) => !root.contains(el) && el.nodeType === 1 && (el.innerText || "").trim().length > 0)
             .slice(0, 900);
           const setPageTextEditing = (enabled) => {
             const wasEditing = textEditEnabled;
             textEditEnabled = enabled;
-            document.documentElement.classList.toggle("mwv-page-text-editing", enabled);
+            doc.documentElement.classList.toggle("mwv-page-text-editing", enabled);
             document.designMode = enabled ? "on" : "off";
             for (const el of pageEditableTargets()) {
               if (enabled) {
@@ -7265,8 +9391,8 @@ export default class MobileWebviewerPlugin extends Plugin {
             if (typeof payload.pageHtml === "string" && payload.pageHtml.trim() && !appliedSavedPageHtml) {
               const keepRoot = document.getElementById("mwv-page-note-root") || root;
               keepRoot.remove();
-              document.body.innerHTML = payload.pageHtml;
-              document.body.prepend(keepRoot);
+              doc.body.innerHTML = payload.pageHtml;
+              doc.body.prepend(keepRoot);
               appliedSavedPageHtml = true;
             }
             const nextEditor = document.getElementById("mwv-page-note-editor");
@@ -7302,7 +9428,7 @@ export default class MobileWebviewerPlugin extends Plugin {
             resize();
             finish(event);
             const [x,y] = point(event);
-            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
             path.setAttribute("d", "M " + x.toFixed(1) + " " + y.toFixed(1));
             path.setAttribute("fill", "none");
             path.setAttribute("stroke", "#2563eb");
@@ -7339,7 +9465,8 @@ export default class MobileWebviewerPlugin extends Plugin {
           }, true);
           resize();
         };
-        if (document.body) installWebNoteOverlay();
+        const doc = document;
+        if (doc.body) installWebNoteOverlay();
         else document.addEventListener("DOMContentLoaded", installWebNoteOverlay, { once: true });
       })();
     `;
@@ -7368,9 +9495,9 @@ export default class MobileWebviewerPlugin extends Plugin {
             window.__mwvApplyPageNote(payload);
             return;
           }
-          if (payload.pageHtml && document.body && !document.body.getAttribute("data-mwv-page-note-restored")) {
-            document.body.setAttribute("data-mwv-page-note-restored", "true");
-            document.body.innerHTML = payload.pageHtml;
+          if (payload.pageHtml && doc.body && !doc.body.getAttribute("data-mwv-page-note-restored")) {
+            doc.body.setAttribute("data-mwv-page-note-restored", "true");
+            doc.body.innerHTML = payload.pageHtml;
           }
           const editor = document.getElementById("mwv-page-note-editor");
           const canvas = document.getElementById("mwv-page-note-canvas");
@@ -7488,7 +9615,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.addConsole("info", "Opened Cancip via plugin API");
       return;
     }
-    new Notice("Cancip plugin is not enabled");
+    new Notice(this.tr("cancipDisabled"));
     await this.addConsole("warn", "Cancip plugin is not enabled");
   }
 
@@ -7502,37 +9629,38 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const cssParts: string[] = [];
     if (this.settings.noImageMode) {
-      cssParts.push("img,picture,source[srcset],video[poster]{display:none!important;}");
+      cssParts.push("img,picture,source[srcset],video[poster]{display:none;}");
     }
     if (this.settings.adBlockEnabled) {
-      cssParts.push(`${AD_CANDIDATE_SELECTOR}{display:none!important;}`);
+      cssParts.push(`${AD_CANDIDATE_SELECTOR}{display:none;}`);
     } else if (this.settings.markAdsEnabled) {
-      cssParts.push(`${AD_CANDIDATE_SELECTOR}{outline:2px dashed #ef4444!important;outline-offset:2px!important;}`);
+      cssParts.push(`${AD_CANDIDATE_SELECTOR}{outline:2px dashed #ef4444;outline-offset:2px;}`);
     }
     if (this.settings.eyeProtectionMode) {
-      cssParts.push("html{background:#f3f8ea!important;} body{background:#f3f8ea!important;}");
+      cssParts.push("html{background:#f3f8ea;} body{background:#f3f8ea;}");
     }
     if (this.settings.nightMode) {
-      cssParts.push("html{filter:brightness(.82) contrast(1.08)!important;background:#101112!important;}");
+      cssParts.push("html{filter:brightness(.82) contrast(1.08);background:#101112;}");
     }
     if (!cssParts.length || !webview.executeJavaScript) return;
 
     const css = cssParts.join("\n");
     const code = `
       (() => {
+        const doc = document;
         const id = "mwv-runtime-style";
-        document.getElementById(id)?.remove();
-        const style = document.createElement("style");
+        doc.getElementById(id)?.remove();
+        const style = doc.createElement("style");
         style.id = id;
         style.textContent = ${JSON.stringify(css)};
-        document.documentElement.appendChild(style);
+        doc.documentElement.appendChild(style);
         const selector = ${JSON.stringify(AD_CANDIDATE_SELECTOR)};
         const hideAds = ${JSON.stringify(this.settings.adBlockEnabled)};
         const markAds = ${JSON.stringify(this.settings.markAdsEnabled)};
         const applyAdMode = () => {
           if (!hideAds && !markAds) return;
-          document.querySelectorAll(selector).forEach((node) => {
-            if (!(node instanceof HTMLElement)) return;
+          doc.querySelectorAll(selector).forEach((node) => {
+            if (!node || node.nodeType !== 1) return;
             if (hideAds) {
               node.classList.add("mwv-ad-hidden");
               node.setAttribute("data-mwv-ad-hidden", "true");
@@ -7545,7 +9673,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         applyAdMode();
         if (hideAds || markAds) {
           window.__mwvAdObserver = new MutationObserver(() => applyAdMode());
-          window.__mwvAdObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+          window.__mwvAdObserver.observe(doc.documentElement || doc.body, { childList: true, subtree: true });
         }
       })();
     `;
@@ -7566,7 +9694,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   requestHeaders(accept: string): Record<string, string> {
     return {
       "Accept": accept,
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+      "Accept-Language": acceptLanguageHeader(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE),
       "Cache-Control": "no-cache",
       "Upgrade-Insecure-Requests": "1",
       "User-Agent": this.getUserAgentHeader()
@@ -7582,6 +9710,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     root.toggleClass("mwv-incognito", this.settings.incognitoMode);
     root.toggleClass("mwv-fullscreen", this.settings.fullScreenMode);
     root.toggleClass("mwv-rotated", this.settings.rotatedMode);
+    const language = this.resolvedUiLanguage();
+    root.dataset.mwvUiLanguage = language;
+    root.setAttribute("lang", language);
+    root.setAttribute("dir", isRtlUiLanguage(language) ? "rtl" : "ltr");
+    root.toggleClass("mwv-rtl", isRtlUiLanguage(language));
     root.setCssProps({ "--mwv-reader-font-scale": String(clampNumber(this.settings.readerFontScale, 80, 160) / 100) });
   }
 
@@ -7815,7 +9948,8 @@ export default class MobileWebviewerPlugin extends Plugin {
   markTextMatches(root: HTMLElement, query: string): number {
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(escaped, "gi");
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    const ownerDoc = root.ownerDocument;
+    const walker = ownerDoc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
@@ -7837,18 +9971,18 @@ export default class MobileWebviewerPlugin extends Plugin {
       const text = node.nodeValue ?? "";
       pattern.lastIndex = 0;
       let lastIndex = 0;
-      const fragment = document.createDocumentFragment();
+      const fragment = ownerDoc.createDocumentFragment();
       for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
         const index = match.index;
-        if (index > lastIndex) fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
-        const mark = document.createElement("mark");
+        if (index > lastIndex) fragment.appendChild(ownerDoc.createTextNode(text.slice(lastIndex, index)));
+        const mark = ownerDoc.createElement("mark");
         mark.addClass("mwv-find-mark");
         mark.textContent = match[0];
         fragment.appendChild(mark);
         lastIndex = index + match[0].length;
         count++;
       }
-      if (lastIndex < text.length) fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+      if (lastIndex < text.length) fragment.appendChild(ownerDoc.createTextNode(text.slice(lastIndex)));
       node.parentNode?.replaceChild(fragment, node);
     }
     return count;
@@ -7881,6 +10015,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       const code = `
         (() => {
+          const doc = document;
           const profile = ${JSON.stringify(profile)};
           const values = Object.values(profile).filter(Boolean);
           if (!values.length) return 0;
@@ -7893,7 +10028,7 @@ export default class MobileWebviewerPlugin extends Plugin {
             return true;
           };
           let count = 0;
-          for (const el of Array.from(document.querySelectorAll("input, textarea"))) {
+          for (const el of Array.from(doc.querySelectorAll("input, textarea"))) {
             const hint = [
               el.name,
               el.id,
@@ -7978,7 +10113,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const content = await this.app.vault.read(file);
     const match = content.match(/https?:\/\/[^\s)\]]+/);
     if (!match) {
-      new Notice("No web link found");
+      new Notice(this.tr("noWebLinkFound"));
       return;
     }
     await this.activateBrowserView(match[0]);
@@ -8208,6 +10343,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.noteBrowserStartupDefaultVersion = NOTE_BROWSER_STARTUP_DEFAULT_VERSION;
       shouldSaveSettings = true;
     }
+    this.settings.uiLanguage = typeof this.settings.uiLanguage === "string" && isUiLanguage(this.settings.uiLanguage)
+      ? this.settings.uiLanguage
+      : DEFAULT_UI_LANGUAGE;
     this.settings.history = Array.isArray(this.settings.history) ? this.settings.history : [];
     this.settings.bookmarks = Array.isArray(this.settings.bookmarks)
       ? this.settings.bookmarks.filter((entry) => entry && typeof entry.url === "string" && !isBuiltInShortcut(entry))
@@ -8372,7 +10510,7 @@ class TranslateLanguageModal extends SuggestModal<LanguageOption> {
     this.plugin = plugin;
     this.url = url;
     this.onTranslate = onTranslate;
-    this.setPlaceholder("Translate page to...");
+    this.setPlaceholder(this.plugin.tr("translatePageTo"));
   }
 
   getSuggestions(query: string): LanguageOption[] {
@@ -8390,10 +10528,12 @@ class TranslateLanguageModal extends SuggestModal<LanguageOption> {
     el.createDiv({ cls: "mwv-translate-suggest-label", text: `${item.label} · ${item.code}` });
   }
 
-  async onChooseSuggestion(item: LanguageOption): Promise<void> {
-    this.plugin.settings.translateTarget = item.code;
-    await this.plugin.saveSettings();
-    this.onTranslate(buildTranslateUrl(this.url, item.code));
+  onChooseSuggestion(item: LanguageOption): void {
+    runAsync(async () => {
+      this.plugin.settings.translateTarget = item.code;
+      await this.plugin.saveSettings();
+      this.onTranslate(buildTranslateUrl(this.url, item.code));
+    });
   }
 }
 
@@ -8405,23 +10545,23 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  renderSectionTitle(text: string, desc?: string): void {
-    const section = this.containerEl.createDiv({ cls: "mwv-settings-section" });
+  renderSectionTitle(containerEl: HTMLElement, text: string, desc?: string): void {
+    const section = containerEl.createDiv({ cls: "mwv-settings-section" });
     section.createDiv({ cls: "mwv-settings-section-title", text });
     if (desc) section.createDiv({ cls: "mwv-settings-section-desc", text: desc });
   }
 
   pluginAssetResourcePath(path: string): string {
-    const dir = this.plugin.manifest.dir ?? ".obsidian/plugins/mobile-webviewer";
+    const dir = `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}`;
     return this.app.vault.adapter.getResourcePath(normalizePath(`${dir}/${path}`));
   }
 
-  renderSupportCodes(): void {
-    const wrapper = this.containerEl.createDiv({ cls: "mwv-settings-support" });
-    wrapper.createDiv({ cls: "mwv-settings-support-title", text: "支持双码" });
+  renderSupportCodes(containerEl: HTMLElement): void {
+    const wrapper = containerEl.createDiv({ cls: "mwv-settings-support" });
+    wrapper.createDiv({ cls: "mwv-settings-support-title", text: this.plugin.tr("supportCodes") });
     wrapper.createDiv({
       cls: "mwv-settings-support-desc",
-      text: "如果这个插件帮到你，可以扫码支持继续维护。"
+      text: this.plugin.tr("supportCodesDesc")
     });
     const grid = wrapper.createDiv({ cls: "mwv-settings-support-grid" });
     for (const item of SUPPORT_CODE_ASSETS) {
@@ -8435,16 +10575,46 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
     }
   }
 
-  display(): void {
-    const { containerEl } = this;
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [{
+      name: "Mobile Webviewer",
+      render: (setting) => {
+        setting.settingEl.empty();
+        setting.settingEl.addClass("mwv-settings-definition-root");
+        this.renderSettings(setting.settingEl);
+      }
+    }];
+  }
+
+  refreshSettings(): void {
+    this.update();
+  }
+
+  renderSettings(containerEl: HTMLElement): void {
     containerEl.empty();
     containerEl.addClass("mwv-settings");
 
-    this.renderSectionTitle("核心入口", "首页、搜索、两个浏览器入口和启动行为。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("coreEntry"), this.plugin.tr("coreEntryDesc"));
 
     new Setting(containerEl)
-      .setName("Home page")
-      .setDesc("Default page opened by the home button.")
+      .setName(this.plugin.tr("uiLanguage"))
+      .setDesc(this.plugin.tr("uiLanguageDesc"))
+      .addDropdown((dropdown) => {
+        for (const language of UI_LANGUAGE_CHOICES) {
+          dropdown.addOption(language.code, `${language.native} / ${language.label}`);
+        }
+        dropdown
+          .setValue(this.plugin.settings.uiLanguage || DEFAULT_UI_LANGUAGE)
+          .onChange(async (value) => {
+            this.plugin.settings.uiLanguage = isUiLanguage(value) ? value : DEFAULT_UI_LANGUAGE;
+            await this.plugin.saveSettings();
+            this.refreshSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName(this.plugin.tr("homePage"))
+      .setDesc(this.plugin.tr("homePageDesc"))
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_HOME)
@@ -8456,8 +10626,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Search URL")
-      .setDesc("Use {{query}} as the encoded search text placeholder.")
+      .setName(this.plugin.tr("searchUrl"))
+      .setDesc(this.plugin.tr("searchUrlDesc"))
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SEARCH)
@@ -8469,8 +10639,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Note Browser current URL")
-      .setDesc("The URL restored when opening the note-based browser.")
+      .setName(this.plugin.tr("noteBrowserCurrentUrl"))
+      .setDesc(this.plugin.tr("noteBrowserCurrentUrlDesc"))
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_HOME)
@@ -8482,28 +10652,28 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       )
       .addButton((button) =>
         button
-          .setButtonText("Home")
+          .setButtonText(this.plugin.tr("home"))
           .onClick(async () => {
             this.plugin.settings.noteBrowserUrl = this.plugin.settings.homeUrl;
             this.plugin.settings.noteBrowserBack = [];
             this.plugin.settings.noteBrowserForward = [];
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Open browser")
-      .setDesc("Quickly open the note-based browser from settings.")
+      .setName(this.plugin.tr("openBrowser"))
+      .setDesc(this.plugin.tr("openBrowserDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Note Browser")
+          .setButtonText(this.plugin.tr("noteBrowser"))
           .onClick(() => void this.plugin.openNoteBrowser(this.plugin.settings.noteBrowserUrl || this.plugin.settings.homeUrl))
       );
 
     new Setting(containerEl)
-      .setName("Open on startup")
-      .setDesc("Open the note-based browser in reading view after Obsidian layout is ready.")
+      .setName(this.plugin.tr("openOnStartup"))
+      .setDesc(this.plugin.tr("openOnStartupDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.openOnStartup)
@@ -8513,11 +10683,11 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           })
       );
 
-    this.renderSectionTitle("界面和渲染", "控制手机工具栏、NoteDraw 魔法棒、阅读层和页面比例。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("interfaceRendering"), this.plugin.tr("interfaceRenderingDesc"));
 
     new Setting(containerEl)
-      .setName("Compact mobile toolbar")
-      .setDesc("Use smaller controls for phone screens.")
+      .setName(this.plugin.tr("compactMobileToolbar"))
+      .setDesc(this.plugin.tr("compactMobileToolbarDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.compactToolbar)
@@ -8528,8 +10698,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Show NoteDraw magic wand")
-      .setDesc("Show the wand button in Mobile Webviewer surfaces when NoteDraw is available.")
+      .setName(this.plugin.tr("showNoteDrawMagicWand"))
+      .setDesc(this.plugin.tr("showNoteDrawMagicWandDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.showFloatingWand)
@@ -8540,8 +10710,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Reader hint")
-      .setDesc("Show reader-layer hints when the internal browser renders note-like pages.")
+      .setName(this.plugin.tr("readerHint"))
+      .setDesc(this.plugin.tr("readerHintDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.showReaderHint)
@@ -8552,8 +10722,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Live browser first")
-      .setDesc("Show the live WebView surface above the note-style reader layer.")
+      .setName(this.plugin.tr("liveBrowserFirst"))
+      .setDesc(this.plugin.tr("liveBrowserFirstDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.liveBrowserFirst)
@@ -8564,12 +10734,12 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Frontend mode")
-      .setDesc("Default foreground: editable note or full web page.")
+      .setName(this.plugin.tr("frontendMode"))
+      .setDesc(this.plugin.tr("frontendModeDesc"))
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("note", "Editable note")
-          .addOption("web", "Full web page")
+          .addOption("note", this.plugin.tr("editableNote"))
+          .addOption("web", this.plugin.tr("fullWebPage"))
           .setValue(this.plugin.settings.browserFrontendMode)
           .onChange(async (value) => {
             this.plugin.settings.browserFrontendMode = value as "note" | "web" | "split";
@@ -8578,8 +10748,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Auto-save web notes")
-      .setDesc("Auto-save edited reader text and doodles into plugin data only. Use 存 MD to add a Markdown file to the vault.")
+      .setName(this.plugin.tr("autoSaveWebNotes"))
+      .setDesc(this.plugin.tr("autoSaveWebNotesDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.autoSaveWebNotes)
@@ -8590,8 +10760,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Web note folder")
-      .setDesc("Manual 存 MD exports are saved here inside the vault.")
+      .setName(this.plugin.tr("webNoteFolder"))
+      .setDesc(this.plugin.tr("webNoteFolderDesc"))
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_WEB_NOTE_FOLDER)
@@ -8603,12 +10773,12 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Page zoom")
-      .setDesc("Default zoom for live browser surfaces.")
+      .setName(this.plugin.tr("pageZoom"))
+      .setDesc(this.plugin.tr("pageZoomDesc"))
       .addSlider((slider) =>
         slider
           .setLimits(50, 200, 10)
-          .setDynamicTooltip()
+
           .setValue(this.plugin.settings.pageZoom)
           .onChange(async (value) => {
             this.plugin.settings.pageZoom = value;
@@ -8617,12 +10787,12 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Reader font size")
-      .setDesc("Reader/cache layer font size.")
+      .setName(this.plugin.tr("readerFontSize"))
+      .setDesc(this.plugin.tr("readerFontSizeDesc"))
       .addSlider((slider) =>
         slider
           .setLimits(80, 160, 10)
-          .setDynamicTooltip()
+
           .setValue(this.plugin.settings.readerFontScale)
           .onChange(async (value) => {
             this.plugin.settings.readerFontScale = clampNumber(Math.round(value), 80, 160);
@@ -8631,8 +10801,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Desktop view")
-      .setDesc("Use a wider live browser surface.")
+      .setName(this.plugin.tr("desktopView"))
+      .setDesc(this.plugin.tr("desktopViewDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.desktopMode)
@@ -8643,12 +10813,12 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("User agent")
-      .setDesc("Used by internal fetch/search/download requests and the live browser surface where Obsidian exposes control.")
+      .setName(this.plugin.tr("userAgent"))
+      .setDesc(this.plugin.tr("userAgentDesc"))
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("mobile", "Mobile")
-          .addOption("desktop", "Desktop")
+          .addOption("mobile", this.plugin.tr("mobile"))
+          .addOption("desktop", this.plugin.tr("desktop"))
           .setValue(this.plugin.settings.userAgentMode)
           .onChange(async (value) => {
             this.plugin.settings.userAgentMode = value === "desktop" ? "desktop" : "mobile";
@@ -8656,11 +10826,11 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           })
       );
 
-    this.renderSectionTitle("下载", "保存文件、HTML、MHT 和离线页面。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("download"), this.plugin.tr("downloadDesc"));
 
     new Setting(containerEl)
-      .setName("Download folder")
-      .setDesc("Files saved by More > Download, HTML, and MHT.")
+      .setName(this.plugin.tr("downloadFolder"))
+      .setDesc(this.plugin.tr("downloadFolderDesc"))
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_DOWNLOAD_FOLDER)
@@ -8672,12 +10842,12 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Download connections")
-      .setDesc("Parallel byte-range connections when the server supports resumable downloads.")
+      .setName(this.plugin.tr("downloadConnections"))
+      .setDesc(this.plugin.tr("downloadConnectionsDesc"))
       .addSlider((slider) =>
         slider
           .setLimits(1, 8, 1)
-          .setDynamicTooltip()
+
           .setValue(this.plugin.settings.downloadConnections)
           .onChange(async (value) => {
             this.plugin.settings.downloadConnections = clampNumber(Math.round(value), 1, 8);
@@ -8685,15 +10855,15 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           })
       );
 
-    this.renderSectionTitle("浏览模式", "这些开关会影响 Browser View 和 Note Browser 的内部渲染。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("browserMode"), this.plugin.tr("browserModeDesc"));
     for (const option of [
-      ["Night mode", "nightMode", "Darkens internal browser shell and reader surfaces."],
-      ["Eye protection", "eyeProtectionMode", "Applies a softer reading tint."],
-      ["Ad block", "adBlockEnabled", "Removes common ad containers where the page is accessible."],
-      ["Mark ads", "markAdsEnabled", "Marks likely ad containers where the page is accessible."],
-      ["Incognito", "incognitoMode", "Stops history and reader cache writes."],
-      ["Disable JavaScript", "jsDisabled", "Reloads live pages without allow-scripts in the sandbox."],
-      ["Rotate screen", "rotatedMode", "Uses a wider landscape-like browser surface."]
+      [this.plugin.tr("nightMode"), "nightMode", this.plugin.tr("nightModeDesc")],
+      [this.plugin.tr("eyeProtection"), "eyeProtectionMode", this.plugin.tr("eyeProtectionDesc")],
+      [this.plugin.tr("adBlock"), "adBlockEnabled", this.plugin.tr("adBlockDesc")],
+      [this.plugin.tr("markAds"), "markAdsEnabled", this.plugin.tr("markAdsDesc")],
+      [this.plugin.tr("incognito"), "incognitoMode", this.plugin.tr("incognitoDesc")],
+      [this.plugin.tr("disableJavaScript"), "jsDisabled", this.plugin.tr("disableJavaScriptDesc")],
+      [this.plugin.tr("rotateScreen"), "rotatedMode", this.plugin.tr("rotateScreenDesc")]
     ] as const) {
       new Setting(containerEl)
         .setName(option[0])
@@ -8708,43 +10878,43 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
     }
 
-    this.renderSectionTitle("数据导入导出", "收藏、稍后读、历史、下载记录、脚本规则、网页笔记和常用设置。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("dataImportExport"), this.plugin.tr("dataImportExportDesc"));
 
     new Setting(containerEl)
-      .setName("Universal export")
-      .setDesc("Save a portable Mobile Webviewer JSON package into the download folder.")
+      .setName(this.plugin.tr("universalExport"))
+      .setDesc(this.plugin.tr("universalExportDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Export JSON")
+          .setButtonText(this.plugin.tr("exportJson"))
           .onClick(async () => {
             await this.plugin.savePortableExportFile();
           })
       )
       .addButton((button) =>
         button
-          .setButtonText("Copy JSON")
+          .setButtonText(this.plugin.tr("copyJson"))
           .onClick(async () => {
             await this.plugin.copyPortableExport();
           })
       );
 
     new Setting(containerEl)
-      .setName("Universal import")
-      .setDesc("Import Mobile Webviewer JSON, common bookmark HTML, or plain URL lines from the clipboard. Existing data is merged.")
+      .setName(this.plugin.tr("universalImport"))
+      .setDesc(this.plugin.tr("universalImportDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Import clipboard")
+          .setButtonText(this.plugin.tr("importClipboard"))
           .onClick(async () => {
             await this.plugin.importPortableDataFromClipboard();
-            this.display();
+            this.refreshSettings();
           })
       );
 
-    this.renderSectionTitle("翻译", "默认跟随 Obsidian 语言，也可以指定固定目标语言。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("translation"), this.plugin.tr("translationDesc"));
 
     new Setting(containerEl)
-      .setName("Default translation language")
-      .setDesc("Used by More > Translate and the language picker. Follow Obsidian language keeps translation tied to Obsidian's current UI language.")
+      .setName(this.plugin.tr("defaultTranslationLanguage"))
+      .setDesc(this.plugin.tr("defaultTranslationLanguageDesc"))
       .addDropdown((dropdown) => {
         for (const language of TRANSLATE_CHOICES) {
           dropdown.addOption(language.code, `${language.native} / ${language.label}`);
@@ -8757,11 +10927,11 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           });
       });
 
-    this.renderSectionTitle("脚本和阅读层", "Reader 层 CSS、JavaScript 和按网址匹配的脚本规则。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("scriptsReader"), this.plugin.tr("scriptsReaderDesc"));
 
     new Setting(containerEl)
-      .setName("Reader user scripts")
-      .setDesc("Apply custom CSS and JavaScript to the internal reader layer.")
+      .setName(this.plugin.tr("readerUserScripts"))
+      .setDesc(this.plugin.tr("readerUserScriptsDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.userScriptsEnabled)
@@ -8772,8 +10942,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Reader CSS")
-      .setDesc("CSS injected into rendered reader/cache pages.")
+      .setName(this.plugin.tr("readerCss"))
+      .setDesc(this.plugin.tr("readerCssDesc"))
       .addTextArea((text) =>
         text
           .setPlaceholder(".mwv-md-content p { line-height: 1.7; }")
@@ -8785,8 +10955,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Reader JavaScript")
-      .setDesc("Runs with container, page, and hostName available.")
+      .setName(this.plugin.tr("readerJavascript"))
+      .setDesc(this.plugin.tr("readerJavascriptDesc"))
       .addTextArea((text) =>
         text
           .setPlaceholder("container.dataset.scriptRan = 'true';")
@@ -8797,17 +10967,17 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           })
       );
 
-    this.renderSectionTitle("User script rules");
+    this.renderSectionTitle(containerEl, this.plugin.tr("userScriptRules"));
     new Setting(containerEl)
-      .setName(`Rules (${this.plugin.settings.userScriptRules.length})`)
-      .setDesc("URL-matched CSS and JavaScript for the internal reader layer.")
+      .setName(this.plugin.tr("rulesCount", { count: this.plugin.settings.userScriptRules.length }))
+      .setDesc(this.plugin.tr("rulesDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Add rule")
+          .setButtonText(this.plugin.tr("addRule"))
           .onClick(async () => {
             this.plugin.settings.userScriptRules.unshift(createDefaultUserScriptRule());
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
@@ -8826,7 +10996,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         )
         .addText((text) =>
           text
-            .setPlaceholder("Rule name")
+            .setPlaceholder(this.plugin.tr("ruleName"))
             .setValue(rule.name)
             .onChange(async (value) => {
               rule.name = value || "脚本";
@@ -8835,17 +11005,17 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         )
         .addButton((button) =>
           button
-            .setButtonText("Delete")
+            .setButtonText(this.plugin.tr("delete"))
             .onClick(async () => {
               this.plugin.settings.userScriptRules = this.plugin.settings.userScriptRules.filter((item) => item.id !== rule.id);
               await this.plugin.saveSettings();
-              this.display();
+              this.refreshSettings();
             })
         );
 
       new Setting(group)
-        .setName("Match")
-        .setDesc("Supports substring or wildcard, for example *://*.example.com/*")
+        .setName(this.plugin.tr("match"))
+        .setDesc(this.plugin.tr("matchDesc"))
         .addText((text) =>
           text
             .setPlaceholder("*://*/*")
@@ -8857,8 +11027,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         );
 
       new Setting(group)
-        .setName("CSS")
-        .setDesc("Injected into matched reader pages.")
+        .setName(this.plugin.tr("css"))
+        .setDesc(this.plugin.tr("cssDesc"))
         .addTextArea((text) =>
           text
             .setPlaceholder(".mwv-md-content p { line-height: 1.7; }")
@@ -8870,8 +11040,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         );
 
       new Setting(group)
-        .setName("JavaScript")
-        .setDesc("Runs with container, page, hostName, and rule available.")
+        .setName(this.plugin.tr("javascript"))
+        .setDesc(this.plugin.tr("javascriptDesc"))
         .addTextArea((text) =>
           text
             .setPlaceholder("container.classList.add('mwv-script-enhanced');")
@@ -8883,11 +11053,11 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         );
     }
 
-    this.renderSectionTitle("自动填充", "用于 More > Autofill page，仅填可访问页面里的空字段。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("autofill"), this.plugin.tr("autofillDesc"));
 
     new Setting(containerEl)
-      .setName("Autofill name")
-      .setDesc("Used by More > Autofill page.")
+      .setName(this.plugin.tr("autofillName"))
+      .setDesc(this.plugin.tr("autofillFieldDesc"))
       .addText((text) =>
         text
           .setValue(this.plugin.settings.autofillName)
@@ -8898,8 +11068,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Autofill email")
-      .setDesc("Used by More > Autofill page.")
+      .setName(this.plugin.tr("autofillEmail"))
+      .setDesc(this.plugin.tr("autofillFieldDesc"))
       .addText((text) =>
         text
           .setValue(this.plugin.settings.autofillEmail)
@@ -8910,8 +11080,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Autofill phone")
-      .setDesc("Used by More > Autofill page.")
+      .setName(this.plugin.tr("autofillPhone"))
+      .setDesc(this.plugin.tr("autofillFieldDesc"))
       .addText((text) =>
         text
           .setValue(this.plugin.settings.autofillPhone)
@@ -8922,8 +11092,8 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Autofill address")
-      .setDesc("Used by More > Autofill page.")
+      .setName(this.plugin.tr("autofillAddress"))
+      .setDesc(this.plugin.tr("autofillFieldDesc"))
       .addText((text) =>
         text
           .setValue(this.plugin.settings.autofillAddress)
@@ -8933,90 +11103,90 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           })
       );
 
-    this.renderSectionTitle("数据维护", "清理浏览记录、阅读缓存、下载记录和控制台日志。");
+    this.renderSectionTitle(containerEl, this.plugin.tr("dataMaintenance"), this.plugin.tr("dataMaintenanceDesc"));
 
     new Setting(containerEl)
-      .setName("Clear history")
-      .setDesc(`${this.plugin.settings.history.length} saved entries.`)
+      .setName(this.plugin.tr("clearHistory"))
+      .setDesc(this.plugin.tr("savedEntries", { count: this.plugin.settings.history.length }))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             this.plugin.settings.history = [];
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Clear reader cache")
-      .setDesc(`${this.plugin.settings.pageCache.length} cached pages.`)
+      .setName(this.plugin.tr("clearReaderCache"))
+      .setDesc(this.plugin.tr("cachedPages", { count: this.plugin.settings.pageCache.length }))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             await this.plugin.clearCache();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Clear downloads")
-      .setDesc(`${this.plugin.settings.downloads.length} saved download records. Files are not removed.`)
+      .setName(this.plugin.tr("clearDownloads"))
+      .setDesc(this.plugin.tr("downloadRecords", { count: this.plugin.settings.downloads.length }))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             this.plugin.settings.downloads = [];
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Reading list")
-      .setDesc(`${this.plugin.settings.readingList.length} saved pages.`)
+      .setName(this.plugin.tr("readingList"))
+      .setDesc(this.plugin.tr("savedPages", { count: this.plugin.settings.readingList.length }))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             this.plugin.settings.readingList = [];
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Clear console")
-      .setDesc(`${this.plugin.settings.consoleEntries.length} console entries.`)
+      .setName(this.plugin.tr("clearConsole"))
+      .setDesc(this.plugin.tr("consoleEntries", { count: this.plugin.settings.consoleEntries.length }))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             this.plugin.settings.consoleEntries = [];
             await this.plugin.saveSettings();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Clear browsing data")
-      .setDesc("Clear history, reader cache, and console entries. Bookmarks, reading list, and files are kept.")
+      .setName(this.plugin.tr("clearBrowsingData"))
+      .setDesc(this.plugin.tr("clearBrowsingDataDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Clear")
+          .setButtonText(this.plugin.tr("clear"))
           .onClick(async () => {
             await this.plugin.clearBrowsingData();
-            this.display();
+            this.refreshSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName("Export bookmark note")
-      .setDesc("Create a Markdown note containing current bookmarks.")
+      .setName(this.plugin.tr("exportBookmarkNote"))
+      .setDesc(this.plugin.tr("exportBookmarkNoteDesc"))
       .addButton((button) =>
         button
-          .setButtonText("Create")
+          .setButtonText(this.plugin.tr("create"))
           .onClick(async () => {
             const lines = [
               "# Mobile Webviewer Bookmarks",
@@ -9030,10 +11200,10 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
             } else {
               await this.app.vault.create(path, lines.join("\n"));
             }
-            new Notice("Bookmark note created");
+            new Notice(this.plugin.tr("bookmarkNoteCreated"));
           })
       );
 
-    this.renderSupportCodes();
+    this.renderSupportCodes(containerEl);
   }
 }
