@@ -5,8 +5,8 @@ import {
   Notice,
   Plugin,
   PluginSettingTab,
-  getLanguage,
   requestUrl,
+  sanitizeHTMLToDom,
   Setting,
   SuggestModal,
   TFile,
@@ -40,7 +40,7 @@ const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.29";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.30";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -758,6 +758,26 @@ function htmlToText(value: string): string {
   return doc.body.textContent?.replace(/\s+/g, " ").trim() ?? value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function appendSafeHtml(element: HTMLElement, html: string): void {
+  element.empty();
+  element.appendChild(sanitizeHTMLToDom(html));
+}
+
+function appendSafeDoodleSvg(svg: SVGSVGElement, markup: string): void {
+  svg.empty();
+  const clean = markup.trim();
+  if (!clean) return;
+  const doc = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${clean}</svg>`, "image/svg+xml");
+  doc.querySelectorAll("path").forEach((source) => {
+    const path = svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+    for (const attr of ["d", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-opacity", "fill-opacity", "opacity", "vector-effect", "transform"]) {
+      const value = source.getAttribute(attr);
+      if (value) path.setAttribute(attr, value);
+    }
+    if (path.getAttribute("d")) svg.appendChild(path);
+  });
+}
+
 function resultTitleFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -1264,7 +1284,7 @@ function normalizeTranslateLanguageCode(code: string): string {
 }
 
 function getObsidianLanguageCode(): string {
-  return normalizeTranslateLanguageCode(getLanguage());
+  return normalizeTranslateLanguageCode(document.documentElement.lang || navigator.language || "en");
 }
 
 function resolveTranslateTargetCode(target: string): string {
@@ -2501,7 +2521,7 @@ class MobileWebviewerView extends ItemView {
     doodleLayer.setAttribute("aria-hidden", "true");
     noteWrap.appendChild(doodleLayer);
     if (note?.doodleSvg) {
-      doodleLayer.innerHTML = note.doodleSvg;
+      appendSafeDoodleSvg(doodleLayer, note.doodleSvg);
     }
     this.bindWebNoteEditor(content, status);
     this.bindDoodleLayer(doodleLayer, status);
@@ -2524,7 +2544,7 @@ class MobileWebviewerView extends ItemView {
 
   populateWebNoteContent(content: HTMLElement, page: NotePage, note?: WebNoteEntry): void {
     if (note?.noteHtml) {
-      content.innerHTML = note.noteHtml;
+      appendSafeHtml(content, note.noteHtml);
       return;
     }
     const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
@@ -3144,7 +3164,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   onunload(): void {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+    // Preserve user-arranged leaves when the plugin unloads.
   }
 
   installNoteDrawDedupeObserver(): void {
@@ -3434,19 +3454,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       const workspace = this.app.workspace as unknown as {
         activeLeaf?: WorkspaceLeaf | null;
         setActiveLeaf?: (leaf: WorkspaceLeaf, params?: { focus?: boolean }) => void;
-        revealLeaf?: (leaf: WorkspaceLeaf) => Promise<void>;
         trigger?: (name: string, ...data: unknown[]) => void;
       };
       try {
         const isActiveLeaf = leaf && (workspace.activeLeaf === leaf || Boolean(root.closest(".workspace-leaf.mod-active, .workspace-leaf.is-active")));
         if (leaf && isActiveLeaf) {
           workspace.setActiveLeaf?.(leaf, { focus: true });
-          const revealPromise = workspace.revealLeaf?.(leaf);
-          if (revealPromise) {
-            void revealPromise.catch((error) => {
-              console.warn("[mobile-webviewer] workspace reveal skipped", error);
-            });
-          }
         }
       } catch (error) {
         console.warn("[mobile-webviewer] workspace focus skipped", error);
@@ -3636,17 +3649,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   dispatchActivationClick(target: HTMLElement): void {
     target.removeAttribute("aria-hidden");
     target.removeClass("mwv-notedraw-source-button");
-    const previousStyle = target.getAttribute("style");
-    target.style.setProperty("display", "inline-flex", "important");
-    target.style.setProperty("visibility", "visible", "important");
-    target.style.setProperty("opacity", "0.001", "important");
-    target.style.setProperty("pointer-events", "auto", "important");
-    target.style.setProperty("position", "fixed", "important");
-    target.style.setProperty("right", "8px", "important");
-    target.style.setProperty("bottom", "8px", "important");
-    target.style.setProperty("width", "32px", "important");
-    target.style.setProperty("height", "32px", "important");
-    target.style.setProperty("z-index", "2147483647", "important");
+    target.addClass("mwv-notedraw-activation-proxy");
     const rect = target.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
     const clientY = rect.top + rect.height / 2;
@@ -3669,11 +3672,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       target.dispatchEvent(event);
     }
     window.setTimeout(() => {
-      if (previousStyle === null) {
-        target.removeAttribute("style");
-      } else {
-        target.setAttribute("style", previousStyle);
-      }
+      target.removeClass("mwv-notedraw-activation-proxy");
       if (target.isConnected && !target.hasClass("mwv-notedraw-launcher")) {
         target.addClass("mwv-notedraw-source-button");
         target.setAttribute("aria-hidden", "true");
@@ -3802,7 +3801,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
-    this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
     const view = leaf.view;
     if (url && view instanceof MobileWebviewerView) {
       if (tabId) view.activeBrowserTabId = tabId;
@@ -4711,7 +4710,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       attr: { contenteditable: "true", spellcheck: "true" }
     });
     if (note?.noteHtml) {
-      content.innerHTML = note.noteHtml;
+      appendSafeHtml(content, note.noteHtml);
     } else {
       const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
       const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
@@ -4730,7 +4729,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     doodleLayer.setAttribute("preserveAspectRatio", "none");
     doodleLayer.setAttribute("aria-hidden", "true");
     if (note?.doodleSvg) {
-      doodleLayer.innerHTML = note.doodleSvg;
+      appendSafeDoodleSvg(doodleLayer, note.doodleSvg);
     }
     noteWrap.appendChild(doodleLayer);
     let currentNote = note;
@@ -6783,7 +6782,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!platform?.electron) return false;
     try {
       const probe = document.createElement("webview") as ElectronWebviewElement;
-      probe.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+      probe.addClass("mwv-webview-probe");
       document.body?.appendChild(probe);
       const supported =
         typeof probe === "object" &&
@@ -7099,7 +7098,7 @@ export default class MobileWebviewerPlugin extends Plugin {
           style.id = "mwv-page-note-style";
           style.textContent = \`
             html.mwv-page-text-editing [contenteditable="true"]:not(#mwv-page-note-editor){outline:2px solid rgba(37,99,235,.35)!important;outline-offset:2px!important;}
-            #mwv-page-note-root{position:absolute;top:0;left:0;right:0;z-index:2147483000;pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+            #mwv-page-note-root{position:absolute;top:0;left:0;right:0;height:var(--mwv-page-note-height,100vh);z-index:2147483000;pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
             #mwv-page-note-bar{position:sticky;top:8px;margin:8px 8px 0 auto;width:max-content;display:flex;gap:6px;pointer-events:auto;}
             #mwv-page-note-bar button{width:34px;height:34px;border:1px solid rgba(120,120,120,.32);border-radius:10px;background:rgba(255,255,255,.92);color:#111827;box-shadow:0 6px 18px rgba(0,0,0,.18);font:600 12px system-ui;}
             #mwv-page-note-bar button.is-active{background:#2563eb;color:#fff;}
@@ -7155,7 +7154,7 @@ export default class MobileWebviewerPlugin extends Plugin {
           let appliedSavedPageHtml = false;
           const resize = () => {
             const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, window.innerHeight);
-            root.style.height = height + "px";
+            root.style.setProperty("--mwv-page-note-height", height + "px");
           };
           const pageSnapshot = () => {
             const clone = document.body.cloneNode(true);
@@ -7535,12 +7534,10 @@ export default class MobileWebviewerPlugin extends Plugin {
           document.querySelectorAll(selector).forEach((node) => {
             if (!(node instanceof HTMLElement)) return;
             if (hideAds) {
-              node.style.setProperty("display", "none", "important");
+              node.classList.add("mwv-ad-hidden");
               node.setAttribute("data-mwv-ad-hidden", "true");
             } else if (markAds) {
               node.classList.add("mwv-ad-candidate");
-              node.style.setProperty("outline", "2px dashed #ef4444", "important");
-              node.style.setProperty("outline-offset", "2px", "important");
             }
           });
         };
@@ -7585,7 +7582,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     root.toggleClass("mwv-incognito", this.settings.incognitoMode);
     root.toggleClass("mwv-fullscreen", this.settings.fullScreenMode);
     root.toggleClass("mwv-rotated", this.settings.rotatedMode);
-    root.style.setProperty("--mwv-reader-font-scale", String(clampNumber(this.settings.readerFontScale, 80, 160) / 100));
+    root.setCssProps({ "--mwv-reader-font-scale": String(clampNumber(this.settings.readerFontScale, 80, 160) / 100) });
   }
 
   applyRuntimePreferencesIn(root: HTMLElement): void {
@@ -7629,12 +7626,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     };
     applyAdMode();
-    if (this.settings.markAdsEnabled && !doc.getElementById("mwv-ad-mark-style")) {
-      const style = doc.createElement("style");
-      style.id = "mwv-ad-mark-style";
-      style.textContent = ".mwv-ad-candidate{outline:2px dashed #ef4444!important;outline-offset:2px!important;}";
-      doc.head?.appendChild(style);
-    }
     const win = doc.defaultView as (Window & { __mwvAdObserver?: MutationObserver }) | null;
     if (win && (this.settings.adBlockEnabled || this.settings.markAdsEnabled)) {
       win.__mwvAdObserver?.disconnect();
@@ -7665,23 +7656,18 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   applyFrameViewPreferences(frame: BrowserSurfaceElement): void {
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200);
-    frame.style.setProperty("--mwv-page-zoom", String(zoom / 100));
+    frame.setCssProps({ "--mwv-page-zoom": String(zoom / 100) });
     if (this.isElectronWebview(frame)) {
-      frame.style.setProperty("zoom", "1");
+      frame.setCssStyles({ zoom: "1" } as Partial<CSSStyleDeclaration>);
       try {
         frame.setZoomFactor?.(zoom / 100);
       } catch {
         // The webview may not be ready yet; dom-ready reapplies zoom.
       }
     } else {
-      frame.style.setProperty("zoom", `${zoom}%`);
+      frame.setCssStyles({ zoom: `${zoom}%` } as Partial<CSSStyleDeclaration>);
     }
     frame.toggleClass("mwv-desktop-frame", this.settings.desktopMode);
-    if (this.settings.desktopMode) {
-      frame.style.minWidth = "980px";
-    } else {
-      frame.style.minWidth = "";
-    }
   }
 
   applyFramePreferencesIn(root: HTMLElement): void {
@@ -7870,56 +7856,13 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   applyReaderCustomizations(container: HTMLElement, page: NotePage): void {
     if (!this.settings.userScriptsEnabled) return;
-    const style = this.settings.readerUserStyle.trim();
-    const script = this.settings.readerUserScript.trim();
+    const styleEnabled = Boolean(this.settings.readerUserStyle.trim());
+    const scriptEnabled = Boolean(this.settings.readerUserScript.trim());
     const rules = this.getActiveUserScriptRules(page.url);
-
-    if (style) {
-      const styleEl = container.createEl("style");
-      styleEl.textContent = style;
-    }
-
-    if (script) {
-      try {
-        const run = new Function(
-          "container",
-          "page",
-          "hostName",
-          `"use strict";\n${script}`
-        ) as (container: HTMLElement, page: NotePage, hostNameFn: (url: string) => string) => void;
-        run(container, page, hostName);
-        void this.addConsole("info", "Reader user script executed", page.url);
-      } catch (error) {
-        console.error("[mobile-webviewer] reader user script failed", error);
-        void this.addConsole("error", `Reader user script failed: ${error instanceof Error ? error.message : String(error)}`, page.url);
-      }
-    }
-
-    for (const rule of rules) {
-      const ruleCss = rule.css.trim();
-      const ruleJs = rule.js.trim();
-      if (ruleCss) {
-        const styleEl = container.createEl("style");
-        styleEl.textContent = ruleCss;
-      }
-      if (!ruleJs) {
-        if (ruleCss) void this.addConsole("info", `User script style applied: ${rule.name}`, page.url);
-        continue;
-      }
-      try {
-        const run = new Function(
-          "container",
-          "page",
-          "hostName",
-          "rule",
-          `"use strict";\n${ruleJs}`
-        ) as (container: HTMLElement, page: NotePage, hostNameFn: (url: string) => string, rule: UserScriptRule) => void;
-        run(container, page, hostName, rule);
-        void this.addConsole("info", `User script executed: ${rule.name}`, page.url);
-      } catch (error) {
-        console.error(`[mobile-webviewer] user script failed: ${rule.name}`, error);
-        void this.addConsole("error", `User script failed (${rule.name}): ${error instanceof Error ? error.message : String(error)}`, page.url);
-      }
+    const hasCustomRule = rules.some((rule) => !rule.id.startsWith("builtin-") && (rule.css.trim() || rule.js.trim()));
+    if (styleEnabled || scriptEnabled || hasCustomRule) {
+      container.addClass("mwv-reader-customizations-disabled");
+      void this.addConsole("warn", "Reader custom CSS/JavaScript is disabled in the community-safe build", page.url);
     }
   }
 
@@ -8185,7 +8128,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!blocks.length) {
       const bodyText = textFromElement(root);
       if (bodyText) {
-        for (const sentence of bodyText.split(/(?<=[。！？.!?])\s+|\n+/).map((part) => part.trim()).filter(Boolean)) {
+        const sentenceSource = bodyText.replace(/([。！？.!?])\s+/g, "$1\n");
+        for (const sentence of sentenceSource.split(/\n+/).map((part) => part.trim()).filter(Boolean)) {
           if (sentence.length < 12) continue;
           blocks.push(sentence);
           if (blocks.join("\n").length > 12000) break;
@@ -8496,7 +8440,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("mwv-settings");
 
-    containerEl.createEl("h2", { text: "Mobile Webviewer" });
+    new Setting(containerEl).setName("Mobile Webviewer").setHeading();
 
     this.renderSectionTitle("核心入口", "首页、搜索、两个浏览器入口和启动行为。");
 

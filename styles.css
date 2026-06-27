@@ -47,6 +47,10 @@
   display: none !important;
 }
 
+.mwv-ad-hidden {
+  display: none !important;
+}
+
 .mwv-mark-ads .mwv-ad-candidate,
 .mwv-mark-ads [id*="ad" i],
 .mwv-mark-ads [class*="ad-" i],
@@ -461,6 +465,14 @@
 
 .mwv-real-webview.has-load-error {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, #dc2626 70%, transparent);
+}
+
+.mwv-webview-probe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .mwv-frame.mwv-desktop-frame,
@@ -3176,6 +3188,21 @@
 .mwv-note-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .mwv-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher) {
   display: none !important;
+}
+
+.mwv-root .mwv-notedraw-activation-proxy,
+.mwv-note-embed .mwv-notedraw-activation-proxy,
+.mwv-embed .mwv-notedraw-activation-proxy {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 0.001 !important;
+  pointer-events: auto !important;
+  position: fixed !important;
+  right: 8px !important;
+  bottom: 8px !important;
+  width: 32px !important;
+  height: 32px !important;
+  z-index: 2147483647 !important;
 }
 
 .workspace-leaf-content:has(.mwv-root) .view-actions .notedraw-webview-button:not(.notedraw-header-button),
