@@ -6,7 +6,8 @@ It now has two clearly named modes:
 
 - **Browser View**: the original plugin pane, designed like a normal mobile
   browser with a top address/search input, page area, bottom controls, history,
-  downloads, bookmarks, reading list, cache controls, console copy, and one-tap
+  downloads, bookmarks, reading list, cache controls, console copy, import/export,
+  and one-tap
   link capture. It includes a persistent mobile tab strip with per-tab URL and
   back/forward state. The foreground is now an editable, reader-style Obsidian
   web note by default. A full Chromium `webview` page stays loaded behind it for
@@ -63,9 +64,8 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Choose mobile or desktop page width.
 - Switch mobile/desktop request UA for internal fetch, search, save, and
   download requests.
-- Toggle night mode, eye-protection mode, no-image mode, incognito mode,
-  fullscreen, rotation, JavaScript sandbox blocking, ad blocking, and ad
-  marking from More.
+- Toggle night mode, eye-protection mode, incognito mode, fullscreen, rotation,
+  JavaScript sandbox blocking, ad blocking, and ad marking from More.
 - Keep local history.
 - Save the current page as HTML.
 - Save the current page as MHT/MHTML with a compact set of fetched page
@@ -81,7 +81,6 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
   page is using real Electron Chromium `webview` or iframe fallback, current
   URL, loading state, back/forward availability, zoom, UA mode, and download
   folder.
-- Open webview DevTools from More when Obsidian exposes that API.
 - Catch common downloadable links inside the live webview and route them to the
   plugin Downloads panel.
 - Open downloaded files from the Downloads panel or reveal their location when
@@ -89,11 +88,14 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Run global reader-layer custom CSS and JavaScript.
 - Manage URL-matched user script rules with wildcard matching, per-rule enable
   switches, CSS, and JavaScript.
-- Sniff media resources, list page resources, view source, open developer
-  resource tools, translate pages to many target languages or follow Obsidian's
-  current UI language, read page text
+- Sniff media resources, list page resources, view source, translate pages to
+  many target languages or follow Obsidian's current UI language, read page text
   aloud, generate a QR-code panel, copy share text, report URL text, and create
   a `.url` shortcut file.
+- Export and import a portable Mobile Webviewer JSON package for bookmarks,
+  reading list, history, downloads, user scripts, web notes, and common
+  settings. Clipboard import also accepts common bookmark HTML and plain URL
+  lists.
 - Autofill accessible form fields from a local profile.
 - Use a richer settings console with grouped browser, display, download,
   script, autofill, data, and support-code controls.
@@ -109,8 +111,6 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - `Mobile Webviewer: Open Note Browser`
 - `Mobile Webviewer: Open Note Browser Home`
 - `Mobile Webviewer: Open URL in Note Browser`
-- `Mobile Webviewer: Open Browser View`
-- `Mobile Webviewer: Open URL in Browser View`
 
 ## Browser model
 
@@ -121,6 +121,7 @@ Electron Chromium `webview` when Obsidian exposes it, falling back to iframe
 where needed. Note/Web/Split controls switch between the editable note, the
 real page, and both together. More contains power actions such as system-browser
 open, copy link, bookmark, reading list, history, downloads, matched user
-scripts, browser-status inspection, DevTools where available, console, and
-cache management. Downloads are saved under `Mobile Webviewer Downloads` by
-default and can be configured in settings.
+scripts, browser-status inspection, console, QR code, and cache management.
+Downloads are saved under `Mobile Webviewer Downloads` by default and can be
+configured in settings. The home shell expands to the available mobile screen
+and avoids browser suggestion overlays that can cover the keyboard.

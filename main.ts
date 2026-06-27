@@ -14,6 +14,7 @@ import {
   normalizePath,
   setIcon
 } from "obsidian";
+import * as qrcodeFactory from "qrcode-generator";
 
 const VIEW_TYPE = "mobile-webviewer-view";
 const DEFAULT_HOME = "https://www.bing.com/";
@@ -39,7 +40,32 @@ const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.23";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.29";
+const AD_CANDIDATE_SELECTOR = [
+  "[id*='ad' i]",
+  "[class*='ad-' i]",
+  "[class*='ads' i]",
+  "[class*='advert' i]",
+  "[id*='sponsor' i]",
+  "[class*='sponsor' i]",
+  "[id*='promo' i]",
+  "[class*='promo' i]",
+  "[data-ad]",
+  "[data-ads]",
+  "[data-ad-client]",
+  "[data-ad-slot]",
+  "iframe[src*='ad' i]",
+  "iframe[src*='doubleclick' i]",
+  "iframe[src*='googlesyndication' i]",
+  "iframe[src*='adservice' i]",
+  "[aria-label*='advert' i]",
+  "[aria-label*='sponsor' i]",
+  "ins.adsbygoogle"
+].join(",");
+
+type UtilityPageKind = "bookmarks" | "history" | "reading" | "downloads" | "console" | "cancip";
+const MWV_INTERNAL_SCHEME = "mwv://";
+const UTILITY_PAGE_KINDS: UtilityPageKind[] = ["bookmarks", "history", "reading", "downloads", "console", "cancip"];
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -131,6 +157,8 @@ interface WebNoteEntry {
   noteHtml: string;
   noteText: string;
   doodleSvg: string;
+  pageHtml: string;
+  pageText: string;
   markdownPath: string;
   updatedAt: number;
   createdAt: number;
@@ -190,6 +218,65 @@ interface MobileWebviewerSettings {
   webNotes: WebNoteEntry[];
   consoleEntries: BrowserConsoleEntry[];
   downloads: DownloadEntry[];
+}
+
+const PORTABLE_SETTING_KEYS = [
+  "homeUrl",
+  "searchUrl",
+  "openOnStartup",
+  "compactToolbar",
+  "showReaderHint",
+  "showFloatingWand",
+  "noteBrowserUrl",
+  "liveBrowserFirst",
+  "browserFrontendMode",
+  "autoSaveWebNotes",
+  "webNoteFolder",
+  "userScriptsEnabled",
+  "readerUserStyle",
+  "readerUserScript",
+  "autofillName",
+  "autofillEmail",
+  "autofillPhone",
+  "autofillAddress",
+  "pageZoom",
+  "desktopMode",
+  "nightMode",
+  "eyeProtectionMode",
+  "adBlockEnabled",
+  "markAdsEnabled",
+  "incognitoMode",
+  "fullScreenMode",
+  "jsDisabled",
+  "rotatedMode",
+  "readerFontScale",
+  "userAgentMode",
+  "translateTarget",
+  "downloadFolder",
+  "downloadConnections"
+] as const;
+
+interface MobileWebviewerPortableData {
+  type: "mobile-webviewer-data";
+  version: string;
+  exportedAt: string;
+  settings: Partial<MobileWebviewerSettings>;
+  bookmarks: WebEntry[];
+  readingList: WebEntry[];
+  history: WebEntry[];
+  downloads: DownloadEntry[];
+  userScriptRules: UserScriptRule[];
+  webNotes: WebNoteEntry[];
+}
+
+interface PortableImportPayload {
+  settings: Partial<MobileWebviewerSettings>;
+  bookmarks: WebEntry[];
+  readingList: WebEntry[];
+  history: WebEntry[];
+  downloads: DownloadEntry[];
+  userScriptRules: UserScriptRule[];
+  webNotes: WebNoteEntry[];
 }
 
 interface SearchResult {
@@ -253,12 +340,32 @@ interface BrowserSurfaceCallbacks {
   onFavicon?: (url: string) => void | Promise<void>;
   onDownloadCandidate?: (url: string) => void | Promise<void>;
   onContextLink?: (url: string, title?: string) => void | Promise<void>;
+  onWebNotePatch?: (patch: BrowserWebNotePatch) => void | Promise<void>;
+}
+
+interface BrowserWebNotePatch {
+  url: string;
+  title?: string;
+  noteHtml?: string;
+  noteText?: string;
+  doodleSvg?: string;
+  pageHtml?: string;
+  pageText?: string;
+  noteEdited?: boolean;
+  doodleEdited?: boolean;
+  pageEdited?: boolean;
 }
 
 interface WebNotePanelElement extends HTMLElement {
   _mwvFinishDoodle?: () => void;
   _mwvFlushWebNote?: () => void | Promise<void>;
   _mwvFlushTimer?: number;
+}
+
+interface MobileWebviewerEmbedElement extends HTMLElement {
+  _mwvChromeObserver?: MutationObserver;
+  _mwvChromeWatchTimer?: number;
+  _mwvChromeHeartbeatTimer?: number;
 }
 
 interface NoteDrawControllerLike {
@@ -365,6 +472,10 @@ function normalizeInput(input: string, searchUrl: string): string {
   const value = input.trim();
   if (!value) return DEFAULT_HOME;
 
+  if (isInternalUtilityUrl(value)) {
+    return value;
+  }
+
   if (/^(https?:\/\/|file:\/\/|obsidian:\/\/)/i.test(value)) {
     return value;
   }
@@ -379,7 +490,62 @@ function normalizeInput(input: string, searchUrl: string): string {
     : `${searchUrl}${encoded}`;
 }
 
+function isInternalUtilityUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  const clean = url.trim().toLowerCase();
+  if (!clean.startsWith(MWV_INTERNAL_SCHEME)) return false;
+  return UTILITY_PAGE_KINDS.includes(clean.slice(MWV_INTERNAL_SCHEME.length).split(/[/?#]/)[0] as UtilityPageKind);
+}
+
+function internalUtilityKind(url: string | undefined): UtilityPageKind | null {
+  if (!isInternalUtilityUrl(url)) return null;
+  const kind = url!.trim().toLowerCase().slice(MWV_INTERNAL_SCHEME.length).split(/[/?#]/)[0] as UtilityPageKind;
+  return UTILITY_PAGE_KINDS.includes(kind) ? kind : null;
+}
+
+function internalUtilityContextUrl(url: string | undefined): string {
+  if (!url || !isInternalUtilityUrl(url)) return "";
+  try {
+    const parsed = new URL(url.replace(/^mwv:\/\//i, "https://mwv.local/"));
+    const context = parsed.searchParams.get("url") || "";
+    return /^https?:\/\//i.test(context) ? context : "";
+  } catch {
+    const match = url.match(/[?&]url=([^&#]+)/i);
+    if (!match?.[1]) return "";
+    try {
+      const context = decodeURIComponent(match[1]);
+      return /^https?:\/\//i.test(context) ? context : "";
+    } catch {
+      return "";
+    }
+  }
+}
+
+function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
+  const base = `${MWV_INTERNAL_SCHEME}${kind}`;
+  return /^https?:\/\//i.test(contextUrl) ? `${base}?url=${encodeURIComponent(contextUrl)}` : base;
+}
+
+function utilityPageTitle(kind: UtilityPageKind): string {
+  switch (kind) {
+    case "bookmarks":
+      return "Bookmarks";
+    case "history":
+      return "History";
+    case "reading":
+      return "Reading List";
+    case "downloads":
+      return "Downloads";
+    case "console":
+      return "Console";
+    case "cancip":
+      return "Cancip AI";
+  }
+}
+
 function hostName(url: string): string {
+  const utilityKind = internalUtilityKind(url);
+  if (utilityKind) return utilityPageTitle(utilityKind);
   try {
     return new URL(url).hostname.replace(/^www\./, "");
   } catch {
@@ -398,6 +564,159 @@ function uniqueEntries(entries: WebEntry[], max: number): WebEntry[] {
     if (result.length >= max) break;
   }
   return result;
+}
+
+function normalizeWebEntry(value: unknown, fallbackTitle = ""): WebEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<WebEntry>;
+  const url = typeof item.url === "string" ? normalizeInput(item.url, DEFAULT_SEARCH) : "";
+  if (!/^https?:\/\//i.test(url) && !isInternalUtilityUrl(url)) return null;
+  return {
+    title: typeof item.title === "string" && item.title.trim() ? item.title.trim().slice(0, 180) : fallbackTitle || hostName(url),
+    url,
+    time: typeof item.time === "number" && Number.isFinite(item.time) ? item.time : Date.now()
+  };
+}
+
+function mergeWebEntries(existing: WebEntry[], incoming: WebEntry[], max: number): WebEntry[] {
+  const map = new Map<string, WebEntry>();
+  for (const entry of [...incoming, ...existing]) {
+    const normalized = normalizeWebEntry(entry);
+    if (!normalized) continue;
+    const current = map.get(normalized.url);
+    if (!current || normalized.time >= current.time) {
+      map.set(normalized.url, normalized);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => b.time - a.time).slice(0, max);
+}
+
+function mergeUserScriptRules(existing: UserScriptRule[], incoming: UserScriptRule[]): UserScriptRule[] {
+  const map = new Map<string, UserScriptRule>();
+  for (const rule of [...existing, ...incoming]) {
+    if (!rule || typeof rule !== "object") continue;
+    const id = typeof rule.id === "string" && rule.id ? rule.id : `${rule.name || "script"}-${simpleHash(`${rule.match || ""}${rule.css || ""}${rule.js || ""}`)}`;
+    map.set(id, {
+      id,
+      name: typeof rule.name === "string" && rule.name.trim() ? rule.name.trim().slice(0, 80) : "脚本",
+      match: typeof rule.match === "string" && rule.match.trim() ? rule.match.trim() : "*://*/*",
+      enabled: typeof rule.enabled === "boolean" ? rule.enabled : true,
+      css: typeof rule.css === "string" ? rule.css : "",
+      js: typeof rule.js === "string" ? rule.js : "",
+      runAt: "reader",
+      time: typeof rule.time === "number" ? rule.time : Date.now()
+    });
+  }
+  return Array.from(map.values()).sort((a, b) => b.time - a.time).slice(0, 80);
+}
+
+function mergeDownloads(existing: DownloadEntry[], incoming: DownloadEntry[]): DownloadEntry[] {
+  const map = new Map<string, DownloadEntry>();
+  for (const entry of [...incoming, ...existing]) {
+    if (!entry || typeof entry.url !== "string") continue;
+    const id = typeof entry.id === "string" && entry.id ? entry.id : `dl-${simpleHash(entry.url)}-${simpleHash(entry.path || entry.fileName || "")}`;
+    map.set(id, {
+      id,
+      url: entry.url,
+      fileName: typeof entry.fileName === "string" ? entry.fileName : fileNameFromUrl(entry.url),
+      path: typeof entry.path === "string" ? normalizePath(entry.path) : "",
+      mime: typeof entry.mime === "string" ? entry.mime : "",
+      status: ["queued", "downloading", "completed", "error"].includes(entry.status) ? entry.status : "completed",
+      format: ["file", "html", "mhtml"].includes(entry.format) ? entry.format : "file",
+      bytesReceived: typeof entry.bytesReceived === "number" ? entry.bytesReceived : 0,
+      bytesTotal: typeof entry.bytesTotal === "number" ? entry.bytesTotal : 0,
+      progress: clampNumber(typeof entry.progress === "number" ? entry.progress : 0, 0, 100),
+      connections: clampNumber(typeof entry.connections === "number" ? entry.connections : 1, 1, 8),
+      resumable: typeof entry.resumable === "boolean" ? entry.resumable : false,
+      message: typeof entry.message === "string" ? entry.message : "",
+      time: typeof entry.time === "number" ? entry.time : Date.now()
+    });
+  }
+  return Array.from(map.values()).sort((a, b) => b.time - a.time).slice(0, MAX_DOWNLOADS);
+}
+
+function mergeWebNotes(existing: WebNoteEntry[], incoming: WebNoteEntry[]): WebNoteEntry[] {
+  const map = new Map<string, WebNoteEntry>();
+  for (const entry of [...existing, ...incoming]) {
+    if (!entry || typeof entry.url !== "string") continue;
+    const id = typeof entry.id === "string" && entry.id ? entry.id : webNoteId(entry.url);
+    const normalized: WebNoteEntry = {
+      id,
+      url: entry.url,
+      title: typeof entry.title === "string" && entry.title ? entry.title : hostName(entry.url),
+      sourceTitle: typeof entry.sourceTitle === "string" ? entry.sourceTitle : "",
+      noteHtml: typeof entry.noteHtml === "string" ? entry.noteHtml : "",
+      noteText: typeof entry.noteText === "string" ? entry.noteText : "",
+      doodleSvg: typeof entry.doodleSvg === "string" ? entry.doodleSvg : "",
+      pageHtml: typeof entry.pageHtml === "string" ? entry.pageHtml : "",
+      pageText: typeof entry.pageText === "string" ? entry.pageText : "",
+      markdownPath: typeof entry.markdownPath === "string" ? normalizePath(entry.markdownPath) : "",
+      updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
+      createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now()
+    };
+    const current = map.get(id);
+    if (!current || normalized.updatedAt >= current.updatedAt) map.set(id, normalized);
+  }
+  return Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_WEB_NOTES);
+}
+
+function parseBookmarkHtml(text: string): WebEntry[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, "text/html");
+  const entries: WebEntry[] = [];
+  doc.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
+    const entry = normalizeWebEntry({
+      title: textFromElement(anchor),
+      url: anchor.href,
+      time: Number(anchor.getAttribute("add_date")) * 1000 || Date.now()
+    });
+    if (entry) entries.push(entry);
+  });
+  return entries;
+}
+
+function parsePlainUrlList(text: string): WebEntry[] {
+  const entries: WebEntry[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/https?:\/\/[^\s<>"')]+/i);
+    if (!match) continue;
+    const entry = normalizeWebEntry({ title: hostName(match[0]), url: match[0], time: Date.now() });
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+function parsePortableImportText(text: string): PortableImportPayload {
+  const fallback = (): PortableImportPayload => {
+    const htmlEntries = /<a\s/i.test(text) ? parseBookmarkHtml(text) : [];
+    const plainEntries = htmlEntries.length ? [] : parsePlainUrlList(text);
+    return {
+      settings: {},
+      bookmarks: htmlEntries.length ? htmlEntries : plainEntries,
+      readingList: [],
+      history: [],
+      downloads: [],
+      userScriptRules: [],
+      webNotes: []
+    };
+  };
+
+  try {
+    const parsed = JSON.parse(text) as Partial<MobileWebviewerPortableData> & Partial<MobileWebviewerSettings>;
+    const looksPortable = parsed.type === "mobile-webviewer-data" || Array.isArray(parsed.bookmarks) || Array.isArray(parsed.userScriptRules);
+    if (!looksPortable) return fallback();
+    return {
+      settings: parsed.settings && typeof parsed.settings === "object" ? parsed.settings : parsed,
+      bookmarks: Array.isArray(parsed.bookmarks) ? parsed.bookmarks.map((entry) => normalizeWebEntry(entry)).filter(Boolean) as WebEntry[] : [],
+      readingList: Array.isArray(parsed.readingList) ? parsed.readingList.map((entry) => normalizeWebEntry(entry)).filter(Boolean) as WebEntry[] : [],
+      history: Array.isArray(parsed.history) ? parsed.history.map((entry) => normalizeWebEntry(entry)).filter(Boolean) as WebEntry[] : [],
+      downloads: Array.isArray(parsed.downloads) ? parsed.downloads.filter((entry): entry is DownloadEntry => Boolean(entry && typeof entry.url === "string")) : [],
+      userScriptRules: Array.isArray(parsed.userScriptRules) ? parsed.userScriptRules.filter((rule): rule is UserScriptRule => Boolean(rule && typeof rule === "object")) : [],
+      webNotes: Array.isArray(parsed.webNotes) ? parsed.webNotes.filter((entry): entry is WebNoteEntry => Boolean(entry && typeof entry.url === "string")) : []
+    };
+  } catch {
+    return fallback();
+  }
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -522,10 +841,64 @@ function shortenTitle(title: string): string {
 }
 
 function firstImageFromElement(root: Element, baseUrl: string): string | undefined {
-  const image = root.querySelector<HTMLImageElement>("img[src], img[data-src], img[data-original]");
-  const raw = image?.getAttribute("src") ?? image?.getAttribute("data-src") ?? image?.getAttribute("data-original") ?? "";
-  if (!raw || raw.startsWith("data:")) return undefined;
-  return absoluteUrl(raw, baseUrl);
+  return imageCandidatesFromDocument(root, baseUrl, 1)[0];
+}
+
+function bestSrcsetCandidate(srcset: string): string {
+  const candidates = srcset
+    .split(",")
+    .map((part) => {
+      const [url = "", descriptor = ""] = part.trim().split(/\s+/, 2);
+      const weight = descriptor.endsWith("w")
+        ? Number.parseFloat(descriptor)
+        : descriptor.endsWith("x")
+          ? Number.parseFloat(descriptor) * 1000
+          : 0;
+      return { url: url.trim(), weight: Number.isFinite(weight) ? weight : 0 };
+    })
+    .filter((item) => item.url);
+  candidates.sort((a, b) => b.weight - a.weight);
+  return candidates[0]?.url ?? "";
+}
+
+function cleanImageCandidate(raw: string, baseUrl: string): string {
+  const value = raw.trim().replace(/^url\((['"]?)(.*?)\1\)$/i, "$2").trim();
+  if (!value || value.startsWith("data:") || value.startsWith("blob:")) return "";
+  const absolute = absoluteUrl(value, baseUrl);
+  if (!/^https?:\/\//i.test(absolute)) return "";
+  if (/\b(1x1|pixel|spacer|blank|transparent)\b/i.test(absolute)) return "";
+  return absolute;
+}
+
+function imageCandidatesFromDocument(root: ParentNode, baseUrl: string, limit = 12): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const add = (raw: string | null | undefined) => {
+    if (!raw || result.length >= limit) return;
+    const url = cleanImageCandidate(raw, baseUrl);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    result.push(url);
+  };
+
+  root.querySelectorAll<HTMLMetaElement>(
+    "meta[property='og:image'], meta[property='og:image:secure_url'], meta[name='twitter:image'], meta[name='twitter:image:src']"
+  ).forEach((element) => add(element.getAttribute("content")));
+  root.querySelectorAll<HTMLLinkElement>("link[rel~='image_src'][href], link[rel~='preload'][as='image'][href]").forEach((element) => add(element.getAttribute("href")));
+  root.querySelectorAll<HTMLSourceElement>("picture source[srcset], source[type^='image/'][srcset]").forEach((element) => add(bestSrcsetCandidate(element.getAttribute("srcset") ?? "")));
+  root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+    add(bestSrcsetCandidate(image.getAttribute("srcset") ?? image.getAttribute("data-srcset") ?? ""));
+    for (const attr of ["src", "data-src", "data-original", "data-original-src", "data-lazy-src", "data-url", "data-image", "data-img", "data-thumb", "data-thumbnail"]) {
+      add(image.getAttribute(attr));
+    }
+  });
+  root.querySelectorAll<HTMLElement>("[style*='background']").forEach((element) => {
+    const style = element.getAttribute("style") ?? "";
+    for (const match of style.matchAll(/background(?:-image)?\s*:[^;]*url\((['"]?)(.*?)\1\)/gi)) {
+      add(match[2]);
+    }
+  });
+  return result;
 }
 
 function relatedSearches(query: string): string[] {
@@ -564,6 +937,15 @@ function looksLikeDownloadUrl(url: string | undefined): boolean {
   }
 }
 
+function buildQrSvgDataUrl(value: string): string {
+  const qrcode = (qrcodeFactory as unknown as { default?: typeof qrcodeFactory } & typeof qrcodeFactory).default ?? qrcodeFactory;
+  const qr = qrcode(0, "M");
+  qr.addData(value);
+  qr.make();
+  const svg = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 function createDefaultUserScriptRule(): UserScriptRule {
   return {
     id: `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -575,6 +957,104 @@ function createDefaultUserScriptRule(): UserScriptRule {
     runAt: "reader",
     time: Date.now()
   };
+}
+
+function createBuiltInUserScriptRules(): UserScriptRule[] {
+  const now = Date.now();
+  return [
+    {
+      id: "builtin-copy-unlock",
+      name: "油猴预设：解除复制限制",
+      match: "*://*/*",
+      enabled: true,
+      css: [
+        ".mwv-note-surface, .mwv-note-surface * {",
+        "  -webkit-user-select: text !important;",
+        "  user-select: text !important;",
+        "}",
+        ".mwv-note-surface a, .mwv-note-surface button {",
+        "  -webkit-touch-callout: default;",
+        "}"
+      ].join("\n"),
+      js: [
+        "const lockedAttrs = ['oncopy','oncut','onpaste','onselectstart','oncontextmenu','ondragstart'];",
+        "container.querySelectorAll(lockedAttrs.map((name) => `[${name}]`).join(',')).forEach((el) => {",
+        "  for (const name of lockedAttrs) el.removeAttribute(name);",
+        "});",
+        "for (const type of ['copy','cut','paste','selectstart','contextmenu']) {",
+        "  container.addEventListener(type, (event) => event.stopPropagation(), true);",
+        "}"
+      ].join("\n"),
+      runAt: "reader",
+      time: now
+    },
+    {
+      id: "builtin-reader-clean",
+      name: "油猴预设：阅读排版增强",
+      match: "*://*/*",
+      enabled: true,
+      css: [
+        ".mwv-md-content { line-height: 1.72; }",
+        ".mwv-md-content p { margin: 0.72em 0; }",
+        ".mwv-md-content h1, .mwv-md-content h2, .mwv-md-content h3 { line-height: 1.25; margin-top: 1.1em; }",
+        ".mwv-md-content pre, .mwv-md-content code { white-space: pre-wrap; overflow-wrap: anywhere; }",
+        ".mwv-md-content blockquote { border-left: 3px solid var(--interactive-accent); padding-left: 10px; color: var(--text-muted); }"
+      ].join("\n"),
+      js: "",
+      runAt: "reader",
+      time: now + 1
+    },
+    {
+      id: "builtin-image-viewer",
+      name: "油猴预设：图片查看增强",
+      match: "*://*/*",
+      enabled: true,
+      css: [
+        ".mwv-md-content img {",
+        "  max-width: 100% !important;",
+        "  height: auto !important;",
+        "  border-radius: 6px;",
+        "  cursor: zoom-in;",
+        "}",
+        ".mwv-md-content figure { margin-inline: 0; }"
+      ].join("\n"),
+      js: [
+        "container.querySelectorAll('img').forEach((img) => {",
+        "  img.loading = 'lazy';",
+        "  img.decoding = 'async';",
+        "  img.addEventListener('click', () => {",
+        "    const src = img.currentSrc || img.src;",
+        "    if (src) window.open(src, '_blank');",
+        "  });",
+        "});"
+      ].join("\n"),
+      runAt: "reader",
+      time: now + 2
+    },
+    {
+      id: "builtin-table-scroll",
+      name: "油猴预设：表格横滑",
+      match: "*://*/*",
+      enabled: true,
+      css: [
+        ".mwv-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }",
+        ".mwv-table-scroll table { min-width: max-content; }",
+        ".mwv-md-content table { border-collapse: collapse; }",
+        ".mwv-md-content th, .mwv-md-content td { padding: 6px 8px; border: 1px solid var(--background-modifier-border); }"
+      ].join("\n"),
+      js: [
+        "container.querySelectorAll('table').forEach((table) => {",
+        "  if (table.parentElement?.classList.contains('mwv-table-scroll')) return;",
+        "  const wrap = document.createElement('div');",
+        "  wrap.className = 'mwv-table-scroll';",
+        "  table.parentElement?.insertBefore(wrap, table);",
+        "  wrap.appendChild(table);",
+        "});"
+      ].join("\n"),
+      runAt: "reader",
+      time: now + 3
+    }
+  ];
 }
 
 function wildcardMatch(pattern: string, value: string): boolean {
@@ -746,6 +1226,9 @@ function htmlToMarkdownFromElement(root: HTMLElement): string {
 function webNoteMarkdown(entry: WebNoteEntry): string {
   const title = entry.title || entry.sourceTitle || hostName(entry.url);
   const body = entry.noteText || htmlToText(entry.noteHtml);
+  const pageEdit = entry.pageText
+    ? `\n\n## Page edits\n\n${escapeMarkdownText(entry.pageText)}`
+    : "";
   const doodle = entry.doodleSvg ? `\n\n## Doodle\n\n\`\`\`svg\n${entry.doodleSvg}\n\`\`\`` : "";
   return [
     "---",
@@ -759,6 +1242,7 @@ function webNoteMarkdown(entry: WebNoteEntry): string {
     entry.url,
     "",
     body,
+    pageEdit,
     doodle
   ].join("\n").trim() + "\n";
 }
@@ -888,11 +1372,9 @@ class MobileWebviewerView extends ItemView {
         autocomplete: "off",
         autocapitalize: "off",
         spellcheck: "false",
-        placeholder: "Search or enter URL",
-        list: "mwv-address-suggestions"
+        placeholder: "Search or enter URL"
       }
     });
-    this.plugin.renderUrlSuggestions(form, "mwv-address-suggestions");
     const goButton = form.createEl("button", {
       cls: "mwv-icon-button mwv-primary",
       attr: { type: "submit", "aria-label": "Go" }
@@ -937,7 +1419,8 @@ class MobileWebviewerView extends ItemView {
       onLoading: (loading, url) => this.handleSurfaceLoading(loading, url),
       onFavicon: (iconUrl) => this.plugin.addConsole("info", `Favicon: ${iconUrl}`, this.currentUrl),
       onDownloadCandidate: (downloadUrl) => this.handleSurfaceDownload(downloadUrl),
-      onContextLink: (linkUrl, linkTitle) => this.setContextLink(linkUrl, linkTitle)
+      onContextLink: (linkUrl, linkTitle) => this.setContextLink(linkUrl, linkTitle),
+      onWebNotePatch: (patch) => { void this.plugin.saveBrowserSurfaceWebNotePatch(patch); }
     });
     this.plugin.applyFrameViewPreferences(this.surfaceEl);
     this.surfaceEl.addEventListener("contextmenu", (event) => {
@@ -987,9 +1470,9 @@ class MobileWebviewerView extends ItemView {
     this.makeToolButton(toolbar, "notebook-tabs", "Note Browser", () => void this.openCurrentInNoteBrowser());
     this.makeToolButton(toolbar, "file-down", "存 MD", () => void this.exportCurrentWebNote());
     this.makeToolButton(toolbar, "star", "Bookmark", () => this.toggleBookmark());
-    this.makeToolButton(toolbar, "book-open", "Bookmarks", () => this.openDrawer("bookmarks"));
-    this.makeToolButton(toolbar, "history", "History", () => this.openDrawer("history"));
-    this.makeToolButton(toolbar, "download", "Downloads", () => this.openDrawer("downloads"));
+    this.makeToolButton(toolbar, "book-open", "Bookmarks", () => void this.openUtilityTab("bookmarks"));
+    this.makeToolButton(toolbar, "history", "History", () => void this.openUtilityTab("history"));
+    this.makeToolButton(toolbar, "download", "Downloads", () => void this.openUtilityTab("downloads"));
     this.makeToolButton(toolbar, "plus-square", "Save link", () => this.captureLink());
     this.makeToolButton(toolbar, "settings", "Settings", () => this.plugin.openSettings());
 
@@ -1081,7 +1564,7 @@ class MobileWebviewerView extends ItemView {
     await this.plugin.addConsole("info", `Detected download link: ${url}`, this.currentUrl);
     const entry = await this.plugin.downloadUrlFile(url);
     new Notice(`Download complete: ${entry.path || entry.message}`);
-    this.openDrawer("downloads");
+    await this.openUtilityTab("downloads");
   }
 
   handleSurfaceNavigate(url: string): void {
@@ -1282,63 +1765,18 @@ class MobileWebviewerView extends ItemView {
       const item = this.listEl.createEl("button", { cls: "mwv-list-item", attr: { type: "button" } });
       item.createDiv({ cls: "mwv-list-title", text: entry.title || hostName(entry.url) });
       item.createDiv({ cls: "mwv-list-url", text: entry.url });
-      item.addEventListener("click", () => this.navigate(entry.url, true));
+      item.addEventListener("click", () => void this.newBrowserTab(entry.url));
     }
   }
 
   renderDownloadsDrawer(): void {
     if (!this.listEl) return;
-    const entries = this.plugin.settings.downloads.slice(0, 40);
-    if (!entries.length) {
-      this.listEl.createDiv({ cls: "mwv-empty", text: "No downloads yet" });
-      return;
-    }
-
-    for (const entry of entries) {
-      const item = this.listEl.createDiv({ cls: `mwv-download-list-item is-${entry.status}` });
-      const top = item.createDiv({ cls: "mwv-download-list-top" });
-      top.createDiv({ cls: "mwv-download-list-title", text: entry.fileName || hostName(entry.url) });
-      top.createDiv({ cls: "mwv-download-list-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
-      const progress = item.createDiv({ cls: "mwv-download-progress" });
-      progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
-      item.createDiv({ cls: "mwv-download-list-url", text: entry.url });
-      item.createDiv({ cls: "mwv-download-list-path", text: entry.path || entry.message });
-      const row = item.createDiv({ cls: "mwv-download-list-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
-      open.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void this.plugin.openDownloadEntry(entry);
-      });
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
-      copy.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void this.plugin.copyDownloadPath(entry);
-      });
-      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
-      locate.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void this.plugin.revealDownloadEntry(entry);
-      });
-    }
+    this.renderDownloadsList(this.listEl, this.plugin.settings.downloads);
   }
 
   renderConsoleDrawer(): void {
     if (!this.listEl) return;
-    const entries = this.plugin.settings.consoleEntries.slice(0, 30);
-    if (!entries.length) {
-      this.listEl.createDiv({ cls: "mwv-empty", text: "No console logs" });
-      return;
-    }
-
-    for (const entry of entries) {
-      const item = this.listEl.createDiv({ cls: `mwv-console-list-item is-${entry.level}` });
-      item.createDiv({ cls: "mwv-console-list-meta", text: `${entry.level.toUpperCase()} · ${new Date(entry.time).toLocaleTimeString()}` });
-      item.createDiv({ cls: "mwv-console-list-message", text: entry.message });
-      if (entry.url) item.createDiv({ cls: "mwv-console-list-url", text: entry.url });
-    }
+    this.renderConsoleList(this.listEl, this.plugin.settings.consoleEntries);
   }
 
   buildHome(query = "", results: SearchResult[] = []): void {
@@ -1452,8 +1890,17 @@ class MobileWebviewerView extends ItemView {
   removeMoreUtilityPanels(panel: HTMLElement): void {
     [
       ".mwv-console-panel",
+      ".mwv-reading-panel",
+      ".mwv-userscript-panel",
+      ".mwv-history-panel",
       ".mwv-downloads-panel",
-      ".mwv-tools-panel"
+      ".mwv-site-panel",
+      ".mwv-tools-panel",
+      ".mwv-assets-panel",
+      ".mwv-source-panel",
+      ".mwv-qr-panel",
+      ".mwv-report-panel",
+      ".mwv-translate-panel"
     ].forEach((selector) => panel.querySelector<HTMLElement>(selector)?.remove());
   }
 
@@ -1511,6 +1958,15 @@ class MobileWebviewerView extends ItemView {
     const nextUrl = normalizeInput(url, this.plugin.settings.searchUrl);
     this.flushCurrentWebNoteBeforeRender();
     this.currentWebNote = undefined;
+    const utilityKind = internalUtilityKind(nextUrl);
+    if (utilityKind) {
+      if (pushHistory && this.currentUrl && this.currentUrl !== nextUrl) {
+        this.backStack.push(this.currentUrl);
+        this.forwardStack = [];
+      }
+      this.renderUtilityTab(utilityKind, nextUrl);
+      return;
+    }
     const query = this.extractBingQuery(nextUrl);
     if (this.isBingHome(nextUrl) || query !== null) {
       if (pushHistory && this.currentUrl && this.currentUrl !== nextUrl) {
@@ -1579,6 +2035,11 @@ class MobileWebviewerView extends ItemView {
   navigateWithoutStack(url: string): void {
     this.flushCurrentWebNoteBeforeRender();
     this.currentWebNote = undefined;
+    const utilityKind = internalUtilityKind(url);
+    if (utilityKind) {
+      this.renderUtilityTab(utilityKind, url);
+      return;
+    }
     const query = this.extractBingQuery(url);
     if (this.isBingHome(url) || query !== null) {
       if (query) {
@@ -1608,6 +2069,11 @@ class MobileWebviewerView extends ItemView {
   reload(): void {
     if (!this.currentUrl) return;
     this.flushCurrentWebNoteBeforeRender();
+    const utilityKind = internalUtilityKind(this.currentUrl);
+    if (utilityKind) {
+      this.renderUtilityTab(utilityKind, this.currentUrl);
+      return;
+    }
     const query = this.extractBingQuery(this.currentUrl);
     if (this.isBingHome(this.currentUrl) || query !== null) {
       if (query) {
@@ -1728,6 +2194,194 @@ class MobileWebviewerView extends ItemView {
       void this.plugin.addConsole("warn", "Reader extraction failed; showing live web page", url);
       void this.showReaderFallbackForCurrentPage(url, error instanceof Error ? error.message : "Reader extraction failed");
     }
+  }
+
+  renderUtilityTab(kind: UtilityPageKind, url = utilityPageUrl(kind)): void {
+    this.currentUrl = url;
+    this.currentTitle = utilityPageTitle(kind);
+    this.addressEl.value = url;
+    this.titleEl.setText(this.currentTitle);
+    this.subtitleEl.setText("Internal browser tab");
+    this.syncSurfaceIdentity(url, this.currentTitle);
+    this.setLiveFrameMode(false);
+    this.homeEl.removeClass("mwv-reader-strip");
+    this.homeEl.addClass("is-visible");
+    this.homeEl.empty();
+    const article = this.homeEl.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
+    article.dataset.url = url;
+    article.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
+    article.createEl("h1", { text: this.currentTitle });
+    const actions = article.createDiv({ cls: "mwv-note-actions" });
+    const refresh = actions.createEl("button", { attr: { type: "button", title: "Refresh", "aria-label": "Refresh" } });
+    setIcon(refresh, "rotate-cw");
+    refresh.addEventListener("click", () => this.renderUtilityTab(kind, url));
+    if (kind === "cancip") {
+      const open = actions.createEl("button", { attr: { type: "button", title: "Open Cancip", "aria-label": "Open Cancip" } });
+      setIcon(open, "bot");
+      open.addEventListener("click", () => void this.plugin.openCancip());
+    }
+    const content = article.createDiv({ cls: "mwv-utility-content" });
+    this.renderUtilityContent(content, kind);
+    void this.syncActiveBrowserTab();
+    this.renderTabStrip();
+  }
+
+  renderUtilityContent(parent: HTMLElement, kind: UtilityPageKind): void {
+    if (kind === "downloads") {
+      this.renderUtilitySummary(parent, [
+        ["全部", String(this.plugin.settings.downloads.length)],
+        ["完成", String(this.plugin.settings.downloads.filter((entry) => entry.status === "completed").length)],
+        ["失败", String(this.plugin.settings.downloads.filter((entry) => entry.status === "error").length)]
+      ]);
+      this.renderDownloadsList(parent, this.plugin.settings.downloads, true);
+      return;
+    }
+    if (kind === "console") {
+      this.renderConsoleList(parent, this.plugin.settings.consoleEntries, true);
+      return;
+    }
+    if (kind === "cancip") {
+      this.renderCancipUtility(parent);
+      return;
+    }
+    const entries =
+      kind === "bookmarks"
+        ? this.plugin.settings.bookmarks.filter((entry) => !isBuiltInShortcut(entry))
+        : kind === "reading"
+          ? this.plugin.settings.readingList
+          : this.plugin.settings.history;
+    if (kind === "history") {
+      const today = new Date().toDateString();
+      this.renderUtilitySummary(parent, [
+        ["全部", String(entries.length)],
+        ["今天", String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
+        ["最近", entries[0] ? hostName(entries[0].url) : "-"]
+      ]);
+    }
+    this.renderWebEntryList(parent, entries, entries.length ? "" : `No ${utilityPageTitle(kind).toLowerCase()} yet`);
+  }
+
+  renderUtilitySummary(parent: HTMLElement, items: [string, string][]): void {
+    const summary = parent.createDiv({ cls: "mwv-utility-summary" });
+    for (const [label, value] of items) {
+      const card = summary.createDiv({ cls: "mwv-utility-summary-card" });
+      card.createDiv({ cls: "mwv-utility-summary-label", text: label });
+      card.createDiv({ cls: "mwv-utility-summary-value", text: value });
+    }
+  }
+
+  renderWebEntryList(parent: HTMLElement, entries: WebEntry[], emptyText: string): void {
+    if (!entries.length) {
+      parent.createDiv({ cls: "mwv-empty", text: emptyText || "No entries" });
+      return;
+    }
+    const list = parent.createDiv({ cls: "mwv-utility-list" });
+    for (const entry of entries.slice(0, 120)) {
+      const item = list.createDiv({ cls: "mwv-utility-item" });
+      const main = item.createEl("button", { cls: "mwv-utility-main", attr: { type: "button", title: entry.url } });
+      const meta = main.createDiv({ cls: "mwv-utility-meta" });
+      meta.createSpan({ cls: "mwv-utility-host", text: hostName(entry.url) });
+      meta.createSpan({ cls: "mwv-utility-time", text: new Date(entry.time).toLocaleString() });
+      main.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
+      main.createDiv({ cls: "mwv-utility-url", text: entry.url });
+      main.addEventListener("click", () => void this.newBrowserTab(entry.url));
+      const row = item.createDiv({ cls: "mwv-utility-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: "Open" } });
+      setIcon(open, "arrow-right");
+      open.addEventListener("click", () => void this.newBrowserTab(entry.url));
+      const copy = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: "Copy" } });
+      setIcon(copy, "copy");
+      copy.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
+        new Notice("Copied link");
+      });
+    }
+  }
+
+  renderDownloadsList(parent: HTMLElement, entries: DownloadEntry[], full = false): void {
+    const visible = entries.slice(0, full ? 120 : 40);
+    if (!visible.length) {
+      parent.createDiv({ cls: "mwv-empty", text: "No downloads yet" });
+      return;
+    }
+    const list = parent.createDiv({ cls: "mwv-download-list" });
+    for (const entry of visible) {
+      const item = list.createDiv({ cls: `mwv-download-list-item is-${entry.status}` });
+      const top = item.createDiv({ cls: "mwv-download-list-top" });
+      top.createDiv({ cls: "mwv-download-list-title", text: entry.fileName || hostName(entry.url) });
+      top.createDiv({ cls: "mwv-download-list-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
+      const progress = item.createDiv({ cls: "mwv-download-progress" });
+      progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
+      item.createDiv({ cls: "mwv-download-list-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()} · ${new Date(entry.time).toLocaleString()}` });
+      item.createDiv({ cls: "mwv-download-list-url", text: entry.url });
+      item.createDiv({ cls: "mwv-download-list-path", text: entry.path || entry.message });
+      const row = item.createDiv({ cls: "mwv-download-list-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      open.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.openDownloadEntry(entry);
+      });
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      copy.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.copyDownloadPath(entry);
+      });
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      locate.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.plugin.revealDownloadEntry(entry);
+      });
+      if (entry.url && /^https?:\/\//i.test(entry.url)) {
+        const source = row.createEl("button", { cls: "mwv-mini-action", text: "来源", attr: { type: "button" } });
+        source.addEventListener("click", () => void this.newBrowserTab(entry.url));
+      }
+    }
+  }
+
+  renderConsoleList(parent: HTMLElement, entries: BrowserConsoleEntry[], full = false): void {
+    parent.empty();
+    const visible = entries.slice(0, full ? 120 : 30);
+    if (!visible.length) {
+      parent.createDiv({ cls: "mwv-empty", text: "No console logs" });
+      return;
+    }
+    for (const entry of visible) {
+      const item = parent.createDiv({ cls: `mwv-console-list-item is-${entry.level}` });
+      item.createDiv({ cls: "mwv-console-list-meta", text: `${entry.level.toUpperCase()} · ${new Date(entry.time).toLocaleString()}` });
+      item.createDiv({ cls: "mwv-console-list-message", text: entry.message });
+      if (entry.url) {
+        const url = item.createEl("button", { cls: "mwv-console-list-url", text: entry.url, attr: { type: "button", title: entry.url } });
+        url.addEventListener("click", () => void this.newBrowserTab(entry.url!));
+      }
+    }
+  }
+
+  renderCancipUtility(parent: HTMLElement): void {
+    parent.empty();
+    const status = this.plugin.getCancipStatus();
+    const contextUrl = internalUtilityContextUrl(this.currentUrl) || this.currentUrl || this.plugin.settings.homeUrl;
+    const card = parent.createDiv({ cls: "mwv-cancip-card" });
+    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? "Cancip AI 已检测到" : "Cancip AI 未启用" });
+    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? `版本 ${status.version || "unknown"}，可从这里打开 AI 面板。` : "安装或启用 Cancip 后，Mobile Webviewer 会把网页上下文作为可复制上下文入口提供。" });
+    const row = card.createDiv({ cls: "mwv-utility-actions" });
+    const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开 Cancip", attr: { type: "button" } });
+    open.disabled = !status.enabled;
+    open.addEventListener("click", () => void this.plugin.openCancip());
+    const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制当前网页上下文", attr: { type: "button" } });
+    copy.addEventListener("click", async () => {
+      const text = [
+        "Mobile Webviewer context",
+        `Title: ${hostName(contextUrl)}`,
+        `URL: ${contextUrl}`,
+        "",
+        "请基于这个网页上下文继续分析、整理、摘录或生成笔记。"
+      ].join("\n");
+      await navigator.clipboard.writeText(text);
+      new Notice("Copied Cancip context");
+    });
   }
 
   async showReaderFallbackForCurrentPage(url: string, reason = ""): Promise<void> {
@@ -2149,13 +2803,23 @@ class MobileWebviewerView extends ItemView {
       cls: "mwv-more-feedback",
       text: `下载保存到: ${this.plugin.normalizeDownloadFolder()}`
     });
-    const actions = body.createDiv({ cls: "mwv-more-actions" });
+    const sections = body.createDiv({ cls: "mwv-more-sections" });
     const setFeedback = (message: string, isError = false) => {
       feedback.setText(message);
       feedback.toggleClass("is-error", isError);
     };
-    const addAction = (icon: string, label: string, onClick: () => void | Promise<void>): HTMLButtonElement => {
-      const button = actions.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
+    const addGroup = (title: string): HTMLElement => {
+      const section = sections.createDiv({ cls: "mwv-more-section" });
+      section.createDiv({ cls: "mwv-more-section-title", text: title });
+      return section.createDiv({ cls: "mwv-more-actions" });
+    };
+    const tabActions = addGroup("标签");
+    const pageActions = addGroup("页面");
+    const viewActions = addGroup("视图");
+    const saveActions = addGroup("保存");
+    const toolActions = addGroup("工具");
+    const addAction = (group: HTMLElement, icon: string, label: string, onClick: () => void | Promise<void>): HTMLButtonElement => {
+      const button = group.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
       setIcon(button, icon);
       button.createSpan({ text: label });
       button.addEventListener("click", (event) => {
@@ -2178,132 +2842,129 @@ class MobileWebviewerView extends ItemView {
       return button;
     };
 
-    addAction("download", `下载页 (${this.plugin.settings.downloads.length})`, () => {
-      this.closeMorePanel();
-      this.openDrawer("downloads");
-    });
-    addAction("external-link", "用浏览器打开", () => {
-      window.open(url, "_blank");
-    });
-    addAction("file-text", "打开 Note Web", async () => {
+    addAction(tabActions, "download", `下载页 (${this.plugin.settings.downloads.length})`, () => void this.openUtilityTab("downloads"));
+    addAction(tabActions, "history", `历史 (${this.plugin.settings.history.length})`, () => void this.openUtilityTab("history"));
+    addAction(tabActions, "book-open", `收藏 (${this.plugin.settings.bookmarks.length})`, () => void this.openUtilityTab("bookmarks"));
+    addAction(tabActions, "library", `稍后读 (${this.plugin.settings.readingList.length})`, () => void this.openUtilityTab("reading"));
+    addAction(tabActions, "terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => void this.openUtilityTab("console"));
+    addAction(tabActions, "bot", "Cancip AI", () => void this.openUtilityTab("cancip"));
+    addAction(tabActions, "plus", "新 OB 标签", () => this.newBrowserTab());
+    addAction(tabActions, "file-text", "打开 Note Web", async () => {
       this.closeMorePanel();
       await this.plugin.openNoteBrowser(url);
     });
-    addAction("copy", "复制链接", async () => {
+
+    addAction(pageActions, "external-link", "用浏览器打开", () => {
+      window.open(url, "_blank");
+    });
+    addAction(pageActions, "copy", "复制链接", async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
       new Notice("Copied link");
     });
-    addAction("share-2", "分享", () => this.plugin.sharePage(url, title));
-    addAction("plus", "新 OB 标签", () => this.newBrowserTab());
-    addAction("search", "页内查找", () => this.toggleFindPanel());
-    addAction("activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(body, url));
-    addAction("wrench", "打开 DevTools", async () => {
-      const opened = await this.plugin.openBrowserDevTools(this.surfaceEl);
-      if (!opened) throw new Error("当前页面层不支持 DevTools");
-    });
-    addAction("zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
-    addAction("zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
-    addAction("monitor-smartphone", this.plugin.settings.desktopMode ? "手机版" : "桌面版", () => this.plugin.toggleDesktopMode(this.containerEl));
-    addAction("moon", this.plugin.settings.nightMode ? "日间模式" : "夜间模式", () => this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
-    addAction("image-off", this.plugin.settings.noImageMode ? "显示图片" : "无图模式", async () => {
-      await this.plugin.toggleBooleanMode("noImageMode", this.containerEl, "No image mode");
+    addAction(pageActions, "share-2", "分享", () => this.plugin.sharePage(url, title));
+    addAction(pageActions, "activity", "浏览器状态", () => this.toggleMoreBrowserStatusPanel(body, url));
+
+    addAction(viewActions, "zoom-in", `放大 ${this.plugin.settings.pageZoom}%`, () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
+    addAction(viewActions, "zoom-out", "缩小", () => this.plugin.setPageZoom(this.plugin.settings.pageZoom - 10, this.containerEl));
+    addAction(viewActions, "monitor-smartphone", this.plugin.settings.desktopMode ? "手机版" : "桌面版", () => this.plugin.toggleDesktopMode(this.containerEl));
+    addAction(viewActions, "moon", this.plugin.settings.nightMode ? "日间模式" : "夜间模式", () => this.plugin.toggleBooleanMode("nightMode", this.containerEl, "Night mode"));
+    addAction(viewActions, "eye", this.plugin.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", () => this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
+    addAction(viewActions, "shield-check", this.plugin.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
+      await this.plugin.setAdMode(!this.plugin.settings.adBlockEnabled, false, this.containerEl);
       this.reload();
     });
-    addAction("eye", this.plugin.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", () => this.plugin.toggleBooleanMode("eyeProtectionMode", this.containerEl, "Eye mode"));
-    addAction("shield-check", this.plugin.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
-      await this.plugin.toggleBooleanMode("adBlockEnabled", this.containerEl, "Ad block");
+    addAction(viewActions, "scan", this.plugin.settings.markAdsEnabled ? "取消标记广告" : "标记广告", async () => {
+      await this.plugin.setAdMode(false, !this.plugin.settings.markAdsEnabled, this.containerEl);
       this.reload();
     });
-    addAction("glasses", this.plugin.settings.incognitoMode ? "关闭无痕" : "无痕", () => this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
-    addAction("maximize", this.plugin.settings.fullScreenMode ? "退出全屏" : "全屏", () => this.plugin.toggleFullscreen(this.containerEl));
-    addAction("file-x", this.plugin.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
+    addAction(viewActions, "glasses", this.plugin.settings.incognitoMode ? "关闭无痕" : "无痕", () => this.plugin.toggleBooleanMode("incognitoMode", this.containerEl, "Incognito"));
+    addAction(viewActions, "maximize", this.plugin.settings.fullScreenMode ? "退出全屏" : "全屏", () => this.plugin.toggleFullscreen(this.containerEl));
+    addAction(viewActions, "file-x", this.plugin.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
       await this.plugin.toggleBooleanMode("jsDisabled", this.containerEl, "JavaScript");
       this.reload();
     });
-    addAction("smartphone", `UA: ${this.plugin.settings.userAgentMode}`, async () => {
+    addAction(viewActions, "smartphone", `UA: ${this.plugin.settings.userAgentMode}`, async () => {
       await this.plugin.toggleUserAgent(this.containerEl);
       this.reload();
     });
-    addAction("rotate-cw", this.plugin.settings.rotatedMode ? "关闭横屏" : "横屏", () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
-    addAction("type", `字号 ${this.plugin.settings.readerFontScale}%`, () => this.plugin.adjustReaderFont(10, this.containerEl));
-    addAction("download", "下载文件", async () => {
+    addAction(viewActions, "rotate-cw", this.plugin.settings.rotatedMode ? "关闭横屏" : "横屏", () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
+    addAction(viewActions, "type", `字号 ${this.plugin.settings.readerFontScale}%`, () => this.plugin.adjustReaderFont(10, this.containerEl));
+
+    addAction(saveActions, "download", "下载文件", async () => {
       const entry = await this.plugin.downloadUrlFile(url);
       setFeedback(`下载完成: ${entry.path || entry.message}`);
       this.closeMorePanel();
-      this.openDrawer("downloads");
+      await this.openUtilityTab("downloads");
     });
-    addAction("file-code", "保存 HTML", async () => {
+    addAction(saveActions, "file-code", "保存 HTML", async () => {
       const entry = await this.plugin.downloadCurrentPageHtml(url, title);
       setFeedback(`已保存: ${entry.path || entry.message}`);
       this.closeMorePanel();
-      this.openDrawer("downloads");
+      await this.openUtilityTab("downloads");
     });
-    addAction("archive", "保存 MHT", async () => {
+    addAction(saveActions, "archive", "保存 MHT", async () => {
       const entry = await this.plugin.downloadCurrentPageMhtml(url, title);
       setFeedback(`已保存: ${entry.path || entry.message}`);
       this.closeMorePanel();
-      this.openDrawer("downloads");
+      await this.openUtilityTab("downloads");
     });
-    addAction("file-down", "离线页面", async () => {
+    addAction(saveActions, "file-down", "离线页面", async () => {
       await this.plugin.saveOfflinePage(url, title);
       this.closeMorePanel();
-      this.openDrawer("downloads");
+      await this.openUtilityTab("downloads");
     });
-    addAction("external-link", "桌面快捷方式", async () => {
+    addAction(saveActions, "file-symlink", "桌面快捷方式", async () => {
       const path = await this.plugin.createShortcutFile(url, title);
       setFeedback(`已保存: ${path}`);
       new Notice(`Saved ${path}`);
     });
-    addAction("text-cursor-input", "自动填表", () => this.autofillCurrentPage());
-    addAction("star", this.plugin.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签", () => this.toggleBookmark());
-    addAction("book-open", "加入稍后读", async () => {
+    addAction(saveActions, "star", this.plugin.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签", () => this.toggleBookmark());
+    addAction(saveActions, "book-open", "加入稍后读", async () => {
       await this.plugin.addReadingList({ title, url, time: Date.now() });
       this.renderDrawer(this.currentDrawer);
       new Notice("Added to reading list");
     });
-    addAction("library", `稍后读 (${this.plugin.settings.readingList.length})`, () => {
-      this.closeMorePanel();
-      this.openDrawer("reading");
+
+    addAction(toolActions, "text-cursor-input", "自动填表", () => this.autofillCurrentPage());
+    addAction(toolActions, "wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => {
+      this.plugin.toggleUserScriptsPanel(body, url);
     });
-    addAction("terminal", `反馈日志 (${this.plugin.settings.consoleEntries.length})`, () => {
-      this.toggleMoreConsolePanel(body, url);
-    });
-    addAction("wand-sparkles", `脚本 (${this.plugin.getActiveUserScriptRules(url).length})`, () => this.plugin.openSettings());
-    addAction("radio", "媒体嗅探", async () => {
+    addAction(toolActions, "radio", "媒体嗅探", async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText(assets.media.join("\n"));
       new Notice(`Media copied: ${assets.media.length}`);
     });
-    addAction("layers", "页面资源", async () => {
+    addAction(toolActions, "layers", "页面资源", async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText([...assets.links, ...assets.media, ...assets.scripts, ...assets.styles].join("\n"));
       new Notice("Resources copied");
     });
-    addAction("code-2", "复制源码", async () => {
+    addAction(toolActions, "code-2", "复制源码", async () => {
       const assets = await this.plugin.extractPageAssets(url);
       await navigator.clipboard.writeText(assets.html);
       new Notice("Source copied");
     });
-    addAction("languages", `翻译 (${translateModeLabel(this.plugin.settings.translateTarget)})`, () => {
+    addAction(toolActions, "languages", `翻译 (${translateModeLabel(this.plugin.settings.translateTarget)})`, () => {
       new TranslateLanguageModal(this.app, this.plugin, url, (translateUrl) => this.navigate(translateUrl, true)).open();
     });
-    addAction("volume-2", "朗读", () => this.plugin.readPageAloud(url));
-    addAction("qr-code", "二维码", () => {
-      window.open(`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}`, "_blank");
-    });
-    addAction("shield-alert", "复制报告", async () => {
-      await navigator.clipboard.writeText(`Report URL\n${url}`);
-      new Notice("Report copied");
-    });
-    addAction("copy", "复制日志", async () => {
+    addAction(toolActions, "volume-2", "朗读", () => this.plugin.readPageAloud(url));
+    addAction(toolActions, "qr-code", "二维码", () => this.plugin.toggleQrPanel(body, url));
+    addAction(toolActions, "shield-alert", "反馈报告", () => this.plugin.toggleReportPanel(body, url));
+    addAction(toolActions, "copy", "复制日志", async () => {
       await navigator.clipboard.writeText(this.plugin.formatConsoleEntries());
       new Notice("Console copied");
     });
-    addAction("trash", `清缓存 (${this.plugin.settings.pageCache.length})`, async () => {
+    addAction(toolActions, "trash", `清缓存 (${this.plugin.settings.pageCache.length})`, async () => {
       await this.plugin.clearCache();
       new Notice("Cache cleared");
     });
-    addAction("settings", "设置", () => this.plugin.openSettings());
+    addAction(toolActions, "settings", "设置", () => this.plugin.openSettings());
+  }
+
+  async openUtilityTab(kind: UtilityPageKind): Promise<void> {
+    this.closeMorePanel();
+    const contextUrl = kind === "cancip" ? this.currentUrl : "";
+    await this.newBrowserTab(utilityPageUrl(kind, contextUrl));
   }
 
   async autofillCurrentPage(): Promise<void> {
@@ -2430,26 +3091,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-browser-view",
-      name: "Open Browser View",
-      callback: () => void this.activateBrowserView()
-    });
-
-    this.addCommand({
       id: "open-url-in-mobile-webviewer",
       name: "Open URL in Note Browser",
       callback: async () => {
         const selected = this.app.workspace.activeEditor?.editor?.getSelection() ?? "";
         await this.openNoteBrowser(selected || this.settings.homeUrl);
-      }
-    });
-
-    this.addCommand({
-      id: "open-url-in-browser-view",
-      name: "Open URL in Browser View",
-      callback: async () => {
-        const selected = this.app.workspace.activeEditor?.editor?.getSelection() ?? "";
-        await this.activateBrowserView(selected || this.settings.homeUrl);
       }
     });
 
@@ -2676,7 +3322,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (immediate) {
       const panel = root.querySelector<WebNotePanelElement>(".mwv-reader-panel");
       if (panel?._mwvFlushWebNote) {
-        void panel._mwvFlushWebNote();
+        void Promise.resolve(panel._mwvFlushWebNote()).catch((error) => {
+          console.error("[mobile-webviewer] immediate reader flush failed", error);
+        });
         return;
       }
     }
@@ -3167,6 +3815,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.noteBrowserUrl = normalizeInput(input, this.settings.searchUrl);
       this.settings.noteBrowserBack = [];
       this.settings.noteBrowserForward = [];
+      const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
+      tab.url = this.settings.noteBrowserUrl;
+      tab.title = hostName(this.settings.noteBrowserUrl);
+      tab.back = [];
+      tab.forward = [];
+      tab.time = Date.now();
       await this.saveSettings();
     }
     const file = await this.ensureWebviewerNote();
@@ -3222,6 +3876,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvBack = JSON.stringify(this.settings.noteBrowserBack ?? []);
       embed.dataset.mwvForward = JSON.stringify(this.settings.noteBrowserForward ?? []);
       embed.dataset.mwvBrowserMode = "note";
+      const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
+      embed.dataset.mwvActiveTabId = tab.id;
       const url = this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl;
       embed.dataset.url = url;
       void this.renderEmbed(embed, url);
@@ -3379,7 +4035,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     item.createDiv({ cls: "mwv-bing-result-url", text: result.url });
     const body = item.createDiv({ cls: "mwv-result-body" });
     if (result.imageUrl) {
-      body.createEl("img", { cls: "mwv-result-thumb", attr: { src: result.imageUrl, alt: "" } });
+      body.createEl("img", { cls: "mwv-result-thumb", attr: { src: result.imageUrl, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
     }
     if (result.snippet) body.createDiv({ cls: "mwv-bing-result-snippet", text: result.snippet });
   }
@@ -3415,7 +4071,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async openUrlInEmbed(embed: HTMLElement, url: string, recordHistory = true): Promise<void> {
     const nextUrl = normalizeInput(url, this.settings.searchUrl);
     const previousUrl = embed.dataset.url;
-    this.flushEmbedReader(embed);
+    await this.flushEmbedReaderNow(embed);
     if (previousUrl && previousUrl !== nextUrl) {
       this.resetNoteDrawWebviewControllers(embed);
     }
@@ -3427,6 +4083,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.setAttribute("data-url", nextUrl);
       void this.persistEmbedState(embed);
     }
+    const utilityKind = internalUtilityKind(nextUrl);
+    if (utilityKind) {
+      this.renderUtilityEmbed(embed, utilityKind, nextUrl);
+      await this.syncEmbedActiveTab(embed, nextUrl, utilityPageTitle(utilityKind));
+      return;
+    }
     const query = this.extractBingQuery(nextUrl);
     if (this.isBingHome(nextUrl) || query !== null) {
       this.renderBingShellEmbed(embed, query ?? "");
@@ -3435,6 +4097,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         url: nextUrl,
         time: Date.now()
       });
+      void this.syncEmbedActiveTab(embed, nextUrl, query ? `Bing: ${query}` : "Bing");
       return;
     }
     void this.addHistory({
@@ -3451,7 +4114,87 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  getEmbedActiveTab(embed: HTMLElement): BrowserTab {
+    const tab = this.ensureBrowserTab(embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId);
+    embed.dataset.mwvActiveTabId = tab.id;
+    this.settings.activeBrowserTabId = tab.id;
+    return tab;
+  }
+
+  async syncEmbedActiveTab(embed: HTMLElement, url = embed.dataset.url || this.settings.homeUrl, title = ""): Promise<void> {
+    const tab = this.getEmbedActiveTab(embed);
+    await this.updateBrowserTab(tab.id, {
+      title: title || this.getEmbedSurfaceTitle(embed) || hostName(url),
+      url,
+      back: this.getEmbedStack(embed, "mwvBack"),
+      forward: this.getEmbedStack(embed, "mwvForward"),
+      time: Date.now()
+    });
+  }
+
+  async switchEmbedBrowserTab(embed: HTMLElement, id: string): Promise<void> {
+    if (embed.dataset.mwvActiveTabId === id) return;
+    await this.flushEmbedReaderNow(embed);
+    await this.syncEmbedActiveTab(embed);
+    const tab = this.settings.browserTabs.find((item) => item.id === id);
+    if (!tab) return;
+    embed.dataset.mwvActiveTabId = tab.id;
+    this.settings.activeBrowserTabId = tab.id;
+    this.setEmbedStack(embed, "mwvBack", tab.back ?? []);
+    this.setEmbedStack(embed, "mwvForward", tab.forward ?? []);
+    this.settings.noteBrowserUrl = tab.url;
+    this.settings.noteBrowserBack = [...(tab.back ?? [])];
+    this.settings.noteBrowserForward = [...(tab.forward ?? [])];
+    await this.saveSettings();
+    await this.openUrlInEmbed(embed, tab.url, false);
+  }
+
+  async newEmbedBrowserTab(embed: HTMLElement, url = this.settings.homeUrl): Promise<void> {
+    await this.flushEmbedReaderNow(embed);
+    await this.syncEmbedActiveTab(embed);
+    const tab = this.createBrowserTab(url);
+    this.settings.browserTabs = [
+      tab,
+      ...this.settings.browserTabs.filter((item) => item.id !== tab.id)
+    ].slice(0, MAX_BROWSER_TABS);
+    this.settings.activeBrowserTabId = tab.id;
+    embed.dataset.mwvActiveTabId = tab.id;
+    this.setEmbedStack(embed, "mwvBack", []);
+    this.setEmbedStack(embed, "mwvForward", []);
+    await this.saveSettings();
+    await this.openUrlInEmbed(embed, tab.url, false);
+  }
+
+  async closeEmbedBrowserTab(embed: HTMLElement, id: string): Promise<void> {
+    await this.flushEmbedReaderNow(embed);
+    await this.syncEmbedActiveTab(embed);
+    const tabs = this.settings.browserTabs;
+    const index = tabs.findIndex((tab) => tab.id === id);
+    if (index < 0) return;
+    if (tabs.length === 1) {
+      const replacement = this.createBrowserTab(this.settings.homeUrl);
+      this.settings.browserTabs = [replacement];
+      this.settings.activeBrowserTabId = replacement.id;
+      embed.dataset.mwvActiveTabId = replacement.id;
+      await this.saveSettings();
+      await this.openUrlInEmbed(embed, replacement.url, false);
+      return;
+    }
+    tabs.splice(index, 1);
+    if (embed.dataset.mwvActiveTabId === id) {
+      const next = tabs[Math.min(index, tabs.length - 1)];
+      embed.dataset.mwvActiveTabId = next.id;
+      this.settings.activeBrowserTabId = next.id;
+      await this.saveSettings();
+      await this.openUrlInEmbed(embed, next.url, false);
+      return;
+    }
+    await this.saveSettings();
+    this.renderEmbedTabStrip(embed);
+  }
+
   async navigateEmbedBack(embed: HTMLElement): Promise<void> {
+    await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
     if (this.isElectronWebview(surface) && surface.canGoBack?.()) {
       surface.goBack?.();
@@ -3472,6 +4215,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async navigateEmbedForward(embed: HTMLElement): Promise<void> {
+    await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
     if (this.isElectronWebview(surface) && surface.canGoForward?.()) {
       surface.goForward?.();
@@ -3492,6 +4236,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async refreshEmbed(embed: HTMLElement): Promise<void> {
+    await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
     if (this.isElectronWebview(surface) && surface.reload) {
       surface.reload();
@@ -3507,13 +4252,205 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  renderEmbedTabStrip(embed: HTMLElement): void {
+    const strip = embed.querySelector<HTMLElement>(".mwv-embed-tab-strip");
+    if (!strip) return;
+    strip.empty();
+    const activeTab = this.getEmbedActiveTab(embed);
+    const tabs = this.settings.browserTabs.length ? this.settings.browserTabs : [activeTab];
+    for (const tab of tabs.slice(0, MAX_BROWSER_TABS)) {
+      const item = strip.createEl("button", {
+        cls: tab.id === activeTab.id ? "mwv-browser-tab is-active" : "mwv-browser-tab",
+        attr: { type: "button", title: tab.url }
+      });
+      item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
+      const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
+      setIcon(close, "x");
+      item.addEventListener("click", async (event) => {
+        const target = event.target as HTMLElement | null;
+        event.preventDefault();
+        event.stopPropagation();
+        if (target?.closest(".mwv-browser-tab-close")) {
+          await this.closeEmbedBrowserTab(embed, tab.id);
+        } else {
+          await this.switchEmbedBrowserTab(embed, tab.id);
+        }
+      });
+    }
+    const add = strip.createEl("button", {
+      cls: "mwv-browser-tab-add",
+      attr: { type: "button", title: "New tab", "aria-label": "New tab" }
+    });
+    setIcon(add, "plus");
+    add.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.newEmbedBrowserTab(embed);
+    });
+  }
+
+  renderUtilityEmbed(embed: HTMLElement, kind: UtilityPageKind, url = utilityPageUrl(kind)): void {
+    embed.empty();
+    embed.addClass("mwv-embed");
+    embed.addClass("mwv-note-embed");
+    embed.addClass("mwv-utility-embed");
+    embed.removeClass("mwv-bing-home");
+    embed.dataset.url = url;
+    embed.setAttribute("data-url", url);
+    this.renderBrowserChrome(embed, url, utilityPageTitle(kind));
+    const page = embed.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
+    page.dataset.url = url;
+    page.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
+    page.createEl("h2", { cls: "mwv-page-title", text: utilityPageTitle(kind) });
+    const content = page.createDiv({ cls: "mwv-utility-content" });
+    if (kind === "downloads") {
+      this.renderEmbedUtilitySummary(content, [
+        ["全部", String(this.settings.downloads.length)],
+        ["完成", String(this.settings.downloads.filter((entry) => entry.status === "completed").length)],
+        ["失败", String(this.settings.downloads.filter((entry) => entry.status === "error").length)]
+      ]);
+      this.renderDownloadUtilityList(content, embed, this.settings.downloads);
+    } else if (kind === "console") {
+      this.renderConsoleUtilityList(content, this.settings.consoleEntries);
+    } else if (kind === "cancip") {
+      this.renderCancipUtilityContent(content, embed);
+    } else {
+      const entries =
+        kind === "bookmarks"
+          ? this.settings.bookmarks.filter((entry) => !isBuiltInShortcut(entry))
+          : kind === "reading"
+          ? this.settings.readingList
+          : this.settings.history;
+      if (kind === "history") {
+        const today = new Date().toDateString();
+        this.renderEmbedUtilitySummary(content, [
+          ["全部", String(entries.length)],
+          ["今天", String(entries.filter((entry) => new Date(entry.time).toDateString() === today).length)],
+          ["最近", entries[0] ? hostName(entries[0].url) : "-"]
+        ]);
+      }
+      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : `No ${utilityPageTitle(kind).toLowerCase()} yet`);
+    }
+    this.notifyNoteDrawWebviewChanged(embed);
+  }
+
+  renderEmbedUtilitySummary(parent: HTMLElement, items: [string, string][]): void {
+    const summary = parent.createDiv({ cls: "mwv-utility-summary" });
+    for (const [label, value] of items) {
+      const card = summary.createDiv({ cls: "mwv-utility-summary-card" });
+      card.createDiv({ cls: "mwv-utility-summary-label", text: label });
+      card.createDiv({ cls: "mwv-utility-summary-value", text: value });
+    }
+  }
+
+  renderEntryUtilityList(parent: HTMLElement, embed: HTMLElement, entries: WebEntry[], emptyText: string): void {
+    if (!entries.length) {
+      parent.createDiv({ cls: "mwv-empty", text: emptyText || "No entries" });
+      return;
+    }
+    const list = parent.createDiv({ cls: "mwv-utility-list" });
+    for (const entry of entries.slice(0, 120)) {
+      const item = list.createDiv({ cls: "mwv-utility-item" });
+      const main = item.createEl("button", { cls: "mwv-utility-main", attr: { type: "button", title: entry.url } });
+      const meta = main.createDiv({ cls: "mwv-utility-meta" });
+      meta.createSpan({ cls: "mwv-utility-host", text: hostName(entry.url) });
+      meta.createSpan({ cls: "mwv-utility-time", text: new Date(entry.time).toLocaleString() });
+      main.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
+      main.createDiv({ cls: "mwv-utility-url", text: entry.url });
+      main.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
+      const row = item.createDiv({ cls: "mwv-utility-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: "新标签", attr: { type: "button" } });
+      open.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
+      const current = row.createEl("button", { cls: "mwv-mini-action", text: "当前打开", attr: { type: "button" } });
+      current.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制", attr: { type: "button" } });
+      copy.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
+        new Notice("Copied link");
+      });
+    }
+  }
+
+  renderDownloadUtilityList(parent: HTMLElement, embed: HTMLElement, entries: DownloadEntry[]): void {
+    if (!entries.length) {
+      parent.createDiv({ cls: "mwv-empty", text: "No downloads yet" });
+      return;
+    }
+    const list = parent.createDiv({ cls: "mwv-download-list" });
+    for (const entry of entries.slice(0, 120)) {
+      const item = list.createDiv({ cls: `mwv-download-item is-${entry.status}` });
+      const top = item.createDiv({ cls: "mwv-download-item-top" });
+      top.createDiv({ cls: "mwv-download-item-title", text: entry.fileName || hostName(entry.url) });
+      top.createDiv({ cls: "mwv-download-item-state", text: `${entry.status} · ${Math.round(entry.progress)}%` });
+      const progress = item.createDiv({ cls: "mwv-download-progress" });
+      progress.createDiv({ cls: "mwv-download-progress-fill", attr: { style: `width:${clampNumber(entry.progress, 0, 100)}%` } });
+      item.createDiv({ cls: "mwv-download-item-meta", text: `${entry.connections} connection${entry.connections === 1 ? "" : "s"} · ${entry.resumable ? "Range" : "single"} · ${entry.format.toUpperCase()}` });
+      item.createDiv({ cls: "mwv-download-item-path", text: entry.path || entry.message || entry.url });
+      const row = item.createDiv({ cls: "mwv-download-list-actions" });
+      const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开", attr: { type: "button" } });
+      open.addEventListener("click", () => void this.openDownloadEntry(entry));
+      const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制路径", attr: { type: "button" } });
+      copy.addEventListener("click", () => void this.copyDownloadPath(entry));
+      const locate = row.createEl("button", { cls: "mwv-mini-action", text: "位置", attr: { type: "button" } });
+      locate.addEventListener("click", () => void this.revealDownloadEntry(entry));
+      if (entry.url && /^https?:\/\//i.test(entry.url)) {
+        const source = row.createEl("button", { cls: "mwv-mini-action", text: "来源", attr: { type: "button" } });
+        source.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
+      }
+    }
+  }
+
+  renderConsoleUtilityList(parent: HTMLElement, entries: BrowserConsoleEntry[]): void {
+    parent.empty();
+    if (!entries.length) {
+      parent.createDiv({ cls: "mwv-empty", text: "No console logs" });
+      return;
+    }
+    for (const entry of entries.slice(0, 120)) {
+      const item = parent.createDiv({ cls: `mwv-console-list-item is-${entry.level}` });
+      item.createDiv({ cls: "mwv-console-list-meta", text: `${entry.level.toUpperCase()} · ${new Date(entry.time).toLocaleString()}` });
+      item.createDiv({ cls: "mwv-console-list-message", text: entry.message });
+      if (entry.url) item.createDiv({ cls: "mwv-console-list-url", text: entry.url });
+    }
+  }
+
+  renderCancipUtilityContent(parent: HTMLElement, embed: HTMLElement): void {
+    parent.empty();
+    const status = this.getCancipStatus();
+    const contextUrl = internalUtilityContextUrl(embed.dataset.url) || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    const card = parent.createDiv({ cls: "mwv-cancip-card" });
+    card.createDiv({ cls: "mwv-cancip-title", text: status.enabled ? "Cancip AI 已检测到" : "Cancip AI 未启用" });
+    card.createDiv({ cls: "mwv-cancip-desc", text: status.enabled ? `版本 ${status.version || "unknown"}，可从网页标签直接打开。` : "启用 Cancip 后这里会成为网页上下文到 AI 的入口。" });
+    const row = card.createDiv({ cls: "mwv-utility-actions" });
+    const open = row.createEl("button", { cls: "mwv-mini-action", text: "打开 Cancip", attr: { type: "button" } });
+    open.disabled = !status.enabled;
+    open.addEventListener("click", () => void this.openCancip());
+    const copy = row.createEl("button", { cls: "mwv-mini-action", text: "复制当前网页上下文", attr: { type: "button" } });
+    copy.addEventListener("click", async () => {
+      await navigator.clipboard.writeText([
+        "Mobile Webviewer context",
+        `URL: ${contextUrl}`,
+        `Title: ${hostName(contextUrl)}`,
+        "",
+        "请基于这个网页上下文继续分析、整理、摘录或生成笔记。"
+      ].join("\n"));
+      new Notice("Copied Cancip context");
+    });
+  }
+
   flushEmbedReader(embed: HTMLElement): void {
+    void this.flushEmbedReaderNow(embed);
+  }
+
+  async flushEmbedReaderNow(embed: HTMLElement): Promise<void> {
     const panels = Array.from(embed.querySelectorAll<WebNotePanelElement>(".mwv-reader-panel"));
+    const flushes: Promise<unknown>[] = [];
     for (const panel of panels) {
       try {
-        void Promise.resolve(panel._mwvFlushWebNote?.()).catch((error) => {
+        const flush = Promise.resolve(panel._mwvFlushWebNote?.()).catch((error) => {
           console.error("[mobile-webviewer] reader flush failed", error);
         });
+        flushes.push(flush);
       } catch (error) {
         console.error("[mobile-webviewer] reader flush failed", error);
       }
@@ -3525,12 +4462,20 @@ export default class MobileWebviewerPlugin extends Plugin {
         button.setAttribute("aria-label", "Doodle");
       });
     }
+    await Promise.all(flushes);
   }
 
   async renderEmbed(embed: HTMLElement, url: string): Promise<void> {
+    const utilityKind = internalUtilityKind(url);
+    if (utilityKind) {
+      this.renderUtilityEmbed(embed, utilityKind, url);
+      await this.syncEmbedActiveTab(embed, url, utilityPageTitle(utilityKind));
+      return;
+    }
     const query = this.extractBingQuery(url);
     if (this.isBingHome(url) || query !== null) {
       this.renderBingShellEmbed(embed, query ?? "");
+      await this.syncEmbedActiveTab(embed, url, query ? `Bing: ${query}` : "Bing");
       return;
     }
 
@@ -3555,7 +4500,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       } catch (error) {
         console.error("[mobile-webviewer] reader extraction failed", error);
         void this.addConsole("warn", "Reader extraction skipped", url);
-        reader.remove();
+        const fallback = await this.fetchFallbackNotePage(url, error instanceof Error ? error.message : "Reader extraction skipped");
+        const note = await this.ensureWebNote(fallback);
+        if (embed.isConnected && embed.dataset.url === url) {
+          this.renderReaderPanel(reader, fallback, note, embed);
+        }
       }
       return;
     }
@@ -3617,7 +4566,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       },
       onFavicon: (iconUrl) => this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url),
       onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl),
-      onContextLink: (linkUrl, linkTitle) => this.updateEmbedStatus(embed, linkUrl, linkTitle)
+      onContextLink: (linkUrl, linkTitle) => this.updateEmbedStatus(embed, linkUrl, linkTitle),
+      onWebNotePatch: (patch) => { void this.saveBrowserSurfaceWebNotePatch(patch); }
     });
     this.applyFrameViewPreferences(frame);
   }
@@ -3660,7 +4610,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const previous = embed.dataset.url;
     const programmaticUrl = embed.dataset.mwvProgrammaticUrl;
     if (previous && previous !== nextUrl) {
-      this.flushEmbedReader(embed);
+      void this.flushEmbedReaderNow(embed);
       this.resetNoteDrawWebviewControllers(embed);
     }
     if (programmaticUrl === nextUrl) {
@@ -3678,6 +4628,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.updateEmbedChrome(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
     this.notifyNoteDrawWebviewChanged(embed);
     void this.persistEmbedState(embed);
+    void this.syncEmbedActiveTab(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
     void this.addHistory({
       title: this.getEmbedSurfaceTitle(embed) || hostName(nextUrl),
       url: nextUrl,
@@ -3689,6 +4640,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   handleEmbedSurfaceTitle(embed: HTMLElement, title: string): void {
     const url = embed.dataset.url || this.settings.homeUrl;
     this.updateEmbedChrome(embed, url, title || hostName(url));
+    void this.syncEmbedActiveTab(embed, url, title || hostName(url));
   }
 
   getEmbedSurfaceTitle(embed: HTMLElement): string {
@@ -3697,8 +4649,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   updateEmbedChrome(embed: HTMLElement, url: string, title: string): void {
+    embed.dataset.mwvCurrentTitle = title || hostName(url);
     const address = embed.querySelector<HTMLInputElement>(".mwv-browser-url");
-    if (address) address.value = url;
+    if (address && document.activeElement !== address && !address.matches(":focus")) {
+      address.value = url;
+    }
     const form = embed.querySelector<HTMLElement>(".mwv-browser-address");
     if (form) form.setAttribute("title", url);
     const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
@@ -3712,6 +4667,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       more.dataset.mwvUrl = url;
       more.dataset.mwvTitle = title;
     }
+    this.renderEmbedTabStrip(embed);
   }
 
   updateEmbedStatus(embed: HTMLElement, url: string, title = ""): void {
@@ -3746,7 +4702,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (page.images.length) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
-        media.createEl("img", { attr: { src: image, alt: "" } });
+        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
       }
     }
     const noteWrap = panel.createDiv({ cls: "mwv-webnote-wrap" });
@@ -3824,9 +4780,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         void save();
       }
     };
-    statePanel._mwvFinishDoodle = () => finishDoodle(undefined, false);
+    statePanel._mwvFinishDoodle = () => finishDoodle(undefined, true);
     statePanel._mwvFlushWebNote = async () => {
-      finishDoodle(undefined, false);
+      finishDoodle(undefined, true);
       panel.removeClass("is-doodling");
       if (statePanel._mwvFlushTimer) {
         window.clearTimeout(statePanel._mwvFlushTimer);
@@ -3915,10 +4871,12 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderBingShellEmbed(embed: HTMLElement, query = ""): void {
-    this.flushEmbedReader(embed);
+    void this.flushEmbedReaderNow(embed);
     this.resetNoteDrawWebviewControllers(embed);
     embed.empty();
     embed.addClass("mwv-bing-home");
+    embed.toggleClass("mwv-bing-home-empty", !query.trim());
+    embed.toggleClass("mwv-bing-home-results", Boolean(query.trim()));
     embed.removeClass("mwv-note-embed");
 
     const currentUrl = query
@@ -4071,6 +5029,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderBrowserChrome(embed: HTMLElement, url: string, title: string): void {
+    embed.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab-strip, :scope > .mwv-browser-chrome, :scope > .mwv-browser-status, :scope > .mwv-bookmarks-bar").forEach((node) => node.remove());
+    embed.dataset.mwvCurrentTitle = title || hostName(url);
+    embed.createDiv({ cls: "mwv-tab-strip mwv-embed-tab-strip" });
+    this.renderEmbedTabStrip(embed);
     const chrome = embed.createDiv({ cls: "mwv-browser-chrome" });
     const controls = chrome.createDiv({ cls: "mwv-browser-controls" });
     const setMode = (mode: "note" | "web" | "split") => {
@@ -4118,7 +5080,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     makeModeButton("globe-2", "网页", "web");
     makeNavButton("file-down", "存 MD", () => void this.exportEmbedWebNote(embed));
 
-    const suggestionsId = `mwv-url-suggestions-${++this.processorSeq}`;
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
       attr: { title: url }
@@ -4133,11 +5094,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         autocomplete: "off",
         autocapitalize: "off",
         spellcheck: "false",
-        list: suggestionsId,
         "aria-label": "Address"
       }
     });
-    this.renderUrlSuggestions(address, suggestionsId);
     const go = address.createEl("button", {
       cls: "mwv-browser-go",
       attr: { type: "submit", title: "Go", "aria-label": "Go" }
@@ -4169,6 +5128,92 @@ export default class MobileWebviewerPlugin extends Plugin {
       ? embed.dataset.mwvBrowserMode as "note" | "web"
       : "note";
     setMode(initialMode || "note");
+    this.watchEmbedChrome(embed);
+  }
+
+  watchEmbedChrome(embed: HTMLElement): void {
+    const state = embed as MobileWebviewerEmbedElement;
+    state._mwvChromeObserver?.disconnect();
+    if (state._mwvChromeWatchTimer) window.clearTimeout(state._mwvChromeWatchTimer);
+    if (state._mwvChromeHeartbeatTimer) window.clearInterval(state._mwvChromeHeartbeatTimer);
+    const schedule = () => {
+      if (state._mwvChromeWatchTimer) window.clearTimeout(state._mwvChromeWatchTimer);
+      state._mwvChromeWatchTimer = window.setTimeout(() => {
+        state._mwvChromeWatchTimer = undefined;
+        this.ensureEmbedChrome(embed);
+      }, 80);
+    };
+    state._mwvChromeObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type !== "childList") continue;
+        const touchedChrome = Array.from(mutation.removedNodes).some((node) =>
+          node instanceof HTMLElement &&
+          (node.hasClass("mwv-browser-chrome") || node.hasClass("mwv-browser-status") || node.hasClass("mwv-embed-tab-strip") || node.querySelector?.(".mwv-browser-chrome, .mwv-browser-status, .mwv-embed-tab-strip"))
+        );
+        const missingChrome = !embed.querySelector(":scope > .mwv-browser-chrome") || !embed.querySelector(":scope > .mwv-embed-tab-strip");
+        if (touchedChrome || missingChrome) {
+          schedule();
+          break;
+        }
+      }
+    });
+    state._mwvChromeObserver.observe(embed, { childList: true });
+    state._mwvChromeHeartbeatTimer = window.setInterval(() => {
+      if (!embed.isConnected) {
+        if (state._mwvChromeHeartbeatTimer) window.clearInterval(state._mwvChromeHeartbeatTimer);
+        state._mwvChromeHeartbeatTimer = undefined;
+        state._mwvChromeObserver?.disconnect();
+        state._mwvChromeObserver = undefined;
+        return;
+      }
+      this.ensureEmbedChrome(embed);
+    }, 1200);
+    this.register(() => {
+      state._mwvChromeObserver?.disconnect();
+      if (state._mwvChromeWatchTimer) window.clearTimeout(state._mwvChromeWatchTimer);
+      if (state._mwvChromeHeartbeatTimer) window.clearInterval(state._mwvChromeHeartbeatTimer);
+      state._mwvChromeWatchTimer = undefined;
+      state._mwvChromeHeartbeatTimer = undefined;
+      state._mwvChromeObserver = undefined;
+    });
+    schedule();
+  }
+
+  ensureEmbedChrome(embed: HTMLElement): void {
+    if (!embed.isConnected || (!embed.hasClass("mwv-note-embed") && !embed.hasClass("mwv-bing-home") && !embed.hasClass("mwv-utility-embed"))) return;
+    const url = embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    const title = embed.dataset.mwvCurrentTitle || this.getEmbedSurfaceTitle(embed) || hostName(url);
+    const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+    const strip = embed.querySelector<HTMLElement>(":scope > .mwv-embed-tab-strip");
+    const status = embed.querySelector<HTMLElement>(":scope > .mwv-browser-status");
+    if (chrome && strip && status) {
+      this.updateEmbedChrome(embed, url, title);
+      this.pinEmbedChrome(embed);
+      return;
+    }
+    const scrollTop = embed.scrollTop;
+    this.renderBrowserChrome(embed, url, title);
+    this.pinEmbedChrome(embed);
+    embed.scrollTop = scrollTop;
+    void this.addConsole("warn", "NoteWeb navigation toolbar restored", url);
+  }
+
+  pinEmbedChrome(embed: HTMLElement): void {
+    const nodes = [
+      embed.querySelector<HTMLElement>(":scope > .mwv-embed-tab-strip"),
+      embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome"),
+      embed.querySelector<HTMLElement>(":scope > .mwv-browser-status"),
+      embed.querySelector<HTMLElement>(":scope > .mwv-bookmarks-bar")
+    ].filter((node): node is HTMLElement => Boolean(node));
+    let anchor: ChildNode | null = embed.firstChild;
+    for (const node of nodes) {
+      if (anchor === node) {
+        anchor = node.nextSibling;
+        continue;
+      }
+      embed.insertBefore(node, anchor);
+      anchor = node.nextSibling;
+    }
   }
 
   async openEmbedInBrowserView(embed: HTMLElement): Promise<void> {
@@ -4215,18 +5260,29 @@ export default class MobileWebviewerPlugin extends Plugin {
       cls: "mwv-more-feedback",
       text: `下载保存到: ${this.normalizeDownloadFolder()}`
     });
-    const actions = body.createDiv({ cls: "mwv-more-actions" });
+    const sections = body.createDiv({ cls: "mwv-more-sections" });
     const setFeedback = (message: string, isError = false) => {
       feedback.setText(message);
       feedback.toggleClass("is-error", isError);
     };
+    const addGroup = (title: string): HTMLElement => {
+      const section = sections.createDiv({ cls: "mwv-more-section" });
+      section.createDiv({ cls: "mwv-more-section-title", text: title });
+      return section.createDiv({ cls: "mwv-more-actions" });
+    };
+    const tabActions = addGroup("标签");
+    const pageActions = addGroup("页面");
+    const viewActions = addGroup("视图");
+    const saveActions = addGroup("保存");
+    const toolActions = addGroup("工具");
     const addAction = (
+      group: HTMLElement,
       icon: string,
       label: string,
       onClick: () => void | Promise<void>,
       closePanel = false
     ): HTMLButtonElement => {
-      const button = actions.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
+      const button = group.createEl("button", { cls: "mwv-more-action", attr: { type: "button", title: label } });
       setIcon(button, icon);
       button.createSpan({ text: label });
       button.addEventListener("click", (event) => {
@@ -4252,173 +5308,151 @@ export default class MobileWebviewerPlugin extends Plugin {
       return button;
     };
 
-    addAction("download", `下载页 (${this.settings.downloads.length})`, () => {
-      this.toggleDownloadsPanel(body);
-    });
-    addAction("external-link", "用浏览器打开", () => {
+    addAction(tabActions, "download", `下载页 (${this.settings.downloads.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("downloads")), true);
+    addAction(tabActions, "history", `历史 (${this.settings.history.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("history")), true);
+    addAction(tabActions, "book-open", `收藏 (${this.settings.bookmarks.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("bookmarks")), true);
+    addAction(tabActions, "library", `稍后读 (${this.settings.readingList.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("reading")), true);
+    addAction(tabActions, "terminal", `反馈日志 (${this.settings.consoleEntries.length})`, () => void this.newEmbedBrowserTab(embed, utilityPageUrl("console")), true);
+    addAction(tabActions, "bot", "Cancip AI", () => void this.newEmbedBrowserTab(embed, utilityPageUrl("cancip", url)), true);
+
+    addAction(pageActions, "external-link", "用浏览器打开", () => {
       window.open(url, "_blank");
     });
-    addAction("smartphone", "Browser View", async () => {
-      await this.activateBrowserView(url);
-    }, true);
-    addAction("copy", "Copy link", async () => {
+    addAction(pageActions, "copy", "复制链接", async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
       new Notice("Copied link");
     });
-    addAction("share-2", "Share", async () => {
+    addAction(pageActions, "share-2", "分享", async () => {
       await this.sharePage(url, title || hostName(url));
     });
-    addAction("search", "Find in page", () => {
-      this.toggleEmbedFindPanel(embed);
-    }, false);
-    addAction("activity", "Browser status", () => {
+    addAction(pageActions, "activity", "浏览器状态", () => {
       this.toggleEmbedBrowserStatusPanel(body, embed, url);
     }, false);
-    addAction("wrench", "Open DevTools", async () => {
-      const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-      const opened = await this.openBrowserDevTools(surface ?? undefined);
-      if (!opened) throw new Error("Current surface does not support DevTools");
-    }, false);
-    addAction("zoom-in", `Zoom in (${this.settings.pageZoom}%)`, async () => {
+
+    addAction(viewActions, "zoom-in", `放大 ${this.settings.pageZoom}%`, async () => {
       await this.setPageZoom(this.settings.pageZoom + 10, embed);
     }, false);
-    addAction("zoom-out", "Zoom out", async () => {
+    addAction(viewActions, "zoom-out", "缩小", async () => {
       await this.setPageZoom(this.settings.pageZoom - 10, embed);
     }, false);
-    addAction("monitor-smartphone", this.settings.desktopMode ? "Mobile view" : "Desktop view", async () => {
+    addAction(viewActions, "monitor-smartphone", this.settings.desktopMode ? "手机版" : "桌面版", async () => {
       await this.toggleDesktopMode(embed);
     }, false);
-    addAction("moon", this.settings.nightMode ? "Light mode" : "Night mode", async () => {
+    addAction(viewActions, "moon", this.settings.nightMode ? "日间模式" : "夜间模式", async () => {
       await this.toggleBooleanMode("nightMode", embed, "Night mode");
     }, false);
-    addAction("image-off", this.settings.noImageMode ? "Images on" : "No images", async () => {
-      await this.toggleBooleanMode("noImageMode", embed, "No image mode");
-      await this.refreshEmbed(embed);
-    }, false);
-    addAction("eye", this.settings.eyeProtectionMode ? "Eye mode off" : "Eye mode", async () => {
+    addAction(viewActions, "eye", this.settings.eyeProtectionMode ? "关闭护眼" : "护眼模式", async () => {
       await this.toggleBooleanMode("eyeProtectionMode", embed, "Eye mode");
     }, false);
-    addAction("shield-check", this.settings.adBlockEnabled ? "Ad block off" : "Ad block", async () => {
-      await this.toggleBooleanMode("adBlockEnabled", embed, "Ad block");
+    addAction(viewActions, "shield-check", this.settings.adBlockEnabled ? "关闭拦截" : "广告拦截", async () => {
+      await this.setAdMode(!this.settings.adBlockEnabled, false, embed);
       await this.refreshEmbed(embed);
     }, false);
-    addAction("scan", this.settings.markAdsEnabled ? "Unmark ads" : "Mark ads", async () => {
-      await this.toggleBooleanMode("markAdsEnabled", embed, "Mark ads");
+    addAction(viewActions, "scan", this.settings.markAdsEnabled ? "取消标记广告" : "标记广告", async () => {
+      await this.setAdMode(false, !this.settings.markAdsEnabled, embed);
+      await this.refreshEmbed(embed);
     }, false);
-    addAction("glasses", this.settings.incognitoMode ? "Incognito off" : "Incognito", async () => {
+    addAction(viewActions, "glasses", this.settings.incognitoMode ? "关闭无痕" : "无痕", async () => {
       await this.toggleBooleanMode("incognitoMode", embed, "Incognito");
     }, false);
-    addAction("maximize", this.settings.fullScreenMode ? "Exit fullscreen" : "Fullscreen", async () => {
+    addAction(viewActions, "maximize", this.settings.fullScreenMode ? "退出全屏" : "全屏", async () => {
       await this.toggleFullscreen(embed);
     }, false);
-    addAction("file-x", this.settings.jsDisabled ? "Enable JS" : "Disable JS", async () => {
+    addAction(viewActions, "file-x", this.settings.jsDisabled ? "启用 JS" : "禁用 JS", async () => {
       await this.toggleBooleanMode("jsDisabled", embed, "JavaScript");
       await this.refreshEmbed(embed);
     }, false);
-    addAction("smartphone", `Switch UA (${this.settings.userAgentMode})`, async () => {
+    addAction(viewActions, "smartphone", `UA: ${this.settings.userAgentMode}`, async () => {
       await this.toggleUserAgent(embed);
       await this.refreshEmbed(embed);
     }, false);
-    addAction("rotate-cw", this.settings.rotatedMode ? "Rotate off" : "Rotate", async () => {
+    addAction(viewActions, "rotate-cw", this.settings.rotatedMode ? "关闭横屏" : "横屏", async () => {
       await this.toggleBooleanMode("rotatedMode", embed, "Rotate");
     }, false);
-    addAction("type", `Font ${this.settings.readerFontScale}%`, async () => {
+    addAction(viewActions, "type", `字号 ${this.settings.readerFontScale}%`, async () => {
       await this.adjustReaderFont(10, embed);
     }, false);
-    addAction("download", "Download file", async () => {
+
+    addAction(saveActions, "download", "下载文件", async () => {
       await this.downloadUrlFile(url);
-      this.toggleDownloadsPanel(body);
-    }, false);
-    addAction("file-code", "Save HTML", async () => {
+      await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
+    }, true);
+    addAction(saveActions, "file-code", "保存 HTML", async () => {
       await this.downloadCurrentPageHtml(url, title || hostName(url));
-      this.toggleDownloadsPanel(body, "Saved HTML");
-    }, false);
-    addAction("archive", "Save MHT", async () => {
+      await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
+    }, true);
+    addAction(saveActions, "archive", "保存 MHT", async () => {
       await this.downloadCurrentPageMhtml(url, title || hostName(url));
-      this.toggleDownloadsPanel(body, "Saved MHT");
-    }, false);
-    addAction("file-down", "Offline page", async () => {
+      await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
+    }, true);
+    addAction(saveActions, "file-down", "离线页面", async () => {
       await this.saveOfflinePage(url, title || hostName(url));
-      this.toggleDownloadsPanel(body, "Offline page saved");
-    }, false);
-    addAction("external-link", "Add desktop shortcut", async () => {
+      await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
+    }, true);
+    addAction(saveActions, "file-symlink", "桌面快捷方式", async () => {
       const path = await this.createShortcutFile(url, title || hostName(url));
       this.toggleToolsPanel(body, "Desktop shortcut", [`Saved: ${path}`]);
     }, false);
-    addAction("text-cursor-input", "Autofill page", async () => {
-      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-      if (!frame) return;
-      const count = await this.autofillFrame(frame, url);
-      if (count) new Notice(`Autofilled ${count} field(s)`);
-    });
     addAction(
+      saveActions,
       "star",
-      this.settings.bookmarks.some((entry) => entry.url === url) ? "Remove bookmark" : "Add bookmark",
+      this.settings.bookmarks.some((entry) => entry.url === url) ? "移除书签" : "添加书签",
       async () => {
         const added = await this.toggleBookmarkEntry(url, title || hostName(url));
         new Notice(added ? "Bookmark added" : "Bookmark removed");
       }
     );
-    addAction("book-open", "Add to reading list", async () => {
+    addAction(saveActions, "book-open", "加入稍后读", async () => {
       await this.addReadingList({ title: title || hostName(url), url, time: Date.now() });
       new Notice("Added to reading list");
     });
-    addAction("library", `Reading list (${this.settings.readingList.length})`, () => {
-      this.toggleReadingListPanel(body);
-    }, false);
-    addAction("history", `History (${this.settings.history.length})`, () => {
-      this.toggleHistoryPanel(body);
-    }, false);
-    addAction("download", `Downloads (${this.settings.downloads.length})`, () => {
-      this.toggleDownloadsPanel(body);
-    }, false);
-    addAction("terminal", `反馈日志 (${this.settings.consoleEntries.length})`, () => {
-      this.toggleConsolePanel(body, url);
-    }, false);
-    addAction("wand-sparkles", `Scripts (${activeScripts.length})`, () => {
+
+    addAction(toolActions, "text-cursor-input", "自动填表", async () => {
+      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+      if (!frame) return;
+      const count = await this.autofillFrame(frame, url);
+      if (count) new Notice(`Autofilled ${count} field(s)`);
+    });
+    addAction(toolActions, "wand-sparkles", `脚本 (${activeScripts.length})`, () => {
       this.toggleUserScriptsPanel(body, url);
     }, false);
-    addAction("settings", "Site settings", () => {
+    addAction(toolActions, "settings", "站点设置", () => {
       this.toggleSiteSettingsPanel(body, url);
     }, false);
-    addAction("radio", "Sniff media", () => {
+    addAction(toolActions, "radio", "媒体嗅探", () => {
       void this.toggleAssetsPanel(body, url, "media");
     }, false);
-    addAction("layers", "Page resources", () => {
+    addAction(toolActions, "layers", "页面资源", () => {
       void this.toggleAssetsPanel(body, url, "resources");
     }, false);
-    addAction("code-2", "View source", () => {
+    addAction(toolActions, "code-2", "查看源码", () => {
       void this.toggleSourcePanel(body, url);
     }, false);
-    addAction("wrench", "Developer tools", () => {
-      void this.toggleAssetsPanel(body, url, "developer");
-    }, false);
-    addAction("languages", "Translate", () => {
+    addAction(toolActions, "languages", "翻译", () => {
       this.toggleTranslatePanel(body, embed, url);
     }, false);
-    addAction("volume-2", "Read aloud", async () => {
+    addAction(toolActions, "volume-2", "朗读", async () => {
       await this.readPageAloud(url);
     }, false);
-    addAction("qr-code", "QR code", () => {
+    addAction(toolActions, "qr-code", "二维码", () => {
       this.toggleQrPanel(body, url);
     }, false);
-    addAction("shield-alert", "Report URL", () => {
+    addAction(toolActions, "shield-alert", "反馈报告", () => {
       this.toggleReportPanel(body, url);
     }, false);
-    addAction("briefcase", "Toolbox", () => {
+    addAction(toolActions, "briefcase", "工具状态", () => {
       this.toggleToolsPanel(body, "Toolbox", [
         `Mode: ${this.settings.desktopMode ? "Desktop" : "Mobile"}`,
         `UA: ${this.settings.userAgentMode}`,
         `JavaScript: ${this.settings.jsDisabled ? "Disabled" : "Enabled"}`,
-        `Images: ${this.settings.noImageMode ? "Hidden" : "Shown"}`,
         `Ad block: ${this.settings.adBlockEnabled ? "On" : "Off"}`
       ]);
     }, false);
-    addAction("trash", `Clear cache (${this.settings.pageCache.length})`, async () => {
+    addAction(toolActions, "trash", `清缓存 (${this.settings.pageCache.length})`, async () => {
       await this.clearCache();
       this.toggleConsolePanel(body, url, "Cache cleared");
     }, false);
-    addAction("trash-2", "Clear data", async () => {
+    addAction(toolActions, "trash-2", "清浏览数据", async () => {
       await this.clearBrowsingData();
       this.toggleConsolePanel(body, url, "Browsing data cleared");
     }, false);
@@ -4691,7 +5725,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     sitePanel.createDiv({ cls: "mwv-site-title", text: `Site settings · ${hostName(url)}` });
     const rows = [
       ["JavaScript", this.settings.jsDisabled ? "Disabled" : "Enabled"],
-      ["Images", this.settings.noImageMode ? "Hidden" : "Shown"],
       ["Ads", this.settings.adBlockEnabled ? "Blocked" : this.settings.markAdsEnabled ? "Marked" : "Allowed"],
       ["Mode", this.settings.desktopMode ? "Desktop" : "Mobile"],
       ["UA", this.settings.userAgentMode],
@@ -4775,15 +5808,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const qrPanel = panel.createDiv({ cls: "mwv-qr-panel" });
-    qrPanel.createDiv({ cls: "mwv-qr-title", text: "QR code" });
+    qrPanel.createDiv({ cls: "mwv-qr-title", text: "二维码" });
     qrPanel.createEl("img", {
       cls: "mwv-qr-image",
       attr: {
-        src: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}`,
+        src: buildQrSvgDataUrl(url),
         alt: "QR code"
       }
     });
-    const copy = qrPanel.createEl("button", { cls: "mwv-source-copy", text: "Copy URL", attr: { type: "button" } });
+    qrPanel.createDiv({ cls: "mwv-qr-url", text: url });
+    const copy = qrPanel.createEl("button", { cls: "mwv-source-copy", text: "复制链接", attr: { type: "button" } });
     copy.addEventListener("click", async () => {
       await navigator.clipboard.writeText(url);
       new Notice("URL copied");
@@ -4814,10 +5848,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       existing.remove();
       return;
     }
-    panel.querySelector<HTMLElement>(".mwv-console-panel")?.remove();
-    panel.querySelector<HTMLElement>(".mwv-reading-panel")?.remove();
-    panel.querySelector<HTMLElement>(".mwv-history-panel")?.remove();
-    panel.querySelector<HTMLElement>(".mwv-downloads-panel")?.remove();
+    this.removeUtilityPanels(panel);
     const scriptsPanel = panel.createDiv({ cls: "mwv-userscript-panel" });
     const activeRules = this.getActiveUserScriptRules(url);
     scriptsPanel.createDiv({ cls: "mwv-userscript-title", text: `User scripts · ${hostName(url)}` });
@@ -4896,7 +5927,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (page.images.length) {
       const media = embed.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
-        media.createEl("img", { attr: { src: image, alt: "" } });
+        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
       }
     }
     const content = embed.createDiv({ cls: "mwv-md-content" });
@@ -4954,9 +5985,10 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   createBrowserTab(url = this.settings.homeUrl): BrowserTab {
     const nextUrl = normalizeInput(url || this.settings.homeUrl, this.settings.searchUrl);
+    const utilityKind = internalUtilityKind(nextUrl);
     return {
       id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      title: this.extractBingQuery(nextUrl) ? "Bing" : hostName(nextUrl),
+      title: utilityKind ? utilityPageTitle(utilityKind) : this.extractBingQuery(nextUrl) ? "Bing" : hostName(nextUrl),
       url: nextUrl,
       back: [],
       forward: [],
@@ -5065,6 +6097,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       noteHtml: "",
       noteText: page.content || page.excerpt || "",
       doodleSvg: "",
+      pageHtml: "",
+      pageText: "",
       markdownPath: "",
       updatedAt: now,
       createdAt: now
@@ -5113,6 +6147,37 @@ export default class MobileWebviewerPlugin extends Plugin {
     return saved;
   }
 
+  async saveBrowserSurfaceWebNotePatch(patch: BrowserWebNotePatch): Promise<WebNoteEntry | undefined> {
+    const url = normalizeInput(patch.url || "", this.settings.searchUrl);
+    if (!url || isInternalUtilityUrl(url)) return undefined;
+    const existing = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
+    const hasNotePatch = patch.noteEdited === true || Boolean(patch.noteHtml || patch.noteText);
+    const hasDoodlePatch = patch.doodleEdited === true || Boolean(patch.doodleSvg?.trim());
+    const hasPagePatch = patch.pageEdited === true || Boolean(patch.pageHtml?.trim() || patch.pageText?.trim());
+    const base = existing ?? this.createWebNoteFromPage({
+      title: patch.title || hostName(url),
+      url,
+      byline: hostName(url),
+      excerpt: patch.noteText?.slice(0, 420) || "",
+      content: patch.noteText || "",
+      images: [],
+      links: []
+    });
+    const saved = await this.saveWebNote({
+      ...base,
+      title: patch.title || base.title || hostName(url),
+      sourceTitle: patch.title || base.sourceTitle || base.title,
+      noteHtml: hasNotePatch && typeof patch.noteHtml === "string" ? patch.noteHtml : base.noteHtml,
+      noteText: hasNotePatch && typeof patch.noteText === "string" ? patch.noteText : base.noteText,
+      doodleSvg: hasDoodlePatch && typeof patch.doodleSvg === "string" ? patch.doodleSvg : base.doodleSvg,
+      pageHtml: hasPagePatch && typeof patch.pageHtml === "string" ? patch.pageHtml : base.pageHtml,
+      pageText: hasPagePatch && typeof patch.pageText === "string" ? patch.pageText : base.pageText,
+      updatedAt: Date.now()
+    });
+    await this.addConsole("info", "Browser page note saved", url);
+    return saved;
+  }
+
   async exportWebNoteMarkdown(entry: WebNoteEntry): Promise<WebNoteEntry> {
     const folder = normalizePath(this.settings.webNoteFolder || DEFAULT_WEB_NOTE_FOLDER);
     await this.ensureVaultFolder(folder);
@@ -5126,6 +6191,78 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.app.vault.adapter.write(path, webNoteMarkdown(saved));
     await this.addConsole("info", `Web note exported to Markdown: ${path}`, saved.url);
     return saved;
+  }
+
+  createPortableExport(): MobileWebviewerPortableData {
+    const settings: Partial<MobileWebviewerSettings> = {};
+    for (const key of PORTABLE_SETTING_KEYS) {
+      (settings as Record<string, unknown>)[key] = this.settings[key];
+    }
+    return {
+      type: "mobile-webviewer-data",
+      version: this.manifest.version,
+      exportedAt: new Date().toISOString(),
+      settings,
+      bookmarks: this.settings.bookmarks.filter((entry) => !isBuiltInShortcut(entry)),
+      readingList: this.settings.readingList,
+      history: this.settings.history,
+      downloads: this.settings.downloads,
+      userScriptRules: this.settings.userScriptRules,
+      webNotes: this.settings.webNotes
+    };
+  }
+
+  async copyPortableExport(): Promise<void> {
+    const text = JSON.stringify(this.createPortableExport(), null, 2);
+    await navigator.clipboard.writeText(text);
+    new Notice("Mobile Webviewer JSON copied");
+    await this.addConsole("info", "Portable export copied");
+  }
+
+  async savePortableExportFile(): Promise<string> {
+    const folder = this.normalizeDownloadFolder();
+    await this.ensureVaultFolder(folder);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const path = await this.uniqueVaultPath(folder, `mobile-webviewer-export-${stamp}.json`);
+    await this.app.vault.adapter.write(path, JSON.stringify(this.createPortableExport(), null, 2));
+    await this.addConsole("info", `Portable export saved: ${path}`);
+    new Notice(`Export saved: ${path}`);
+    return path;
+  }
+
+  async importPortableDataText(text: string): Promise<{ bookmarks: number; scripts: number; notes: number }> {
+    const payload = parsePortableImportText(text);
+    const importSettings = payload.settings ?? {};
+    for (const key of PORTABLE_SETTING_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(importSettings, key)) {
+        (this.settings as unknown as Record<string, unknown>)[key] = (importSettings as Record<string, unknown>)[key];
+      }
+    }
+    this.settings.bookmarks = mergeWebEntries(this.settings.bookmarks, payload.bookmarks, MAX_BOOKMARKS);
+    this.settings.readingList = mergeWebEntries(this.settings.readingList, payload.readingList, MAX_READING_LIST);
+    this.settings.history = mergeWebEntries(this.settings.history, payload.history, MAX_HISTORY);
+    this.settings.downloads = mergeDownloads(this.settings.downloads, payload.downloads);
+    this.settings.userScriptRules = mergeUserScriptRules(this.settings.userScriptRules, payload.userScriptRules);
+    this.settings.webNotes = mergeWebNotes(this.settings.webNotes, payload.webNotes);
+    await this.saveSettings();
+    await this.loadSettings();
+    await this.saveSettings();
+    await this.addConsole("info", `Portable import merged: ${payload.bookmarks.length} bookmarks, ${payload.userScriptRules.length} scripts, ${payload.webNotes.length} web notes`);
+    return {
+      bookmarks: payload.bookmarks.length,
+      scripts: payload.userScriptRules.length,
+      notes: payload.webNotes.length
+    };
+  }
+
+  async importPortableDataFromClipboard(): Promise<void> {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) {
+      new Notice("Clipboard is empty");
+      return;
+    }
+    const summary = await this.importPortableDataText(text);
+    new Notice(`Imported: ${summary.bookmarks} bookmarks, ${summary.scripts} scripts, ${summary.notes} notes`);
   }
 
   async addConsole(level: BrowserConsoleEntry["level"], message: string, url?: string): Promise<void> {
@@ -5405,7 +6542,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     return {
       links: unique(Array.from(doc.querySelectorAll<HTMLAnchorElement>("a[href]")).map((item) => absoluteUrl(item.href, url))),
       media: unique([
-        ...Array.from(doc.querySelectorAll<HTMLImageElement>("img[src], img[data-src], img[data-original]")).map((item) => absoluteUrl(item.getAttribute("src") ?? item.getAttribute("data-src") ?? item.getAttribute("data-original") ?? "", url)),
+        ...imageCandidatesFromDocument(doc, url, 80),
         ...Array.from(doc.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>("video[src], audio[src], source[src]")).map((item) => absoluteUrl(item.getAttribute("src") ?? "", url)),
         ...Array.from(response.text.matchAll(/https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8|mp3|m4a|webm|mov|avi|flv)(?:\?[^\s"'<>]*)?/gi)).map((match) => match[0])
       ]),
@@ -5425,9 +6562,17 @@ export default class MobileWebviewerPlugin extends Plugin {
     const doc = parser.parseFromString(pageResponse.text, "text/html");
     const resources: { url: string; cid: string; mime: string; body: ArrayBuffer }[] = [];
     const candidates: { element: Element; attr: string; url: string }[] = [];
-    doc.querySelectorAll<HTMLImageElement>("img[src], img[data-src], img[data-original]").forEach((element) => {
-      const raw = element.getAttribute("src") ?? element.getAttribute("data-src") ?? element.getAttribute("data-original") ?? "";
-      if (raw && !raw.startsWith("data:")) candidates.push({ element, attr: "src", url: absoluteUrl(raw, url) });
+    doc.querySelectorAll<HTMLImageElement>("img").forEach((element) => {
+      const raw =
+        bestSrcsetCandidate(element.getAttribute("srcset") ?? element.getAttribute("data-srcset") ?? "") ||
+        element.getAttribute("src") ||
+        element.getAttribute("data-src") ||
+        element.getAttribute("data-original") ||
+        element.getAttribute("data-original-src") ||
+        element.getAttribute("data-lazy-src") ||
+        "";
+      const clean = cleanImageCandidate(raw, url);
+      if (clean) candidates.push({ element, attr: "src", url: clean });
     });
     doc.querySelectorAll<HTMLLinkElement>("link[rel~='stylesheet'][href]").forEach((element) => {
       candidates.push({ element, attr: "href", url: absoluteUrl(element.href, url) });
@@ -5759,6 +6904,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     webview.addEventListener("dom-ready", () => {
       this.applyWebviewRuntime(webview);
       this.installWebviewBrowserBridge(webview, callbacks);
+      this.hydrateWebviewPageNote(webview);
       void callbacks.onReady?.();
       const title = webview.getTitle?.();
       if (title) void callbacks.onTitle?.(title);
@@ -5798,7 +6944,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       void callbacks.onLoading?.(true, webview.getURL?.() || webview.src);
     });
     webview.addEventListener("did-stop-loading", () => {
-      void callbacks.onLoading?.(false, webview.getURL?.() || webview.src);
+        void this.flushWebviewPageNote(webview, callbacks);
+        void callbacks.onLoading?.(false, webview.getURL?.() || webview.src);
     });
     webview.addEventListener("did-navigate", emitNavigate);
     webview.addEventListener("did-navigate-in-page", emitNavigate);
@@ -5811,6 +6958,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     webview.addEventListener("did-finish-load", () => {
       webview.removeClass("has-load-error");
       const url = webview.getURL?.() || webview.src;
+      void this.flushWebviewPageNote(webview, callbacks);
       if (url) void callbacks.onNavigate?.(url);
       const title = webview.getTitle?.();
       if (title) void callbacks.onTitle?.(title);
@@ -5818,6 +6966,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     webview.addEventListener("did-fail-load", (event) => {
       const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
       if (detail.errorCode === -3) return;
+      void this.flushWebviewPageNote(webview, callbacks);
       webview.addClass("has-load-error");
       void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || webview.getURL?.() || webview.src);
     });
@@ -5837,6 +6986,10 @@ export default class MobileWebviewerPlugin extends Plugin {
           }
           if (payload.kind === "context-link" && payload.url) {
             void callbacks.onContextLink?.(payload.url, payload.title || "");
+            return;
+          }
+          if (payload.kind === "webnote" && payload.url) {
+            void callbacks.onWebNotePatch?.(payload as BrowserWebNotePatch);
             return;
           }
         } catch {
@@ -5863,8 +7016,28 @@ export default class MobileWebviewerPlugin extends Plugin {
         void callbacks.onDownloadCandidate?.(url);
       } else if (kind === "context-link") {
         void callbacks.onContextLink?.(url, typeof title === "string" ? title : "");
+      } else if (kind === "webnote") {
+        void callbacks.onWebNotePatch?.({
+          url,
+          title: typeof title === "string" ? title : "",
+          noteHtml: typeof detail.args?.[3] === "string" ? detail.args[3] : "",
+          noteText: typeof detail.args?.[4] === "string" ? detail.args[4] : "",
+          doodleSvg: typeof detail.args?.[5] === "string" ? detail.args[5] : "",
+          noteEdited: detail.args?.[6] === true,
+          doodleEdited: detail.args?.[7] === true,
+          pageEdited: detail.args?.[8] === true
+        });
       }
     });
+  }
+
+  async flushWebviewPageNote(webview: ElectronWebviewElement, callbacks?: BrowserSurfaceCallbacks): Promise<void> {
+    if (!webview.executeJavaScript) return;
+    try {
+      await webview.executeJavaScript("window.__mwvFlushPageNote && window.__mwvFlushPageNote();", false);
+    } catch {
+      void callbacks?.onConsole?.("warn", "Browser page note flush skipped", webview.getURL?.() || webview.src);
+    }
   }
 
   installWebviewBrowserBridge(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
@@ -5874,9 +7047,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (window.__mwvBrowserBridgeInstalled) return;
         window.__mwvBrowserBridgeInstalled = true;
         const filePattern = ${BINARY_URL_PATTERN.toString()};
-        const send = (kind, url, title) => {
+        const send = (kind, url, title, extras) => {
           try {
-            console.info("__MWV_BRIDGE__" + JSON.stringify({ kind, url, title: title || "" }));
+            console.info("__MWV_BRIDGE__" + JSON.stringify({ kind, url, title: title || "", ...(extras || {}) }));
             return true;
           } catch (error) {}
           if (kind === "download") {
@@ -5920,10 +7093,298 @@ export default class MobileWebviewerPlugin extends Plugin {
           const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
           if (anchor && anchor.href) send("context-link", anchor.href, anchor.textContent || "");
         }, true);
+        const installWebNoteOverlay = () => {
+          if (document.getElementById("mwv-page-note-root")) return;
+          const style = document.createElement("style");
+          style.id = "mwv-page-note-style";
+          style.textContent = \`
+            html.mwv-page-text-editing [contenteditable="true"]:not(#mwv-page-note-editor){outline:2px solid rgba(37,99,235,.35)!important;outline-offset:2px!important;}
+            #mwv-page-note-root{position:absolute;top:0;left:0;right:0;z-index:2147483000;pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+            #mwv-page-note-bar{position:sticky;top:8px;margin:8px 8px 0 auto;width:max-content;display:flex;gap:6px;pointer-events:auto;}
+            #mwv-page-note-bar button{width:34px;height:34px;border:1px solid rgba(120,120,120,.32);border-radius:10px;background:rgba(255,255,255,.92);color:#111827;box-shadow:0 6px 18px rgba(0,0,0,.18);font:600 12px system-ui;}
+            #mwv-page-note-bar button.is-active{background:#2563eb;color:#fff;}
+            #mwv-page-note-panel{display:none;pointer-events:auto;box-sizing:border-box;margin:10px auto 0;max-width:min(760px,calc(100vw - 24px));padding:12px;border:1px solid rgba(120,120,120,.28);border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 14px 40px rgba(0,0,0,.22);color:#111827;}
+            #mwv-page-note-root.is-note-open #mwv-page-note-panel{display:block;}
+            #mwv-page-note-editor{min-height:96px;max-height:45vh;overflow:auto;outline:0;white-space:normal;line-height:1.55;font-size:15px;}
+            #mwv-page-note-editor:empty::before{content:"网页笔记";color:#6b7280;}
+            #mwv-page-note-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;}
+            #mwv-page-note-root.is-drawing #mwv-page-note-canvas{pointer-events:auto;}
+            @media (prefers-color-scheme:dark){
+              #mwv-page-note-bar button{background:rgba(24,24,27,.92);color:#f8fafc;border-color:rgba(255,255,255,.18);}
+              #mwv-page-note-panel{background:rgba(24,24,27,.96);color:#f8fafc;border-color:rgba(255,255,255,.16);}
+            }
+          \`;
+          document.documentElement.appendChild(style);
+          const root = document.createElement("div");
+          root.id = "mwv-page-note-root";
+          root.setAttribute("data-url", location.href);
+          const bar = document.createElement("div");
+          bar.id = "mwv-page-note-bar";
+          const noteButton = document.createElement("button");
+          noteButton.type = "button";
+          noteButton.textContent = "T";
+          noteButton.title = "Edit page note";
+          const textButton = document.createElement("button");
+          textButton.type = "button";
+          textButton.textContent = "A";
+          textButton.title = "Edit page text";
+          const drawButton = document.createElement("button");
+          drawButton.type = "button";
+          drawButton.textContent = "✎";
+          drawButton.title = "Doodle on page";
+          bar.append(noteButton, textButton, drawButton);
+          const panel = document.createElement("div");
+          panel.id = "mwv-page-note-panel";
+          const editor = document.createElement("div");
+          editor.id = "mwv-page-note-editor";
+          editor.contentEditable = "true";
+          editor.spellcheck = true;
+          panel.appendChild(editor);
+          const canvas = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          canvas.id = "mwv-page-note-canvas";
+          canvas.setAttribute("viewBox", "0 0 1000 1000");
+          canvas.setAttribute("preserveAspectRatio", "none");
+          root.append(bar, panel, canvas);
+          document.body.prepend(root);
+          let saveTimer = 0;
+          let textEditEnabled = false;
+          let pageEdited = false;
+          let noteEdited = false;
+          let doodleEdited = false;
+          let pageSaveTimer = 0;
+          let appliedSavedPageHtml = false;
+          const resize = () => {
+            const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, window.innerHeight);
+            root.style.height = height + "px";
+          };
+          const pageSnapshot = () => {
+            const clone = document.body.cloneNode(true);
+            if (clone && clone.querySelector) {
+              clone.querySelector("#mwv-page-note-root")?.remove();
+              clone.querySelectorAll("[data-mwv-prev-contenteditable]").forEach((el) => {
+                const previous = el.getAttribute("data-mwv-prev-contenteditable") || "";
+                el.removeAttribute("data-mwv-prev-contenteditable");
+                if (previous) el.setAttribute("contenteditable", previous);
+                else el.removeAttribute("contenteditable");
+              });
+            }
+            return {
+              html: clone && "innerHTML" in clone ? clone.innerHTML : "",
+              text: clone && "innerText" in clone ? clone.innerText || "" : document.body.innerText || ""
+            };
+          };
+          const sendNote = () => {
+            resize();
+            const snapshot = appliedSavedPageHtml || textEditEnabled || pageEdited ? pageSnapshot() : { html: "", text: "" };
+            send("webnote", location.href, document.title || location.hostname, {
+              noteHtml: editor.innerHTML,
+              noteText: editor.innerText || "",
+              doodleSvg: canvas.innerHTML,
+              pageHtml: snapshot.html,
+              pageText: snapshot.text,
+              noteEdited,
+              doodleEdited,
+              pageEdited
+            });
+          };
+          window.__mwvFlushPageNote = () => {
+            finish();
+            if (textEditEnabled) {
+              pageEdited = true;
+            }
+            sendNote();
+          };
+          const queueSave = () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(sendNote, 450);
+          };
+          const pageEditableTargets = () => Array.from(document.body.querySelectorAll("main,article,section,p,li,h1,h2,h3,h4,h5,h6,blockquote,figcaption,td,th,span,div"))
+            .filter((el) => !root.contains(el) && el instanceof HTMLElement && (el.innerText || "").trim().length > 0)
+            .slice(0, 900);
+          const setPageTextEditing = (enabled) => {
+            const wasEditing = textEditEnabled;
+            textEditEnabled = enabled;
+            document.documentElement.classList.toggle("mwv-page-text-editing", enabled);
+            document.designMode = enabled ? "on" : "off";
+            for (const el of pageEditableTargets()) {
+              if (enabled) {
+                if (!el.hasAttribute("data-mwv-prev-contenteditable")) {
+                  el.setAttribute("data-mwv-prev-contenteditable", el.getAttribute("contenteditable") || "");
+                }
+                el.setAttribute("contenteditable", "true");
+              } else if (el.hasAttribute("data-mwv-prev-contenteditable")) {
+                const previous = el.getAttribute("data-mwv-prev-contenteditable") || "";
+                el.removeAttribute("data-mwv-prev-contenteditable");
+                if (previous) el.setAttribute("contenteditable", previous);
+                else el.removeAttribute("contenteditable");
+              }
+            }
+            textButton.classList.toggle("is-active", enabled);
+            if (!enabled && wasEditing) {
+              pageEdited = true;
+              sendNote();
+            }
+          };
+          noteButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            root.classList.toggle("is-note-open");
+            noteButton.classList.toggle("is-active", root.classList.contains("is-note-open"));
+            if (root.classList.contains("is-note-open")) editor.focus();
+          });
+          textButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            setPageTextEditing(!textEditEnabled);
+          });
+          drawButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            root.classList.toggle("is-drawing");
+            drawButton.classList.toggle("is-active", root.classList.contains("is-drawing"));
+            queueSave();
+          });
+          editor.addEventListener("input", () => {
+            noteEdited = true;
+            queueSave();
+          }, true);
+          editor.addEventListener("blur", () => {
+            if (editor.innerHTML.trim() || noteEdited) {
+              noteEdited = true;
+              sendNote();
+            }
+          }, true);
+          document.addEventListener("input", (event) => {
+            if (!textEditEnabled || root.contains(event.target)) return;
+            pageEdited = true;
+            clearTimeout(pageSaveTimer);
+            pageSaveTimer = setTimeout(sendNote, 700);
+          }, true);
+          document.addEventListener("blur", (event) => {
+            if (!textEditEnabled || root.contains(event.target)) return;
+            sendNote();
+          }, true);
+          window.__mwvApplyPageNote = (payload) => {
+            if (!payload) return;
+            if (typeof payload.pageHtml === "string" && payload.pageHtml.trim() && !appliedSavedPageHtml) {
+              const keepRoot = document.getElementById("mwv-page-note-root") || root;
+              keepRoot.remove();
+              document.body.innerHTML = payload.pageHtml;
+              document.body.prepend(keepRoot);
+              appliedSavedPageHtml = true;
+            }
+            const nextEditor = document.getElementById("mwv-page-note-editor");
+            const nextCanvas = document.getElementById("mwv-page-note-canvas");
+            if (nextEditor && typeof payload.noteHtml === "string" && payload.noteHtml && !nextEditor.innerHTML.trim()) nextEditor.innerHTML = payload.noteHtml;
+            if (nextCanvas && typeof payload.doodleSvg === "string" && payload.doodleSvg && !nextCanvas.innerHTML.trim()) nextCanvas.innerHTML = payload.doodleSvg;
+            resize();
+          };
+          let activePath = null;
+          let activePointer = null;
+          const point = (event) => {
+            const rect = canvas.getBoundingClientRect();
+            return [
+              Math.max(0, Math.min(1000, ((event.clientX - rect.left) / Math.max(1, rect.width)) * 1000)),
+              Math.max(0, Math.min(1000, ((event.clientY - rect.top) / Math.max(1, rect.height)) * 1000))
+            ];
+          };
+          const finish = (event) => {
+            if (!activePath) return;
+            const pointerId = activePointer || (event && event.pointerId);
+            activePath = null;
+            activePointer = null;
+            try {
+              if (typeof pointerId === "number" && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+            } catch (error) {}
+            sendNote();
+          };
+          canvas.addEventListener("pointerdown", (event) => {
+            if (!root.classList.contains("is-drawing")) return;
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            resize();
+            finish(event);
+            const [x,y] = point(event);
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", "M " + x.toFixed(1) + " " + y.toFixed(1));
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", "#2563eb");
+            path.setAttribute("stroke-width", "5");
+            path.setAttribute("stroke-linecap", "round");
+            path.setAttribute("stroke-linejoin", "round");
+            canvas.appendChild(path);
+            doodleEdited = true;
+            activePath = path;
+            activePointer = event.pointerId;
+            try { canvas.setPointerCapture(event.pointerId); } catch (error) {}
+          }, true);
+          canvas.addEventListener("pointermove", (event) => {
+            if (!root.classList.contains("is-drawing") || !activePath || activePointer !== event.pointerId) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const [x,y] = point(event);
+            activePath.setAttribute("d", activePath.getAttribute("d") + " L " + x.toFixed(1) + " " + y.toFixed(1));
+            queueSave();
+          }, true);
+          canvas.addEventListener("pointerup", finish, true);
+          canvas.addEventListener("pointercancel", finish, true);
+          canvas.addEventListener("pointerleave", finish, true);
+          canvas.addEventListener("lostpointercapture", finish, true);
+          window.addEventListener("resize", resize, true);
+          window.addEventListener("blur", () => window.__mwvFlushPageNote && window.__mwvFlushPageNote(), true);
+          window.addEventListener("pagehide", () => window.__mwvFlushPageNote && window.__mwvFlushPageNote(), true);
+          document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState !== "visible") window.__mwvFlushPageNote && window.__mwvFlushPageNote();
+          }, true);
+          window.addEventListener("beforeunload", () => {
+            setPageTextEditing(false);
+            window.__mwvFlushPageNote && window.__mwvFlushPageNote();
+          }, true);
+          resize();
+        };
+        if (document.body) installWebNoteOverlay();
+        else document.addEventListener("DOMContentLoaded", installWebNoteOverlay, { once: true });
       })();
     `;
     webview.executeJavaScript(code, false).catch(() => {
       void callbacks.onConsole?.("warn", "Browser bridge injection failed", webview.getURL?.() || webview.src);
+    });
+  }
+
+  hydrateWebviewPageNote(webview: ElectronWebviewElement): void {
+    if (!webview.executeJavaScript) return;
+    const url = webview.getURL?.() || webview.src || "";
+    const note = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
+    if (!note) return;
+    const payload = {
+      noteHtml: note.noteHtml || "",
+      noteText: note.noteText || "",
+      doodleSvg: note.doodleSvg || "",
+      pageHtml: note.pageHtml || "",
+      pageText: note.pageText || ""
+    };
+    const code = `
+      (() => {
+        const payload = ${JSON.stringify(payload)};
+        const apply = () => {
+          if (typeof window.__mwvApplyPageNote === "function") {
+            window.__mwvApplyPageNote(payload);
+            return;
+          }
+          if (payload.pageHtml && document.body && !document.body.getAttribute("data-mwv-page-note-restored")) {
+            document.body.setAttribute("data-mwv-page-note-restored", "true");
+            document.body.innerHTML = payload.pageHtml;
+          }
+          const editor = document.getElementById("mwv-page-note-editor");
+          const canvas = document.getElementById("mwv-page-note-canvas");
+          if (editor && payload.noteHtml && !editor.innerHTML.trim()) editor.innerHTML = payload.noteHtml;
+          if (canvas && payload.doodleSvg && !canvas.innerHTML.trim()) canvas.innerHTML = payload.doodleSvg;
+        };
+        apply();
+        setTimeout(apply, 160);
+        setTimeout(apply, 600);
+      })();
+    `;
+    webview.executeJavaScript(code, false).catch(() => {
+      void this.addConsole("warn", "Browser page note hydrate skipped", url);
     });
   }
 
@@ -5975,7 +7436,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       `加载中: ${isWebview && surface.isLoading?.() ? "是" : "否"}`,
       `可后退: ${isWebview && surface.canGoBack?.() ? "是" : "否"}`,
       `可前进: ${isWebview && surface.canGoForward?.() ? "是" : "否"}`,
-      `DevTools: ${isWebview && typeof surface.openDevTools === "function" ? "可用" : "不可用"}`,
       `缩放: ${this.settings.pageZoom}%`,
       `页面模式: ${this.settings.userAgentMode} / ${this.settings.desktopMode ? "desktop width" : "mobile width"}`,
       `下载目录: ${this.normalizeDownloadFolder()}`
@@ -5998,6 +7458,41 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  getCancipStatus(): { enabled: boolean; version: string } {
+    const plugin = (this.app as App & { plugins?: { plugins?: Record<string, { manifest?: { version?: string } }> } })
+      .plugins?.plugins?.cancip;
+    return {
+      enabled: Boolean(plugin),
+      version: plugin?.manifest?.version ?? ""
+    };
+  }
+
+  async openCancip(): Promise<void> {
+    const commands = (this.app as App & {
+      commands?: {
+        executeCommandById?: (id: string) => boolean;
+        commands?: Record<string, { name?: string }>;
+      };
+    }).commands;
+    const commandIds = Object.keys(commands?.commands ?? {});
+    const id =
+      commandIds.find((item) => item === "cancip:open-chat") ??
+      commandIds.find((item) => item.startsWith("cancip:") && /open|chat/i.test(`${item} ${commands?.commands?.[item]?.name ?? ""}`));
+    if (id && commands?.executeCommandById?.(id)) {
+      await this.addConsole("info", `Opened Cancip via command: ${id}`);
+      return;
+    }
+    const plugin = (this.app as App & { plugins?: { plugins?: Record<string, { activateView?: () => Promise<unknown> | unknown }> } })
+      .plugins?.plugins?.cancip;
+    if (typeof plugin?.activateView === "function") {
+      await Promise.resolve(plugin.activateView());
+      await this.addConsole("info", "Opened Cancip via plugin API");
+      return;
+    }
+    new Notice("Cancip plugin is not enabled");
+    await this.addConsole("warn", "Cancip plugin is not enabled");
+  }
+
   async applyWebviewRuntime(webview: ElectronWebviewElement): Promise<void> {
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200) / 100;
     try {
@@ -6011,9 +7506,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       cssParts.push("img,picture,source[srcset],video[poster]{display:none!important;}");
     }
     if (this.settings.adBlockEnabled) {
-      cssParts.push("[id*='ad' i],[class*='ad-' i],[class*='ads' i],[class*='advert' i],iframe[src*='ad' i],[aria-label*='advert' i]{display:none!important;}");
+      cssParts.push(`${AD_CANDIDATE_SELECTOR}{display:none!important;}`);
     } else if (this.settings.markAdsEnabled) {
-      cssParts.push("[id*='ad' i],[class*='ad-' i],[class*='ads' i],[class*='advert' i],iframe[src*='ad' i],[aria-label*='advert' i]{outline:2px dashed #ef4444!important;outline-offset:2px!important;}");
+      cssParts.push(`${AD_CANDIDATE_SELECTOR}{outline:2px dashed #ef4444!important;outline-offset:2px!important;}`);
     }
     if (this.settings.eyeProtectionMode) {
       cssParts.push("html{background:#f3f8ea!important;} body{background:#f3f8ea!important;}");
@@ -6032,6 +7527,29 @@ export default class MobileWebviewerPlugin extends Plugin {
         style.id = id;
         style.textContent = ${JSON.stringify(css)};
         document.documentElement.appendChild(style);
+        const selector = ${JSON.stringify(AD_CANDIDATE_SELECTOR)};
+        const hideAds = ${JSON.stringify(this.settings.adBlockEnabled)};
+        const markAds = ${JSON.stringify(this.settings.markAdsEnabled)};
+        const applyAdMode = () => {
+          if (!hideAds && !markAds) return;
+          document.querySelectorAll(selector).forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            if (hideAds) {
+              node.style.setProperty("display", "none", "important");
+              node.setAttribute("data-mwv-ad-hidden", "true");
+            } else if (markAds) {
+              node.classList.add("mwv-ad-candidate");
+              node.style.setProperty("outline", "2px dashed #ef4444", "important");
+              node.style.setProperty("outline-offset", "2px", "important");
+            }
+          });
+        };
+        window.__mwvAdObserver?.disconnect?.();
+        applyAdMode();
+        if (hideAds || markAds) {
+          window.__mwvAdObserver = new MutationObserver(() => applyAdMode());
+          window.__mwvAdObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        }
       })();
     `;
     try {
@@ -6051,6 +7569,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   requestHeaders(accept: string): Record<string, string> {
     return {
       "Accept": accept,
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+      "Cache-Control": "no-cache",
+      "Upgrade-Insecure-Requests": "1",
       "User-Agent": this.getUserAgentHeader()
     };
   }
@@ -6100,14 +7621,25 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (this.settings.noImageMode) {
       doc.querySelectorAll("img, picture, source[srcset], video[poster]").forEach((node) => node.remove());
     }
-    const adSelector = "[id*='ad' i], [class*='ad-' i], [class*='ads' i], [class*='advert' i], iframe[src*='ad' i], [aria-label*='advert' i]";
-    if (this.settings.adBlockEnabled) {
-      doc.querySelectorAll(adSelector).forEach((node) => node.remove());
-    } else if (this.settings.markAdsEnabled) {
-      doc.querySelectorAll<HTMLElement>(adSelector).forEach((node) => node.addClass("mwv-ad-candidate"));
+    const applyAdMode = () => {
+      if (this.settings.adBlockEnabled) {
+        doc.querySelectorAll(AD_CANDIDATE_SELECTOR).forEach((node) => node.remove());
+      } else if (this.settings.markAdsEnabled) {
+        doc.querySelectorAll<HTMLElement>(AD_CANDIDATE_SELECTOR).forEach((node) => node.addClass("mwv-ad-candidate"));
+      }
+    };
+    applyAdMode();
+    if (this.settings.markAdsEnabled && !doc.getElementById("mwv-ad-mark-style")) {
       const style = doc.createElement("style");
+      style.id = "mwv-ad-mark-style";
       style.textContent = ".mwv-ad-candidate{outline:2px dashed #ef4444!important;outline-offset:2px!important;}";
       doc.head?.appendChild(style);
+    }
+    const win = doc.defaultView as (Window & { __mwvAdObserver?: MutationObserver }) | null;
+    if (win && (this.settings.adBlockEnabled || this.settings.markAdsEnabled)) {
+      win.__mwvAdObserver?.disconnect();
+      win.__mwvAdObserver = new MutationObserver(() => applyAdMode());
+      win.__mwvAdObserver.observe(doc.documentElement || doc.body, { childList: true, subtree: true });
     }
   }
 
@@ -6180,6 +7712,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.saveSettings();
     if (root) this.applyRuntimePreferencesIn(root);
     await this.addConsole("info", `${label ?? String(key)} ${this.settings[key] ? "enabled" : "disabled"}`);
+  }
+
+  async setAdMode(block: boolean, mark: boolean, root?: HTMLElement): Promise<void> {
+    this.settings.adBlockEnabled = block;
+    this.settings.markAdsEnabled = block ? false : mark;
+    await this.saveSettings();
+    if (root) this.applyRuntimePreferencesIn(root);
+    await this.addConsole("info", this.settings.adBlockEnabled ? "Ad block enabled" : this.settings.markAdsEnabled ? "Ad marking enabled" : "Ad filtering disabled");
   }
 
   async toggleFullscreen(root?: HTMLElement): Promise<void> {
@@ -6606,17 +8146,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const parser = new DOMParser();
     const doc = parser.parseFromString(response.text, "text/html");
     this.cleanDocumentForModes(doc);
-    const images: string[] = [];
-    const seenImages = new Set<string>();
-    for (const image of Array.from(doc.querySelectorAll<HTMLImageElement>("img[src], img[data-src], img[data-original]"))) {
-      const raw = image.getAttribute("src") ?? image.getAttribute("data-src") ?? image.getAttribute("data-original") ?? "";
-      if (!raw || raw.startsWith("data:")) continue;
-      const absolute = absoluteUrl(raw, url);
-      if (!/^https?:\/\//i.test(absolute) || seenImages.has(absolute)) continue;
-      seenImages.add(absolute);
-      images.push(absolute);
-      if (images.length >= 6) break;
-    }
+    const images = imageCandidatesFromDocument(doc, url, 8);
 
     doc.querySelectorAll("script, style, noscript, svg, canvas, iframe, nav, footer, form, aside").forEach((node) => node.remove());
 
@@ -6755,6 +8285,8 @@ export default class MobileWebviewerPlugin extends Plugin {
               noteHtml: typeof item.noteHtml === "string" ? item.noteHtml : "",
               noteText: typeof item.noteText === "string" ? item.noteText : "",
               doodleSvg: typeof item.doodleSvg === "string" ? item.doodleSvg : "",
+              pageHtml: typeof item.pageHtml === "string" ? item.pageHtml : "",
+              pageText: typeof item.pageText === "string" ? item.pageText : "",
               markdownPath: typeof item.markdownPath === "string" ? normalizePath(item.markdownPath) : "",
               updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : now,
               createdAt: typeof item.createdAt === "number" ? item.createdAt : now
@@ -6811,6 +8343,14 @@ export default class MobileWebviewerPlugin extends Plugin {
             };
           })
       : [];
+    const existingScriptIds = new Set(this.settings.userScriptRules.map((rule) => rule.id));
+    for (const rule of createBuiltInUserScriptRules()) {
+      if (!existingScriptIds.has(rule.id)) {
+        this.settings.userScriptRules.push(rule);
+        existingScriptIds.add(rule.id);
+      }
+    }
+    this.settings.userScriptRules = this.settings.userScriptRules.slice(0, 40);
     this.settings.autofillName = typeof this.settings.autofillName === "string" ? this.settings.autofillName : "";
     this.settings.autofillEmail = typeof this.settings.autofillEmail === "string" ? this.settings.autofillEmail : "";
     this.settings.autofillPhone = typeof this.settings.autofillPhone === "string" ? this.settings.autofillPhone : "";
@@ -6823,9 +8363,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.desktopMode = typeof this.settings.desktopMode === "boolean" ? this.settings.desktopMode : false;
     this.settings.nightMode = typeof this.settings.nightMode === "boolean" ? this.settings.nightMode : false;
     this.settings.noImageMode = typeof this.settings.noImageMode === "boolean" ? this.settings.noImageMode : false;
+    if (this.settings.noImageMode) {
+      this.settings.noImageMode = false;
+      shouldSaveSettings = true;
+    }
     this.settings.eyeProtectionMode = typeof this.settings.eyeProtectionMode === "boolean" ? this.settings.eyeProtectionMode : false;
     this.settings.adBlockEnabled = typeof this.settings.adBlockEnabled === "boolean" ? this.settings.adBlockEnabled : true;
     this.settings.markAdsEnabled = typeof this.settings.markAdsEnabled === "boolean" ? this.settings.markAdsEnabled : false;
+    if (this.settings.adBlockEnabled && this.settings.markAdsEnabled) {
+      this.settings.markAdsEnabled = false;
+    }
     this.settings.incognitoMode = typeof this.settings.incognitoMode === "boolean" ? this.settings.incognitoMode : false;
     this.settings.fullScreenMode = typeof this.settings.fullScreenMode === "boolean" ? this.settings.fullScreenMode : false;
     this.settings.jsDisabled = typeof this.settings.jsDisabled === "boolean" ? this.settings.jsDisabled : false;
@@ -7199,7 +8746,6 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
     this.renderSectionTitle("浏览模式", "这些开关会影响 Browser View 和 Note Browser 的内部渲染。");
     for (const option of [
       ["Night mode", "nightMode", "Darkens internal browser shell and reader surfaces."],
-      ["No image mode", "noImageMode", "Hides images in internal reader surfaces and same-origin live pages."],
       ["Eye protection", "eyeProtectionMode", "Applies a softer reading tint."],
       ["Ad block", "adBlockEnabled", "Removes common ad containers where the page is accessible."],
       ["Mark ads", "markAdsEnabled", "Marks likely ad containers where the page is accessible."],
@@ -7216,9 +8762,41 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
             .onChange(async (value) => {
               (this.plugin.settings as unknown as Record<string, boolean>)[option[1]] = value;
               await this.plugin.saveSettings();
-            })
-        );
+          })
+      );
     }
+
+    this.renderSectionTitle("数据导入导出", "收藏、稍后读、历史、下载记录、脚本规则、网页笔记和常用设置。");
+
+    new Setting(containerEl)
+      .setName("Universal export")
+      .setDesc("Save a portable Mobile Webviewer JSON package into the download folder.")
+      .addButton((button) =>
+        button
+          .setButtonText("Export JSON")
+          .onClick(async () => {
+            await this.plugin.savePortableExportFile();
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Copy JSON")
+          .onClick(async () => {
+            await this.plugin.copyPortableExport();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Universal import")
+      .setDesc("Import Mobile Webviewer JSON, common bookmark HTML, or plain URL lines from the clipboard. Existing data is merged.")
+      .addButton((button) =>
+        button
+          .setButtonText("Import clipboard")
+          .onClick(async () => {
+            await this.plugin.importPortableDataFromClipboard();
+            this.display();
+          })
+      );
 
     this.renderSectionTitle("翻译", "默认跟随 Obsidian 语言，也可以指定固定目标语言。");
 
