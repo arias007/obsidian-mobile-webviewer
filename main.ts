@@ -39,6 +39,7 @@ const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.19";
 
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
@@ -145,6 +146,7 @@ interface MobileWebviewerSettings {
   homeUrl: string;
   searchUrl: string;
   openOnStartup: boolean;
+  noteBrowserStartupDefaultVersion?: string;
   compactToolbar: boolean;
   showReaderHint: boolean;
   showFloatingWand: boolean;
@@ -298,7 +300,7 @@ interface MobileWebviewerSyntheticEvent extends Event {
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   homeUrl: DEFAULT_HOME,
   searchUrl: DEFAULT_SEARCH,
-  openOnStartup: false,
+  openOnStartup: true,
   compactToolbar: true,
   showReaderHint: true,
   showFloatingWand: true,
@@ -2341,7 +2343,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.installNoteDrawDedupeObserver();
 
-    this.addRibbonIcon("smartphone", "Mobile Webviewer", () => {
+    this.addRibbonIcon("notebook-tabs", "Note Browser", () => {
       void this.openNoteBrowser();
     });
 
@@ -2413,6 +2415,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.app.workspace.containerEl
         .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
         .forEach((root) => this.queueNoteDrawButtonDedupe(root));
+      if (this.settings.openOnStartup) {
+        void this.openNoteBrowser(this.settings.noteBrowserUrl || this.settings.homeUrl);
+      }
     });
   }
 
@@ -2894,13 +2899,28 @@ export default class MobileWebviewerPlugin extends Plugin {
     const file = await this.ensureWebviewerNote();
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file);
+    this.setNoteBrowserReadingMode(leaf);
+  }
+
+  setNoteBrowserReadingMode(leaf: WorkspaceLeaf): void {
+    const view = leaf.view as { setState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>; getState?: () => Record<string, unknown> };
+    for (const delay of [80, 240, 600]) {
+      window.setTimeout(() => {
+        try {
+          const state = view.getState?.() ?? {};
+          void view.setState?.({ ...state, mode: "preview", source: false }, { history: false });
+        } catch (error) {
+          console.warn("[mobile-webviewer] note browser preview mode skipped", error);
+        }
+      }, delay);
+    }
   }
 
   async ensureWebviewerNote(): Promise<TFile> {
     const content = [
       "# Mobile Webviewer",
       "",
-      `<div class="mwv-embed mwv-bing-home" data-url="${this.escapeAttr(this.settings.homeUrl)}">`,
+      `<div class="mwv-embed mwv-bing-home" data-url="${this.escapeAttr(this.settings.homeUrl)}" data-mwv-browser-mode="note">`,
       "  <div class=\"mwv-bing-logo\">Bing</div>",
       "  <div class=\"mwv-bing-search\" role=\"search\">",
       "    <input class=\"mwv-bing-input\" type=\"search\" placeholder=\"搜索 Bing\" autocomplete=\"off\" />",
@@ -2928,6 +2948,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvProcessed = String(++this.processorSeq);
       embed.dataset.mwvBack = JSON.stringify(this.settings.noteBrowserBack ?? []);
       embed.dataset.mwvForward = JSON.stringify(this.settings.noteBrowserForward ?? []);
+      embed.dataset.mwvBrowserMode = "note";
       const url = this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl;
       embed.dataset.url = url;
       void this.renderEmbed(embed, url);
@@ -3819,7 +3840,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.renderBookmarksBar(embed);
     const initialMode = ["note", "web"].includes(embed.dataset.mwvBrowserMode ?? "")
       ? embed.dataset.mwvBrowserMode as "note" | "web"
-      : this.settings.browserFrontendMode;
+      : "note";
     setMode(initialMode || "note");
   }
 
@@ -6318,7 +6339,18 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const rawSettings = await this.loadData();
+    const loadedSettings = rawSettings && typeof rawSettings === "object"
+      ? rawSettings as Partial<MobileWebviewerSettings>
+      : {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
+    let shouldSaveSettings = false;
+    if (this.settings.noteBrowserStartupDefaultVersion !== NOTE_BROWSER_STARTUP_DEFAULT_VERSION) {
+      this.settings.openOnStartup = true;
+      this.settings.browserFrontendMode = "note";
+      this.settings.noteBrowserStartupDefaultVersion = NOTE_BROWSER_STARTUP_DEFAULT_VERSION;
+      shouldSaveSettings = true;
+    }
     this.settings.history = Array.isArray(this.settings.history) ? this.settings.history : [];
     this.settings.bookmarks = Array.isArray(this.settings.bookmarks)
       ? this.settings.bookmarks.filter((entry) => entry && typeof entry.url === "string" && !isBuiltInShortcut(entry))
@@ -6446,6 +6478,9 @@ export default class MobileWebviewerPlugin extends Plugin {
           }))
       : [];
     this.ensureBrowserTab(this.settings.activeBrowserTabId);
+    if (shouldSaveSettings) {
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -6601,7 +6636,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Open on startup")
-      .setDesc("Open the web viewer after Obsidian layout is ready.")
+      .setDesc("Open the note-based browser in reading view after Obsidian layout is ready.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.openOnStartup)
