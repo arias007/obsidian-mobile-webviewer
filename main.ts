@@ -40,7 +40,7 @@ const DEFAULT_TRANSLATE_TARGET = "ob";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.30";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.31";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -8440,7 +8440,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("mwv-settings");
 
-    new Setting(containerEl).setName("Mobile Webviewer").setHeading();
+    new Setting(containerEl).setName("Settings").setHeading();
 
     this.renderSectionTitle("核心入口", "首页、搜索、两个浏览器入口和启动行为。");
 
