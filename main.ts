@@ -43,7 +43,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.35";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.36";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -180,7 +180,6 @@ interface LanguageOption {
   native: string;
 }
 
-type UiLanguageCode = typeof TRANSLATE_LANGUAGES[number]["code"];
 type UiTextKey =
   | "uiLanguage"
   | "uiLanguageDesc"
@@ -2123,35 +2122,6 @@ const UI_TEXT_VI = commonUi({
   links: "Liên kết"
 });
 
-const UI_TEXT_COMMON_LANGUAGE: UiDictionary = {
-  uiLanguage: "Interface language",
-  followObsidian: "Follow Obsidian language",
-  homePage: "Home page",
-  searchUrl: "Search URL",
-  openBrowser: "Open browser",
-  settings: "Settings",
-  more: "More",
-  search: "Search",
-  searchBing: "Search Bing",
-  bookmarks: "Bookmarks",
-  history: "History",
-  reading: "Reading",
-  downloads: "Downloads",
-  back: "Back",
-  forward: "Forward",
-  reload: "Reload",
-  home: "Home",
-  note: "Note",
-  web: "Web",
-  saveMd: "Save MD",
-  download: "Download",
-  open: "Open",
-  copy: "Copy",
-  save: "Save",
-  tools: "Tools",
-  translateAction: "Translate"
-};
-
 const UI_DICTIONARIES: Record<string, UiDictionary> = {
   en: UI_TEXT_EN,
   "zh-Hans": UI_TEXT_ZH_HANS,
@@ -2532,6 +2502,58 @@ function internalUtilityContextUrl(url: string | undefined): string {
     }
   }
 }
+
+interface RuntimeProcessLike {
+  versions?: {
+    electron?: string;
+  };
+}
+
+interface ObsidianSettingsLike {
+  open?: () => void;
+  openTabById?: (id: string) => void;
+}
+
+interface AppWithRuntimePlugins extends App {
+  plugins?: {
+    commands?: {
+      executeCommandById?: (id: string) => boolean;
+      commands?: Record<string, { name?: string }>;
+    };
+    plugins?: Record<string, unknown>;
+  };
+}
+
+interface AppWithSettings extends App {
+  setting?: ObsidianSettingsLike;
+}
+
+interface BrowserWindowWithProcess extends Window {
+  process?: RuntimeProcessLike;
+}
+
+interface WindowWithFind extends Window {
+  find?: (
+    searchString: string,
+    caseSensitive?: boolean,
+    backwards?: boolean,
+    wrapAround?: boolean,
+    wholeWord?: boolean,
+    searchInFrames?: boolean,
+    showDialog?: boolean
+  ) => boolean;
+}
+
+interface CancipPluginLike {
+  activateView?: () => Promise<void> | void;
+}
+
+interface AutofillProfile {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+}
 function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
   const base = `${MWV_INTERNAL_SCHEME}${kind}`;
   return /^https?:\/\//i.test(contextUrl) ? `${base}?url=${encodeURIComponent(contextUrl)}` : base;
@@ -2810,10 +2832,15 @@ function appDocument(): Document {
   return window.activeDocument ?? window.document;
 }
 
-function ownerWindow(value: unknown): (Window & typeof globalThis) | null {
+type DomConstructorWindow = Window & {
+  HTMLElement: typeof HTMLElement;
+  HTMLAnchorElement: typeof HTMLAnchorElement;
+};
+
+function ownerWindow(value: unknown): DomConstructorWindow | null {
   if (!value || typeof value !== "object" || !("ownerDocument" in value)) return null;
   const doc = (value as Node).ownerDocument;
-  return (doc?.defaultView ?? null) as (Window & typeof globalThis) | null;
+  return doc?.defaultView as DomConstructorWindow | null;
 }
 
 function isHtmlElement(value: unknown): value is HTMLElement {
@@ -2836,16 +2863,57 @@ function runAsync(task: () => Promise<void>): void {
   });
 }
 
-function asyncTask(task: () => Promise<void>): () => void {
-  return () => runAsync(task);
+function runActionWithFeedback(
+  action: () => void | Promise<void>,
+  onDone: () => void,
+  onError: (error: unknown) => void,
+  onFinally: () => void
+): void {
+  try {
+    const result = action();
+    if (result && typeof result.then === "function") {
+      void (async () => {
+        try {
+          await result;
+          onDone();
+        } catch (error) {
+          onError(error);
+        } finally {
+          onFinally();
+        }
+      })();
+      return;
+    }
+    onDone();
+  } catch (error) {
+    onError(error);
+  }
+  onFinally();
 }
 
-function asyncValue<T>(task: (value: T) => Promise<void>): (value: T) => void {
-  return (value) => runAsync(() => task(value));
+function parseJsonStringArray(value: string | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
-function asyncEvent<T extends Event>(task: (event: T) => Promise<void>): (event: T) => void {
-  return (event) => runAsync(() => task(event));
+function extractMediaUrlsFromText(text: string): string[] {
+  const result: string[] = [];
+  const mediaUrlPattern = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8|mp3|m4a|webm|mov|avi|flv)(?:\?[^\s"'<>]*)?/gi;
+  let match = mediaUrlPattern.exec(text);
+  while (match) {
+    result.push(match[0]);
+    match = mediaUrlPattern.exec(text);
+  }
+  return result;
+}
+
+function hasAutofillProfileValue(profile: AutofillProfile): boolean {
+  return Boolean(profile.name || profile.email || profile.phone || profile.address);
 }
 
 function resultTitleFromUrl(url: string): string {
@@ -2984,8 +3052,11 @@ function imageCandidatesFromDocument(root: ParentNode, baseUrl: string, limit = 
   });
   root.querySelectorAll<HTMLElement>("[style*='background']").forEach((element) => {
     const style = element.getAttribute("style") ?? "";
-    for (const match of style.matchAll(/background(?:-image)?\s*:[^;]*url\((['"]?)(.*?)\1\)/gi)) {
+    const backgroundUrlPattern = /background(?:-image)?\s*:[^;]*url\((['"]?)(.*?)\1\)/gi;
+    let match = backgroundUrlPattern.exec(style);
+    while (match) {
       add(match[2]);
+      match = backgroundUrlPattern.exec(style);
     }
   });
   return result;
@@ -3242,8 +3313,8 @@ function contentDispositionFileName(value: string | undefined): string {
 function headerValue(headers: Record<string, string> | undefined, name: string): string {
   if (!headers) return "";
   const target = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === target) return value;
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) return headers[key] ?? "";
   }
   return "";
 }
@@ -3352,7 +3423,7 @@ function normalizeTranslateLanguageCode(code: string): string {
 }
 
 function getObsidianLanguageCode(): string {
-  const doc = window.activeDocument ?? document;
+  const doc = appDocument();
   return normalizeTranslateLanguageCode(doc.documentElement.lang || navigator.language || "en");
 }
 
@@ -3362,11 +3433,6 @@ function isUiLanguage(code: string): boolean {
 
 function resolveUiLanguageCode(target: string): string {
   return target === DEFAULT_UI_LANGUAGE ? getObsidianLanguageCode() : normalizeTranslateLanguageCode(target);
-}
-
-function uiLanguageLabel(code: string): string {
-  if (code === DEFAULT_UI_LANGUAGE) return FOLLOW_OBSIDIAN_UI_OPTION.native;
-  return translateLanguage(code).native;
 }
 
 function translateUiText(language: string, key: UiTextKey, values: Record<string, string | number> = {}): string {
@@ -3603,11 +3669,11 @@ class MobileWebviewerView extends ItemView {
     this.makeModeButton(toolbar, "globe-2", this.plugin.tr("web"), "web");
     this.makeToolButton(toolbar, "notebook-tabs", this.plugin.tr("noteBrowser"), () => void this.openCurrentInNoteBrowser());
     this.makeToolButton(toolbar, "file-down", this.plugin.tr("saveMd"), () => void this.exportCurrentWebNote());
-    this.makeToolButton(toolbar, "star", this.plugin.tr("bookmark"), () => this.toggleBookmark());
+    this.makeToolButton(toolbar, "star", this.plugin.tr("bookmark"), () => void this.toggleBookmark());
     this.makeToolButton(toolbar, "book-open", this.plugin.tr("bookmarks"), () => void this.openUtilityTab("bookmarks"));
     this.makeToolButton(toolbar, "history", this.plugin.tr("history"), () => void this.openUtilityTab("history"));
     this.makeToolButton(toolbar, "download", this.plugin.tr("downloads"), () => void this.openUtilityTab("downloads"));
-    this.makeToolButton(toolbar, "plus-square", this.plugin.tr("saveLink"), () => this.captureLink());
+    this.makeToolButton(toolbar, "plus-square", this.plugin.tr("saveLink"), () => void this.captureLink());
     this.makeToolButton(toolbar, "settings", this.plugin.tr("settings"), () => this.plugin.openSettings());
 
     this.renderDrawer("bookmarks");
@@ -3938,7 +4004,7 @@ class MobileWebviewerView extends ItemView {
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      this.searchBing(input.value);
+      void this.searchBing(input.value);
     });
 
     if (results.length) {
@@ -3964,7 +4030,10 @@ class MobileWebviewerView extends ItemView {
           text: this.plugin.tr("moreResults"),
           attr: { type: "button" }
         });
-        more.addEventListener("click", async () => {
+        more.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          runAsync(async () => {
           more.disabled = true;
           more.setText(this.tr("loading"));
           const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
@@ -3978,6 +4047,7 @@ class MobileWebviewerView extends ItemView {
             more.disabled = false;
             more.setText(this.tr("loadFailedRetry"));
           }
+          });
         });
       }
     }
@@ -4108,7 +4178,7 @@ class MobileWebviewerView extends ItemView {
         this.forwardStack = [];
       }
       if (query) {
-        this.searchBing(query, nextUrl);
+        void this.searchBing(query, nextUrl);
       } else {
         this.showNativeHome(nextUrl);
       }
@@ -4126,7 +4196,7 @@ class MobileWebviewerView extends ItemView {
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText(this.plugin.tr("readingStatus"));
     this.syncSurfaceIdentity();
-    this.renderUrlAsNote(nextUrl);
+    void this.renderUrlAsNote(nextUrl);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
     void this.plugin.addHistory({
@@ -4177,7 +4247,7 @@ class MobileWebviewerView extends ItemView {
     const query = this.extractBingQuery(url);
     if (this.isBingHome(url) || query !== null) {
       if (query) {
-        this.searchBing(query, url);
+        void this.searchBing(query, url);
       } else {
         this.showNativeHome(url);
       }
@@ -4190,7 +4260,7 @@ class MobileWebviewerView extends ItemView {
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText(this.plugin.tr("readingStatus"));
     this.syncSurfaceIdentity();
-    this.renderUrlAsNote(url);
+    void this.renderUrlAsNote(url);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
     void this.plugin.addHistory({
@@ -4211,7 +4281,7 @@ class MobileWebviewerView extends ItemView {
     const query = this.extractBingQuery(this.currentUrl);
     if (this.isBingHome(this.currentUrl) || query !== null) {
       if (query) {
-        this.searchBing(query, this.currentUrl);
+        void this.searchBing(query, this.currentUrl);
       } else {
         this.showNativeHome(this.currentUrl);
       }
@@ -4222,7 +4292,7 @@ class MobileWebviewerView extends ItemView {
       this.surfaceEl.reload();
       return;
     }
-    this.renderUrlAsNote(this.currentUrl);
+    void this.renderUrlAsNote(this.currentUrl);
   }
 
   isBingHome(url: string): boolean {
@@ -4425,10 +4495,10 @@ class MobileWebviewerView extends ItemView {
       open.addEventListener("click", () => void this.newBrowserTab(entry.url));
       const copy = row.createEl("button", { cls: "mwv-mini-action", attr: { type: "button", title: this.plugin.tr("copy") } });
       setIcon(copy, "copy");
-      copy.addEventListener("click", async () => {
+      copy.addEventListener("click", () => runAsync(async () => {
         await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
         new Notice(this.tr("copiedLink"));
-      });
+      }));
     }
   }
 
@@ -4488,7 +4558,10 @@ class MobileWebviewerView extends ItemView {
       item.createDiv({ cls: "mwv-console-list-message", text: entry.message });
       if (entry.url) {
         const url = item.createEl("button", { cls: "mwv-console-list-url", text: entry.url, attr: { type: "button", title: entry.url } });
-        url.addEventListener("click", () => void this.newBrowserTab(entry.url!));
+        const entryUrl = entry.url;
+        url.addEventListener("click", () => {
+          if (entryUrl) void this.newBrowserTab(entryUrl);
+        });
       }
     }
   }
@@ -4505,7 +4578,7 @@ class MobileWebviewerView extends ItemView {
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.plugin.openCancip());
     const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("copyCurrentContext"), attr: { type: "button" } });
-    copy.addEventListener("click", async () => {
+    copy.addEventListener("click", () => runAsync(async () => {
       const text = [
         "Mobile Webviewer context",
         `Title: ${hostName(contextUrl)}`,
@@ -4515,7 +4588,7 @@ class MobileWebviewerView extends ItemView {
       ].join("\n");
       await navigator.clipboard.writeText(text);
       new Notice(this.plugin.tr("copiedCancipContext"));
-    });
+    }));
   }
 
   async showReaderFallbackForCurrentPage(url: string, reason = ""): Promise<void> {
@@ -4588,10 +4661,10 @@ class MobileWebviewerView extends ItemView {
     article.createEl("h1", { text: this.plugin.tr("pageTools") });
     const actions = article.createDiv({ cls: "mwv-note-actions" });
     const copyButton = actions.createEl("button", { text: this.plugin.tr("copyLink"), attr: { type: "button" } });
-    copyButton.addEventListener("click", async () => {
+    copyButton.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText(url);
       new Notice(this.tr("copiedLink"));
-    });
+    }));
   }
 
   renderNotePage(page: NotePage, note?: WebNoteEntry): void {
@@ -4604,10 +4677,10 @@ class MobileWebviewerView extends ItemView {
 
     const actions = article.createDiv({ cls: "mwv-note-actions" });
     const copyButton = actions.createEl("button", { text: this.plugin.tr("copyLink"), attr: { type: "button" } });
-    copyButton.addEventListener("click", async () => {
+    copyButton.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText(`[${page.title}](${page.url})`);
       new Notice(this.tr("copiedLink"));
-    });
+    }));
     const doodleButton = actions.createEl("button", {
       cls: "mwv-note-action-icon",
       attr: { type: "button", title: this.plugin.tr("doodle"), "aria-label": this.plugin.tr("doodle") }
@@ -4891,12 +4964,12 @@ class MobileWebviewerView extends ItemView {
     });
     this.registerDomEvent(window, "pointerup", (event) => {
       if (!this.activeDoodlePath || this.activeDoodlePath.ownerSVGElement !== svg) return;
-      this.finishActiveDoodle(event as PointerEvent);
+      this.finishActiveDoodle(event);
       void this.saveCurrentWebNoteNow(status);
     });
     this.registerDomEvent(window, "pointercancel", (event) => {
       if (!this.activeDoodlePath || this.activeDoodlePath.ownerSVGElement !== svg) return;
-      this.finishActiveDoodle(event as PointerEvent);
+      this.finishActiveDoodle(event);
       void this.saveCurrentWebNoteNow(status);
     });
     this.registerDomEvent(window, "blur", () => {
@@ -4961,17 +5034,19 @@ class MobileWebviewerView extends ItemView {
         event.stopPropagation();
         button.disabled = true;
         setFeedback(this.plugin.tr("runningAction", { label }));
-        Promise.resolve(onClick())
-          .then(() => setFeedback(this.plugin.tr("completedAction", { label })))
-          .catch((error) => {
+        runActionWithFeedback(
+          onClick,
+          () => setFeedback(this.plugin.tr("completedAction", { label })),
+          (error) => {
             const message = error instanceof Error ? error.message : String(error);
             setFeedback(this.plugin.tr("failedAction", { label, message }), true);
             void this.plugin.addConsole("error", `${label} failed: ${message}`, url);
             new Notice(`${label} failed`);
-          })
-          .finally(() => {
+          },
+          () => {
             button.disabled = false;
-          });
+          }
+        );
       });
       return button;
     };
@@ -4982,19 +5057,19 @@ class MobileWebviewerView extends ItemView {
     addAction(tabActions, "library", this.plugin.tr("readingCount", { count: this.plugin.settings.readingList.length }), () => void this.openUtilityTab("reading"));
     addAction(tabActions, "terminal", this.plugin.tr("consoleCount", { count: this.plugin.settings.consoleEntries.length }), () => void this.openUtilityTab("console"));
     addAction(tabActions, "bot", "Cancip AI", () => void this.openUtilityTab("cancip"));
-    addAction(tabActions, "plus", this.plugin.tr("newObTab"), () => this.newBrowserTab());
-    addAction(tabActions, "file-text", this.plugin.tr("openNoteWeb"), async () => {
+    addAction(tabActions, "plus", this.plugin.tr("newObTab"), () => void this.newBrowserTab());
+    addAction(tabActions, "file-text", this.plugin.tr("openNoteWeb"), () => runAsync(async () => {
       this.closeMorePanel();
       await this.plugin.openNoteBrowser(url);
-    });
+    }));
 
     addAction(pageActions, "external-link", this.plugin.tr("openInBrowser"), () => {
       window.open(url, "_blank");
     });
-    addAction(pageActions, "copy", this.plugin.tr("copyLink"), async () => {
+    addAction(pageActions, "copy", this.plugin.tr("copyLink"), () => runAsync(async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
       new Notice(this.tr("copiedLink"));
-    });
+    }));
     addAction(pageActions, "share-2", this.plugin.tr("share"), () => this.plugin.sharePage(url, title));
     addAction(pageActions, "activity", this.plugin.tr("browserStatus"), () => this.toggleMoreBrowserStatusPanel(body, url));
 
@@ -5222,19 +5297,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.installNoteDrawDedupeObserver();
 
-    this.addRibbonIcon("notebook-tabs", "Note Browser", () => {
+    this.addRibbonIcon("notebook-tabs", "Note browser", () => {
       void this.openNoteBrowser();
     });
 
     this.addCommand({
       id: "open-note-browser",
-      name: "Open Note Browser",
+      name: "Open note browser",
       callback: () => void this.openNoteBrowser()
     });
 
     this.addCommand({
       id: "open-url",
-      name: "Open URL in Note Browser",
+      name: "Open URL in note browser",
       callback: async () => {
         const selected = this.app.workspace.activeEditor?.editor?.getSelection() ?? "";
         await this.openNoteBrowser(selected || this.settings.homeUrl);
@@ -5243,7 +5318,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     this.addCommand({
       id: "open-home",
-      name: "Open Note Browser Home",
+      name: "Open note browser home",
       callback: () => void this.openNoteBrowser(this.settings.homeUrl)
     });
 
@@ -5264,7 +5339,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         menu.addItem((item) => {
           item
-            .setTitle("Open links in Mobile Webviewer")
+            .setTitle("Open links in mobile webviewer")
             .setIcon("smartphone")
             .onClick(() => void this.openFirstLinkInFile(file));
         });
@@ -5342,7 +5417,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  findNoteDrawSourceButton(root?: HTMLElement): HTMLElement | null {
+  findNoteDrawSourceButton(root?: HTMLElement): NoteDrawButtonElement | null {
     const scopes: HTMLElement[] = [];
     if (root) {
       scopes.push(root);
@@ -5547,9 +5622,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   getNoteDrawPlugin(): NoteDrawPluginLike | null {
-    const pluginRegistry = (this.app as App & { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+    const pluginRegistry = (this.app as AppWithRuntimePlugins).plugins;
     const plugin = pluginRegistry?.plugins?.notedraw;
-    return plugin && typeof plugin === "object" ? plugin as NoteDrawPluginLike : null;
+    return plugin && typeof plugin === "object" ? plugin : null;
   }
 
   findWorkspaceLeafForElement(root?: HTMLElement): WorkspaceLeaf | null {
@@ -5694,13 +5769,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     const scopes: HTMLElement[] = [];
     if (root) {
       scopes.push(root);
-      const shell = root.closest<HTMLElement>(".notedraw-shell");
+      const shell = root.closest<NoteDrawSurfaceElement>(".notedraw-shell");
       if (shell) scopes.push(shell);
     }
 
     for (const scope of scopes) {
       if (scope.isConnected && scope.matches(".notedraw-shell.is-drawing-active")) {
-        return scope as NoteDrawSurfaceElement;
+        return scope;
       }
       const shell = scope.querySelector<NoteDrawSurfaceElement>(".notedraw-shell.is-drawing-active");
       if (shell?.isConnected) return shell;
@@ -5866,7 +5941,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (activeController && toggleController(activeController)) {
         return;
       }
-      const button = this.findNoteDrawSourceButton(root) as NoteDrawButtonElement | null;
+      const button = this.findNoteDrawSourceButton(root);
       if (toggleController(button?._noteDrawController)) {
         return;
       }
@@ -5900,7 +5975,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.refreshNoteDrawWorkspaceBinding(root, true, true);
       window.setTimeout(() => {
         this.refreshNoteDrawWorkspaceBinding(root, true, false);
-        const retryButton = this.findNoteDrawSourceButton(root) as NoteDrawButtonElement | null;
+        const retryButton = this.findNoteDrawSourceButton(root);
         const retryController =
           retryButton?._noteDrawController ??
           this.collectNoteDrawControllers(root).find((controller) => controller.surfaceType === "webview");
@@ -6104,21 +6179,23 @@ export default class MobileWebviewerPlugin extends Plugin {
         text: this.tr("moreResults"),
         attr: { type: "button" }
       });
-      more.addEventListener("click", async (event) => {
+      more.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        more.disabled = true;
-        more.setText(this.tr("loading"));
-        const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
-        const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
-        try {
-          const expanded = await this.searchBing(query, nextPages, nextMax);
-          this.renderBingResults(resultHost, query, expanded);
-        } catch (error) {
-          console.error("[mobile-webviewer] Bing more results failed", error);
-          more.disabled = false;
+        runAsync(async () => {
+          more.disabled = true;
+          more.setText(this.tr("loading"));
+          const nextMax = Math.min(80, Math.max(results.length + BING_DEFAULT_MAX_RESULTS, BING_DEFAULT_MAX_RESULTS * 2));
+          const nextPages = Math.ceil(nextMax / BING_RESULTS_PER_PAGE);
+          try {
+            const expanded = await this.searchBing(query, nextPages, nextMax);
+            this.renderBingResults(resultHost, query, expanded);
+          } catch (error) {
+            console.error("[mobile-webviewer] Bing more results failed", error);
+            more.disabled = false;
             more.setText(this.tr("loadFailedRetry"));
-        }
+          }
+        });
       });
     }
 
@@ -6162,13 +6239,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   getEmbedStack(embed: HTMLElement, key: "mwvBack" | "mwvForward"): string[] {
-    try {
-      const value = embed.dataset[key];
-      const parsed = value ? JSON.parse(value) : [];
-      return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
-    } catch {
-      return [];
-    }
+    return parseJsonStringArray(embed.dataset[key]);
   }
 
   setEmbedStack(embed: HTMLElement, key: "mwvBack" | "mwvForward", stack: string[]): void {
@@ -6387,7 +6458,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
       const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
       setIcon(close, "x");
-      item.addEventListener("click", async (event) => {
+      item.addEventListener("click", (event) => {
+        runAsync(async () => {
         const target = event.target as HTMLElement | null;
         event.preventDefault();
         event.stopPropagation();
@@ -6396,6 +6468,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         } else {
           await this.switchEmbedBrowserTab(embed, tab.id);
         }
+        });
       });
     }
     const add = strip.createEl("button", {
@@ -6486,10 +6559,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       const current = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("currentOpen"), attr: { type: "button" } });
       current.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
       const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copy"), attr: { type: "button" } });
-      copy.addEventListener("click", async () => {
+      copy.addEventListener("click", () => runAsync(async () => {
         await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
         new Notice(this.tr("copiedLink"));
-      });
+      }));
     }
   }
 
@@ -6548,7 +6621,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.openCancip());
     const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copyCurrentContext"), attr: { type: "button" } });
-    copy.addEventListener("click", async () => {
+    copy.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText([
         "Mobile Webviewer context",
         `URL: ${contextUrl}`,
@@ -6557,7 +6630,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         this.tr("cancipContextPrompt")
       ].join("\n"));
       new Notice(this.tr("copiedCancipContext"));
-    });
+    }));
   }
 
   flushEmbedReader(embed: HTMLElement): void {
@@ -7067,7 +7140,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.runBingHomeSearch(embed, input, resultHost);
     };
 
-    submit.addEventListener("click", runSearch, true);
+    submit.addEventListener("click", (event) => {
+      runAsync(() => runSearch(event));
+    }, true);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         void runSearch(event);
@@ -7099,8 +7174,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.runBingHomeSearch(embed, input, resultHost);
     };
 
-    form.addEventListener("submit", runSearch, true);
-    submit?.addEventListener("click", runSearch, true);
+    form.addEventListener("submit", (event) => {
+      runAsync(() => runSearch(event));
+    }, true);
+    submit?.addEventListener("click", (event) => {
+      runAsync(() => runSearch(event));
+    }, true);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         void runSearch(event);
@@ -7115,13 +7194,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     const form = embed.createEl("form", { cls: "mwv-md-search" });
     const input = form.createEl("input", {
       value: query,
-      attr: { type: "search", placeholder: "Search Bing" }
+      attr: { type: "search", placeholder: this.tr("searchBing") }
     });
     const button = form.createEl("button", { text: this.tr("search"), attr: { type: "submit" } });
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("submit", (event) => {
+      runAsync(async () => {
       event.preventDefault();
       const next = DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(input.value.trim()));
       await this.openUrlInEmbed(embed, next);
+      });
     });
     if (button) {
       button.addClass("mwv-md-button");
@@ -7413,20 +7494,22 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.stopPropagation();
         button.disabled = true;
         setFeedback(this.tr("runningAction", { label }));
-        void Promise.resolve(onClick())
-          .then(() => {
+        runActionWithFeedback(
+          onClick,
+          () => {
             setFeedback(this.tr("completedAction", { label }));
             if (closePanel) panel.remove();
-          })
-          .catch((error) => {
+          },
+          (error) => {
             const message = error instanceof Error ? error.message : String(error);
             setFeedback(this.tr("failedAction", { label, message }), true);
             void this.addConsole("error", `${label} failed: ${message}`, url);
             new Notice(`${label} failed`);
-          })
-          .finally(() => {
+          },
+          () => {
             button.disabled = false;
-          });
+          }
+        );
       });
       return button;
     };
@@ -7797,13 +7880,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       });
       button.createDiv({ cls: "mwv-translate-native", text: language.native });
       button.createDiv({ cls: "mwv-translate-label", text: language.label });
-      button.addEventListener("click", async (event) => {
+      button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this.settings.translateTarget = language.code;
-        await this.saveSettings();
-        await this.openUrlInEmbed(embed, buildTranslateUrl(url, language.code));
-        panel.remove();
+        runAsync(async () => {
+          this.settings.translateTarget = language.code;
+          await this.saveSettings();
+          await this.openUrlInEmbed(embed, buildTranslateUrl(url, language.code));
+          panel.remove();
+        });
       });
     }
   }
@@ -7911,10 +7996,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       sourcePanel.empty();
       sourcePanel.createDiv({ cls: "mwv-source-title", text: this.tr("pageSource") });
       const copy = sourcePanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copySource"), attr: { type: "button" } });
-      copy.addEventListener("click", async () => {
+      copy.addEventListener("click", () => runAsync(async () => {
         await navigator.clipboard.writeText(assets.html);
         new Notice(this.tr("sourceCopied"));
-      });
+      }));
       sourcePanel.createDiv({ cls: "mwv-source-code", text: assets.html.slice(0, 12000) });
     } catch (error) {
       sourcePanel.empty();
@@ -7941,10 +8026,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
     qrPanel.createDiv({ cls: "mwv-qr-url", text: url });
     const copy = qrPanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copyLink"), attr: { type: "button" } });
-    copy.addEventListener("click", async () => {
+    copy.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText(url);
       new Notice(this.tr("urlCopied"));
-    });
+    }));
   }
 
   toggleReportPanel(panel: HTMLElement, url: string): void {
@@ -7959,10 +8044,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     reportPanel.createDiv({ cls: "mwv-report-row", text: hostName(url) });
     reportPanel.createDiv({ cls: "mwv-report-row", text: url });
     const copy = reportPanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copyReport"), attr: { type: "button" } });
-    copy.addEventListener("click", async () => {
+    copy.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText(`Report URL\n${url}`);
       new Notice(this.tr("reportCopied"));
-    });
+    }));
   }
 
   toggleUserScriptsPanel(panel: HTMLElement, url: string): void {
@@ -8015,7 +8100,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     const close = panel.createEl("button", { cls: "mwv-find-button", attr: { type: "button", title: this.tr("close") } });
     setIcon(close, "x");
     const status = panel.createDiv({ cls: "mwv-find-status", text: "0" });
-    chrome?.insertAdjacentElement("afterend", panel) ?? embed.prepend(panel);
+    if (chrome) {
+      chrome.insertAdjacentElement("afterend", panel);
+    } else {
+      embed.prepend(panel);
+    }
 
     const run = async (direction = 1) => {
       const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
@@ -8385,7 +8474,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       return;
     }
     const summary = await this.importPortableDataText(text);
-    new Notice(this.tr("completedAction", { label: this.tr("universalImport") }));
+    new Notice(`${this.tr("completedAction", { label: this.tr("universalImport") })}: ${summary.bookmarks}/${summary.scripts}/${summary.notes}`);
   }
 
   async addConsole(level: BrowserConsoleEntry["level"], message: string, url?: string): Promise<void> {
@@ -8667,7 +8756,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       media: unique([
         ...imageCandidatesFromDocument(doc, url, 80),
         ...Array.from(doc.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>("video[src], audio[src], source[src]")).map((item) => absoluteUrl(item.getAttribute("src") ?? "", url)),
-        ...Array.from(response.text.matchAll(/https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8|mp3|m4a|webm|mov|avi|flv)(?:\?[^\s"'<>]*)?/gi)).map((match) => match[0])
+        ...extractMediaUrlsFromText(response.text)
       ]),
       scripts: unique(Array.from(doc.querySelectorAll<HTMLScriptElement>("script[src]")).map((item) => absoluteUrl(item.src, url))),
       styles: unique(Array.from(doc.querySelectorAll<HTMLLinkElement>("link[rel~='stylesheet'][href]")).map((item) => absoluteUrl(item.href, url))),
@@ -8901,14 +8990,12 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   supportsElectronWebview(): boolean {
-    const doc = appDocument();
-    if (!doc?.createElement) return false;
-    const platform = typeof process !== "undefined" ? (process as NodeJS.Process & { versions?: Record<string, string> }).versions : undefined;
+    const platform = (window as BrowserWindowWithProcess).process?.versions;
     if (!platform?.electron) return false;
     try {
-      const probe = doc.createElement("webview") as ElectronWebviewElement;
+      const probe = createEl("webview" as keyof HTMLElementTagNameMap) as ElectronWebviewElement;
       probe.addClass("mwv-webview-probe");
-      doc.body?.appendChild(probe);
+      appDocument().body?.appendChild(probe);
       const supported =
         typeof probe === "object" &&
         probe.tagName.toLowerCase() === "webview" &&
@@ -9026,7 +9113,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
 
     webview.addEventListener("dom-ready", () => {
-      this.applyWebviewRuntime(webview);
+      void this.applyWebviewRuntime(webview);
       this.installWebviewBrowserBridge(webview, callbacks);
       this.hydrateWebviewPageNote(webview);
       void callbacks.onReady?.();
@@ -9608,10 +9695,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.addConsole("info", `Opened Cancip via command: ${id}`);
       return;
     }
-    const plugin = (this.app as App & { plugins?: { plugins?: Record<string, { activateView?: () => Promise<unknown> | unknown }> } })
+    const plugin = (this.app as AppWithRuntimePlugins)
       .plugins?.plugins?.cancip;
-    if (typeof plugin?.activateView === "function") {
-      await Promise.resolve(plugin.activateView());
+    const cancipPlugin = plugin && typeof plugin === "object" ? plugin as CancipPluginLike : null;
+    if (typeof cancipPlugin?.activateView === "function") {
+      await Promise.resolve(cancipPlugin.activateView());
       await this.addConsole("info", "Opened Cancip via plugin API");
       return;
     }
@@ -9791,14 +9879,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200);
     frame.setCssProps({ "--mwv-page-zoom": String(zoom / 100) });
     if (this.isElectronWebview(frame)) {
-      frame.setCssStyles({ zoom: "1" } as Partial<CSSStyleDeclaration>);
+      frame.setCssStyles({ zoom: "1" });
       try {
         frame.setZoomFactor?.(zoom / 100);
       } catch {
         // The webview may not be ready yet; dom-ready reapplies zoom.
       }
     } else {
-      frame.setCssStyles({ zoom: `${zoom}%` } as Partial<CSSStyleDeclaration>);
+      frame.setCssStyles({ zoom: `${zoom}%` });
     }
     frame.toggleClass("mwv-desktop-frame", this.settings.desktopMode);
   }
@@ -9847,10 +9935,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (root) {
       this.applyRuntimePreferencesIn(root);
       try {
-        if (this.settings.fullScreenMode && !document.fullscreenElement) {
+        const doc = appDocument();
+        if (this.settings.fullScreenMode && !doc.fullscreenElement) {
           await root.requestFullscreen?.();
-        } else if (!this.settings.fullScreenMode && document.fullscreenElement) {
-          await document.exitFullscreen?.();
+        } else if (!this.settings.fullScreenMode && doc.fullscreenElement) {
+          await doc.exitFullscreen?.();
         }
       } catch {
         await this.addConsole("warn", "Fullscreen API limited by host");
@@ -9902,17 +9991,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
       } else {
         try {
-          const win = frame.contentWindow as (Window & {
-            find?: (
-              searchString: string,
-              caseSensitive?: boolean,
-              backwards?: boolean,
-              wrapAround?: boolean,
-              wholeWord?: boolean,
-              searchInFrames?: boolean,
-              showDialog?: boolean
-            ) => boolean;
-          }) | null;
+          const win: WindowWithFind | null = frame.contentWindow;
           if (win?.find?.(clean, false, direction < 0, true, false, true, false)) {
             frameHit = 1;
           }
@@ -9940,7 +10019,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const marks = Array.from(root.querySelectorAll<HTMLElement>("mark.mwv-find-mark"));
     for (const mark of marks) {
       const parent = mark.parentNode;
-      parent?.replaceChild(document.createTextNode(mark.textContent ?? ""), mark);
+      parent?.replaceChild(root.ownerDocument.createTextNode(mark.textContent ?? ""), mark);
       parent?.normalize();
     }
   }
@@ -10002,13 +10081,13 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async autofillFrame(frame: BrowserSurfaceElement, url: string): Promise<number> {
     if (this.isElectronWebview(frame)) {
-      const profile = {
+      const profile: AutofillProfile = {
         name: this.settings.autofillName.trim(),
         email: this.settings.autofillEmail.trim(),
         phone: this.settings.autofillPhone.trim(),
         address: this.settings.autofillAddress.trim()
       };
-      if (!Object.values(profile).some(Boolean)) return 0;
+      if (!hasAutofillProfileValue(profile)) return 0;
       if (!frame.executeJavaScript) {
         await this.addConsole("warn", "Autofill unavailable in webview", url);
         return 0;
@@ -10066,21 +10145,20 @@ export default class MobileWebviewerPlugin extends Plugin {
       const count = this.autofillDocument(doc);
       await this.addConsole("info", `Autofill touched ${count} field(s)`, url);
       return count;
-    } catch (error) {
+    } catch {
       await this.addConsole("warn", "Autofill skipped by page isolation", url);
       return 0;
     }
   }
 
   autofillDocument(doc: Document): number {
-    const profile = {
+    const profile: AutofillProfile = {
       name: this.settings.autofillName.trim(),
       email: this.settings.autofillEmail.trim(),
       phone: this.settings.autofillPhone.trim(),
       address: this.settings.autofillAddress.trim()
     };
-    const values = Object.values(profile);
-    if (!values.some(Boolean)) return 0;
+    if (!hasAutofillProfileValue(profile)) return 0;
 
     let count = 0;
     const fields = Array.from(doc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
@@ -10304,7 +10382,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const cached = this.getCachedPage(url);
       if (cached) return cached;
       const title = hostName(url) || "Web page";
-      const message = reason || (error instanceof Error ? error.message : String(error || "Page load failed"));
+      const message = reason || (error instanceof Error ? error.message : typeof error === "string" ? error : "Page load failed");
       return {
         title,
         url,
@@ -10324,14 +10402,13 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   openSettings(): void {
-    // @ts-expect-error Obsidian exposes setting at runtime.
-    this.app.setting.open();
-    // @ts-expect-error Obsidian exposes setting at runtime.
-    this.app.setting.openTabById(this.manifest.id);
+    const setting = (this.app as AppWithSettings).setting;
+    setting?.open?.();
+    setting?.openTabById?.(this.manifest.id);
   }
 
   async loadSettings(): Promise<void> {
-    const rawSettings = await this.loadData();
+    const rawSettings: unknown = await this.loadData();
     const loadedSettings = rawSettings && typeof rawSettings === "object"
       ? rawSettings as Partial<MobileWebviewerSettings>
       : {};
@@ -10539,6 +10616,7 @@ class TranslateLanguageModal extends SuggestModal<LanguageOption> {
 
 class MobileWebviewerSettingTab extends PluginSettingTab {
   plugin: MobileWebviewerPlugin;
+  private settingsContainerEl?: HTMLElement;
 
   constructor(app: App, plugin: MobileWebviewerPlugin) {
     super(app, plugin);
@@ -10587,10 +10665,13 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
   }
 
   refreshSettings(): void {
-    this.update();
+    if (this.settingsContainerEl?.isConnected) {
+      this.renderSettings(this.settingsContainerEl);
+    }
   }
 
   renderSettings(containerEl: HTMLElement): void {
+    this.settingsContainerEl = containerEl;
     containerEl.empty();
     containerEl.addClass("mwv-settings");
 
@@ -10959,7 +11040,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       .setDesc(this.plugin.tr("readerJavascriptDesc"))
       .addTextArea((text) =>
         text
-          .setPlaceholder("container.dataset.scriptRan = 'true';")
+          .setPlaceholder("Custom reader JavaScript")
           .setValue(this.plugin.settings.readerUserScript)
           .onChange(async (value) => {
             this.plugin.settings.readerUserScript = value;
@@ -11044,7 +11125,7 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
         .setDesc(this.plugin.tr("javascriptDesc"))
         .addTextArea((text) =>
           text
-            .setPlaceholder("container.classList.add('mwv-script-enhanced');")
+            .setPlaceholder("Custom JavaScript")
             .setValue(rule.js)
             .onChange(async (value) => {
               rule.js = value;
