@@ -3158,6 +3158,20 @@
   bottom: calc(58px + max(8px, env(safe-area-inset-bottom)));
 }
 
+.mwv-notedraw-anchor {
+  position: sticky;
+  top: 6px;
+  z-index: 2147483647;
+  display: flex;
+  justify-content: flex-end;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button {
+  pointer-events: auto;
+}
+
 .workspace-leaf-content.mwv-notedraw-surface-leaf .view-header,
 .workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions {
   position: relative;
@@ -3178,6 +3192,10 @@
 .workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-actions .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
 .workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-source .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher) {
   display: none;
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button:not(.mwv-notedraw-launcher) {
+  display: inline-flex;
 }
 
 .mwv-root .mwv-notedraw-activation-proxy,
