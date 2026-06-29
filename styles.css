@@ -3161,7 +3161,10 @@
 .mwv-root .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .mwv-note-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .mwv-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
-.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .mwv-notedraw-source-button:not(.mwv-notedraw-launcher) {
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-toolbar .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-actions .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-source .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher) {
   display: none;
 }
 
