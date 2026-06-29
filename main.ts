@@ -44,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.40";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.41";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -5435,12 +5435,6 @@ export default class MobileWebviewerPlugin extends Plugin {
         button.setAttribute("aria-hidden", "true");
         button.tabIndex = -1;
       };
-      const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter((button) =>
-        !button.hasClass("mwv-notedraw-launcher") && this.noteDrawButtonBelongsToSurface(button, surface)
-      );
-      for (const button of buttons) {
-        hideSourceButton(button);
-      }
       const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
       leaf?.addClass("mwv-notedraw-surface-leaf");
       const headerButton = leaf?.querySelector<HTMLElement>(".view-actions .notedraw-header-button");
@@ -5453,7 +5447,7 @@ export default class MobileWebviewerPlugin extends Plugin {
           headerButton.setAttribute("aria-label", "Edit web page drawing");
           headerButton.setAttribute("title", "Edit web page drawing");
         }
-        leaf?.querySelectorAll<HTMLElement>(".view-actions .notedraw-webview-button:not(.notedraw-header-button)").forEach(hideSourceButton);
+        hideSourceButton(headerButton);
       }
     }
   }
