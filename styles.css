@@ -3159,13 +3159,12 @@
 }
 
 .mwv-notedraw-anchor {
-  position: sticky;
-  top: 6px;
+  position: relative;
   z-index: 2147483647;
-  display: flex;
-  justify-content: flex-end;
-  min-height: 0;
-  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
 }
 
 .mwv-notedraw-anchor .notedraw-webview-button {
@@ -3190,11 +3189,12 @@
 .workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
 .workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-toolbar .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
 .workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-actions .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
-.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-source .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher) {
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-source .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .notedraw-header-button:not(.mwv-notedraw-launcher) {
   display: none;
 }
 
-.mwv-notedraw-anchor .notedraw-webview-button:not(.mwv-notedraw-launcher) {
+.mwv-notedraw-anchor .notedraw-webview-button.mwv-notedraw-top-button:not(.mwv-notedraw-launcher) {
   display: inline-flex;
 }
 

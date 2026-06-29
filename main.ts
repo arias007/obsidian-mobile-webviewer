@@ -44,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.45";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.46";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -5457,10 +5457,12 @@ export default class MobileWebviewerPlugin extends Plugin {
         const controller = (button as NoteDrawButtonElement)._noteDrawController;
         if (button !== headerButton && controller?.surfaceType === "webview" && this.isMobileWebviewerSurface(controller.previewEl ?? surface)) {
           if (button.parentElement !== anchor) anchor.appendChild(button);
+          button.addClass("mwv-notedraw-top-button");
           button.removeClass("mwv-notedraw-source-button");
           button.removeAttribute("aria-hidden");
           button.tabIndex = 0;
         } else if (button.closest(".mwv-notedraw-anchor")) {
+          button.addClass("mwv-notedraw-top-button");
           button.removeClass("mwv-notedraw-source-button");
           button.removeAttribute("aria-hidden");
           button.tabIndex = 0;
@@ -5495,10 +5497,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   noteDrawStableAnchorHost(surface: HTMLElement): HTMLElement {
-    if (surface.matches(".mwv-root")) {
-      return surface.closest<HTMLElement>(".view-content") ?? surface;
-    }
-    return surface;
+    return (
+      surface.closest<HTMLElement>(".workspace-leaf-content")?.querySelector<HTMLElement>(".view-actions") ??
+      surface.closest<HTMLElement>(".view-content") ??
+      surface
+    );
   }
 
   handleNoteDrawHeaderButtonActivation(event: Event): void {
@@ -6212,6 +6215,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (button.parentElement !== anchor) {
       anchor.appendChild(button);
     }
+    button.addClass("mwv-notedraw-top-button");
     button.removeClass("mwv-notedraw-source-button");
     button.removeAttribute("aria-hidden");
     button.tabIndex = 0;
