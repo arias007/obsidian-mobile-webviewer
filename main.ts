@@ -44,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.43";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.44";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -2362,6 +2362,9 @@ interface NoteDrawControllerLike {
   currentEditor?: HTMLElement | null;
   toolbar?: HTMLElement | null;
   formatToolbar?: HTMLElement | null;
+  palettePanel?: HTMLElement | null;
+  textPanel?: HTMLElement | null;
+  selectionMenu?: HTMLElement | null;
   canvas?: HTMLElement | null;
   createFormatToolbar?: () => void;
   setEditMarkdownMode?: () => void;
@@ -5467,7 +5470,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!button?.isConnected) return;
 
     const surface = this.findNoteDrawHeaderSurface(button);
-    if (!surface) return;
+    if (!surface) {
+      this.activateNoteDrawFromNoteBrowserSource(button, event);
+      return;
+    }
     if (event.type === "touchend" && !this.shouldHandleNoteDrawHeaderTouchEnd()) return;
 
     event.preventDefault();
@@ -5501,6 +5507,36 @@ export default class MobileWebviewerPlugin extends Plugin {
       surfaces[0] ??
       null
     );
+  }
+
+  activateNoteDrawFromNoteBrowserSource(button: HTMLElement, event: Event): void {
+    const leafContent = button.closest<HTMLElement>(".workspace-leaf-content");
+    if (!leafContent) return;
+    const leaf = this.findWorkspaceLeafForElement(leafContent);
+    const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+    if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH || !leaf) return;
+    if (event.type === "touchend" && !this.shouldHandleNoteDrawHeaderTouchEnd()) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    this.setNoteBrowserReadingMode(leaf);
+
+    let activated = false;
+    for (const delay of [80, 180, 360, 720, 1200, 1800]) {
+      window.setTimeout(() => {
+        if (activated) return;
+        const container = leaf.view?.containerEl;
+        if (!container?.isConnected) return;
+        this.processWebviewerEmbeds(container);
+        const surface = Array.from(container.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))
+          .find((candidate) => candidate.isConnected && this.isMobileWebviewerSurface(candidate));
+        if (!surface) return;
+        activated = true;
+        this.refreshNoteDrawWorkspaceBinding(surface, true, true);
+        this.activateNoteDrawViaHiddenSourceButton(surface);
+      }, delay);
+    }
   }
 
   shouldHandleNoteDrawHeaderTouchEnd(): boolean {
@@ -5548,6 +5584,9 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   activateNoteDrawControllerFromHeader(controller: NoteDrawControllerLike, surface: HTMLElement, event?: Event): boolean {
     const wasActive = this.isNoteDrawControllerActive(controller);
+    if (wasActive) {
+      return this.deactivateNoteDrawControllerFromHeader(controller, surface);
+    }
     const afterActivation = () => {
       const active = this.isNoteDrawControllerActive(controller);
       this.syncNoteDrawHeaderButtonState(surface, controller);
@@ -5580,6 +5619,47 @@ export default class MobileWebviewerPlugin extends Plugin {
     const clickEvent = event instanceof MouseEvent ? event : new MouseEvent("click", { bubbles: true, cancelable: true });
     if (run("click", () => controller.onButtonClick?.(clickEvent))) return true;
     return run("toggle", () => controller.toggle?.());
+  }
+
+  deactivateNoteDrawControllerFromHeader(controller: NoteDrawControllerLike, surface: HTMLElement): boolean {
+    const afterDeactivation = () => {
+      if (this.isNoteDrawControllerActive(controller)) {
+        controller.active = false;
+        this.closeNoteDrawShell(controller.previewEl ?? surface);
+      }
+      controller.active = false;
+      controller.button?.removeClass("is-active");
+      for (const element of [controller.previewEl, controller.toolbar, controller.formatToolbar, controller.palettePanel, controller.textPanel, controller.selectionMenu, controller.canvas]) {
+        element?.removeClass("is-drawing-active");
+        element?.removeClass("is-palette-open");
+        element?.removeClass("is-text-panel-open");
+        element?.removeClass("is-selection-menu-open");
+        element?.removeClass("is-edit-md-mode");
+        element?.removeClass("is-select-mode");
+      }
+      this.syncNoteDrawHeaderButtonState(surface, controller);
+      this.queueNoteDrawButtonDedupe(surface);
+      this.queueNoteDrawControllerSync(surface, false);
+      this.queueNoteDrawDrawingSave(controller);
+    };
+    if (typeof controller.toggle !== "function") {
+      afterDeactivation();
+      return true;
+    }
+    try {
+      void Promise.resolve(controller.toggle())
+        .catch((error) => {
+          console.error("[mobile-webviewer] NoteDraw header close failed", error);
+        })
+        .then(afterDeactivation);
+      window.setTimeout(afterDeactivation, 80);
+      window.setTimeout(afterDeactivation, 260);
+      return true;
+    } catch (error) {
+      console.error("[mobile-webviewer] NoteDraw header close failed", error);
+      afterDeactivation();
+      return true;
+    }
   }
 
   findNoteDrawWebviewSourceButton(root?: HTMLElement): NoteDrawButtonElement | null {
@@ -5773,6 +5853,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!controller) return false;
     return Boolean(
       controller.active ||
+      controller.button?.hasClass("is-active") ||
+      controller.toolbar?.hasClass("is-drawing-active") ||
+      controller.canvas?.hasClass("is-drawing-active") ||
       controller.previewEl?.hasClass("is-drawing-active") ||
       controller.previewEl?.querySelector?.(".is-drawing-active")
     );
