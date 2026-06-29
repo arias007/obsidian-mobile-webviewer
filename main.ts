@@ -3,6 +3,7 @@ import {
   ItemView,
   Menu,
   Notice,
+  Platform,
   Plugin,
   PluginSettingTab,
   requestUrl,
@@ -43,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.37";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.39";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -2371,6 +2372,9 @@ interface NoteDrawControllerLike {
   onButtonClick?: (event?: Event) => void | Promise<void>;
   onButtonPointerDown?: (event?: Event) => void | Promise<void>;
   onButtonPointerUp?: (event?: Event) => void | Promise<void>;
+  onButtonTouchEnd?: (event?: Event) => void | Promise<void>;
+  scheduleLayoutRefresh?: () => void;
+  updateFloatingControlsPosition?: () => void;
   destroy?: () => void;
 }
 
@@ -5258,7 +5262,6 @@ export default class MobileWebviewerPlugin extends Plugin {
   processorSeq = 0;
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
-  noteDrawHeaderInterceptUntil = 0;
 
   tr(key: UiTextKey, values: Record<string, string | number> = {}): string {
     return translateUiText(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE, key, values);
@@ -5278,6 +5281,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(appDocument(), "click", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
+    this.registerDomEvent(appDocument(), "click", (event) => {
+      this.handleNoteDrawHeaderButtonActivation(event);
+    }, { capture: true });
+    this.registerDomEvent(appDocument(), "touchend", (event) => {
+      this.handleNoteDrawHeaderButtonActivation(event);
+    }, { capture: true });
     this.registerDomEvent(appDocument(), "keydown", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
@@ -5295,12 +5304,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.registerDomEvent(appDocument(), "click", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
-    }, { capture: true });
-    this.registerDomEvent(appDocument(), "click", (event) => {
-      this.handleNoteDrawHeaderButtonEvent(event);
-    }, { capture: true });
-    this.registerDomEvent(appDocument(), "touchend", (event) => {
-      this.handleNoteDrawHeaderButtonEvent(event);
     }, { capture: true });
     this.installNoteDrawDedupeObserver();
 
@@ -5438,9 +5441,116 @@ export default class MobileWebviewerPlugin extends Plugin {
       leaf?.addClass("mwv-notedraw-surface-leaf");
       const headerButton = leaf?.querySelector<HTMLElement>(".view-actions .notedraw-header-button");
       if (headerButton) {
+        const controller = this.findWebviewNoteDrawController(surface, true);
+        if (controller) {
+          (headerButton as NoteDrawButtonElement)._noteDrawController = controller;
+          headerButton.toggleClass("is-active", this.isNoteDrawControllerActive(controller));
+          headerButton.addClass("notedraw-webview-button");
+          headerButton.setAttribute("aria-label", "Edit web page drawing");
+          headerButton.setAttribute("title", "Edit web page drawing");
+        }
         leaf?.querySelectorAll<HTMLElement>(".view-actions .notedraw-webview-button:not(.notedraw-header-button)").forEach(hideSourceButton);
       }
     }
+  }
+
+  handleNoteDrawHeaderButtonActivation(event: Event): void {
+    const target = isHtmlElement(event.target) ? event.target : null;
+    const button = target?.closest<NoteDrawButtonElement>(".view-actions .notedraw-header-button");
+    if (!button?.isConnected) return;
+
+    const surface = this.findNoteDrawHeaderSurface(button);
+    if (!surface) return;
+    if (event.type === "touchend" && !this.shouldHandleNoteDrawHeaderTouchEnd()) return;
+
+    const controller = this.findWebviewNoteDrawController(surface, true);
+    if (!controller) {
+      this.refreshNoteDrawWorkspaceBinding(surface, true, true);
+      window.setTimeout(() => this.queueNoteDrawButtonDedupe(surface), 120);
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    if (this.activateNoteDrawControllerFromHeader(controller, event, surface)) {
+      return;
+    }
+
+    this.triggerNoteDraw(surface);
+  }
+
+  findNoteDrawHeaderSurface(button: HTMLElement): HTMLElement | null {
+    const leaf = button.closest<HTMLElement>(".workspace-leaf-content");
+    if (!leaf) return null;
+
+    const surfaces = Array.from(leaf.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))
+      .filter((surface) => surface.isConnected && this.isMobileWebviewerSurface(surface));
+    if (!surfaces.length) return null;
+    leaf.addClass("mwv-notedraw-surface-leaf");
+
+    const activeElement = appDocument().activeElement;
+    if (isHtmlElement(activeElement)) {
+      const activeSurface = activeElement.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
+      if (activeSurface && surfaces.includes(activeSurface)) return activeSurface;
+    }
+
+    return (
+      surfaces.find((surface) => Boolean(this.findWebviewNoteDrawController(surface, true))) ??
+      surfaces.find((surface) => {
+        const rect = surface.getBoundingClientRect();
+        const style = window.getComputedStyle(surface);
+        return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden";
+      }) ??
+      surfaces[0] ??
+      null
+    );
+  }
+
+  shouldHandleNoteDrawHeaderTouchEnd(): boolean {
+    return Platform.isIosApp;
+  }
+
+  activateNoteDrawControllerFromHeader(controller: NoteDrawControllerLike, event: Event, surface: HTMLElement): boolean {
+    const wasActive = this.isNoteDrawControllerActive(controller);
+    const afterActivation = () => {
+      const active = this.isNoteDrawControllerActive(controller);
+      this.syncNoteDrawHeaderButtonState(surface, controller);
+      this.queueNoteDrawButtonDedupe(surface);
+      this.queueNoteDrawControllerSync(surface, active || !wasActive);
+      if (active) {
+        controller.scheduleLayoutRefresh?.();
+        controller.updateFloatingControlsPosition?.();
+      }
+    };
+    const run = (label: string, callback?: () => void | Promise<void>): boolean => {
+      if (typeof callback !== "function") return false;
+      try {
+        void callback();
+        afterActivation();
+        window.setTimeout(afterActivation, 80);
+        window.setTimeout(afterActivation, 260);
+        return true;
+      } catch (error) {
+        console.error(`[mobile-webviewer] NoteDraw header ${label} failed`, error);
+        return false;
+      }
+    };
+
+    if (event.type === "touchend" && run("touchend", () => controller.onButtonTouchEnd?.(event))) return true;
+    if (run("click", () => controller.onButtonClick?.(event))) return true;
+    return run("toggle", () => controller.toggle?.());
+  }
+
+  syncNoteDrawHeaderButtonState(surface: HTMLElement, controller?: NoteDrawControllerLike | null): void {
+    const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
+    const headerButton = leaf?.querySelector<NoteDrawButtonElement>(".view-actions .notedraw-header-button");
+    if (!headerButton || !controller) return;
+    headerButton._noteDrawController = controller;
+    headerButton.toggleClass("is-active", this.isNoteDrawControllerActive(controller));
+    headerButton.addClass("notedraw-webview-button");
+    headerButton.setAttribute("aria-label", "Edit web page drawing");
+    headerButton.setAttribute("title", "Edit web page drawing");
   }
 
   getNoteDrawSearchScopes(root?: HTMLElement): HTMLElement[] {
@@ -5561,45 +5671,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     const saveDelay = fromFormatToolbar ? 80 : 0;
     window.setTimeout(() => this.queueWebNoteSaveForSurface(surface, fromFormatToolbar), saveDelay);
     this.queueNoteDrawControllerSync(surface, false);
-  }
-
-  handleNoteDrawHeaderButtonEvent(event: Event): void {
-    const target = isHtmlElement(event.target) ? event.target : null;
-    const button = target?.closest<HTMLElement>(".notedraw-header-button");
-    if (!button || button.hasClass("mwv-notedraw-activation-proxy")) return;
-
-    const leaf = button.closest<HTMLElement>(".workspace-leaf-content");
-    const surface =
-      leaf?.querySelector<HTMLElement>(".mwv-embed[data-url], .mwv-note-embed[data-url], .mwv-root[data-url], .mwv-root") ??
-      button.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
-    if (!surface || !this.isMobileWebviewerSurface(surface)) return;
-
-    const now = Date.now();
-    if (now < this.noteDrawHeaderInterceptUntil) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    const controller = this.findWebviewNoteDrawController(surface, true);
-    if (!controller) {
-      this.queueNoteDrawButtonDedupe(surface);
-      this.queueNoteDrawControllerSync(surface, true);
-      return;
-    }
-
-    (button as NoteDrawButtonElement)._noteDrawController = controller;
-    button.toggleClass("is-active", this.isNoteDrawControllerActive(controller));
-    button.addClass("notedraw-webview-button");
-    button.setAttribute("aria-label", "Edit web page drawing");
-    button.setAttribute("title", "Edit web page drawing");
-
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
-    this.noteDrawHeaderInterceptUntil = now + 450;
-    this.triggerNoteDraw(surface);
   }
 
   queueWebNoteSaveForSurface(surface: HTMLElement, immediate = false): void {
