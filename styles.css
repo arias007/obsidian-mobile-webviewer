@@ -3192,6 +3192,49 @@
   display: inline-flex;
 }
 
+.mwv-notedraw-anchor .notedraw-webview-button.mwv-notedraw-web-wand:not(.mwv-notedraw-launcher) {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-globe,
+.mwv-notedraw-web-wand .mwv-web-wand-spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-globe svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-spark {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-spark svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+
+.mwv-notedraw-web-wand.is-active .mwv-web-wand-spark {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
 .mwv-root .mwv-notedraw-activation-proxy,
 .mwv-note-embed .mwv-notedraw-activation-proxy,
 .mwv-embed .mwv-notedraw-activation-proxy {

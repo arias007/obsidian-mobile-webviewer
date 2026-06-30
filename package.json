@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.3.49",
+  "version": "0.3.51",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {

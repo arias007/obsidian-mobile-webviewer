@@ -44,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.49";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.51";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -6402,7 +6402,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     button.removeClass("mwv-notedraw-source-button");
     button.removeAttribute("aria-hidden");
     button.tabIndex = 0;
+    this.decorateNoteDrawWebWandButton(button);
     this.bindNoteDrawWebviewButton(button, controller);
+  }
+
+  decorateNoteDrawWebWandButton(button: NoteDrawButtonElement): void {
+    button.addClass("mwv-notedraw-web-wand");
+    button.setAttribute("aria-label", "Web notedraw");
+    button.setAttribute("title", "Web notedraw");
+    if (button.dataset.mwvWebWandDecorated === "true") return;
+    button.dataset.mwvWebWandDecorated = "true";
+    button.empty();
+    const globe = button.createSpan({ cls: "mwv-web-wand-globe", attr: { "aria-hidden": "true" } });
+    setIcon(globe, "globe-2");
+    const wand = button.createSpan({ cls: "mwv-web-wand-spark", attr: { "aria-hidden": "true" } });
+    setIcon(wand, "wand-sparkles");
   }
 
   bindNoteDrawWebviewButton(button: NoteDrawButtonElement, controller: NoteDrawControllerLike): void {
