@@ -44,7 +44,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.50";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.49";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -5567,9 +5567,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   noteDrawStableAnchorHost(surface: HTMLElement): HTMLElement {
     return (
-      surface.querySelector<HTMLElement>(":scope > .mwv-browser-chrome > .mwv-browser-controls") ??
-      surface.querySelector<HTMLElement>(".mwv-browser-chrome .mwv-browser-controls") ??
-      surface.querySelector<HTMLElement>(".mwv-toolbar") ??
+      surface.closest<HTMLElement>(".workspace-leaf-content")?.querySelector<HTMLElement>(".view-actions") ??
       surface.closest<HTMLElement>(".view-content") ??
       surface
     );
@@ -8037,7 +8035,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       : "note";
     setMode(initialMode || "note");
     this.watchEmbedChrome(embed);
-    this.queueNoteDrawButtonDedupe(embed);
   }
 
   watchEmbedChrome(embed: HTMLElement): void {

@@ -1,7 +1,7 @@
 {
   "id": "mobile-webviewer",
   "name": "Mobile Webviewer",
-  "version": "0.3.50",
+  "version": "0.3.49",
   "minAppVersion": "1.5.0",
   "description": "Lightweight mobile-first web viewer with search, history, bookmarks, and quick note capture.",
   "author": "Murat / Codex",
