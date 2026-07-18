@@ -3299,3 +3299,52 @@
   height: 32px;
   z-index: 2147483647;
 }
+
+/* Reader presets are real DOM behavior, not decorative status rows. */
+.mwv-reader-copy-unlocked,
+.mwv-reader-copy-unlocked * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.mwv-reader-clean-layout .mwv-md-content,
+.mwv-reader-clean-layout .mwv-webnote-editor {
+  line-height: 1.72;
+}
+
+.mwv-reader-clean-layout .mwv-md-content p,
+.mwv-reader-clean-layout .mwv-webnote-editor p {
+  margin: 0.72em 0;
+}
+
+.mwv-reader-image-viewer img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+
+.mwv-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mwv-table-scroll table {
+  min-width: max-content;
+}
+
+.mwv-reader-table-scroll table {
+  border-collapse: collapse;
+}
+
+.mwv-reader-table-scroll th,
+.mwv-reader-table-scroll td {
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.mwv-reader-customizations-disabled::after {
+  content: "";
+}
