@@ -17,7 +17,6 @@ import {
   type SettingDefinitionItem
 } from "obsidian";
 import * as qrcodeFactory from "qrcode-generator";
-import { Readability } from "@mozilla/readability";
 
 const VIEW_TYPE = "mobile-webviewer-view";
 const DEFAULT_HOME = "https://www.bing.com/";
@@ -39,15 +38,13 @@ const DEFAULT_WEB_NOTE_FOLDER = "Mobile Webviewer Notes";
 const DEFAULT_DOWNLOAD_CONNECTIONS = 4;
 const MIN_SEGMENTED_DOWNLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_MHTML_RESOURCES = 24;
-const MAX_READER_HTML_CHARS = 240000;
-const MIN_USEFUL_READER_TEXT = 160;
 const DEFAULT_TRANSLATE_TARGET = "ob";
 const DEFAULT_UI_LANGUAGE = "auto";
 const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pptx?|mp[34]|m4a|wav|flac|jpg|jpeg|png|gif|webp|svg|torrent)([?#].*)?$/i;
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.54";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.53";
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -2276,18 +2273,9 @@ interface NotePage {
   url: string;
   byline: string;
   content: string;
-  contentHtml?: string;
-  extractionMethod?: "readability" | "structured-data" | "heuristic" | "metadata";
   excerpt: string;
   images: string[];
   links: SearchResult[];
-}
-
-interface PageSourceResponse {
-  text: string;
-  status: number;
-  headers: Record<string, string>;
-  requestedUrl: string;
 }
 
 interface PageCacheEntry extends NotePage {
@@ -2835,269 +2823,9 @@ function htmlToText(value: string): string {
   return doc.body.textContent?.replace(/\s+/g, " ").trim() ?? value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-interface ReaderCandidate {
-  title: string;
-  byline: string;
-  html: string;
-  text: string;
-  method: NonNullable<NotePage["extractionMethod"]>;
-  score: number;
-}
-
-function metadataValue(doc: Document, selectors: string[]): string {
-  for (const selector of selectors) {
-    const element = doc.querySelector(selector);
-    const value = element?.getAttribute("content")?.trim() || textFromElement(element);
-    if (value) return value;
-  }
-  return "";
-}
-
-function normalizeReaderHtml(html: string, baseUrl: string): string {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("script, style, noscript, iframe, object, embed, form, input, textarea, select, option, button, meta, link").forEach((node) => node.remove());
-  doc.querySelectorAll<HTMLElement>("*").forEach((element) => {
-    for (const attribute of Array.from(element.attributes)) {
-      if (/^on/i.test(attribute.name) || ["style", "srcdoc", "integrity", "nonce"].includes(attribute.name.toLowerCase())) {
-        element.removeAttribute(attribute.name);
-      }
-    }
-  });
-  doc.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
-    const href = absoluteUrl(anchor.getAttribute("href") ?? "", baseUrl);
-    if (/^https?:\/\//i.test(href)) {
-      anchor.href = href;
-      anchor.dataset.mwvOpenUrl = href;
-      anchor.removeAttribute("target");
-    } else if (!href.startsWith("#")) {
-      anchor.removeAttribute("href");
-    }
-  });
-  doc.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
-    const raw =
-      bestSrcsetCandidate(image.getAttribute("srcset") ?? image.getAttribute("data-srcset") ?? "") ||
-      image.getAttribute("src") ||
-      image.getAttribute("data-src") ||
-      image.getAttribute("data-original") ||
-      image.getAttribute("data-lazy-src") ||
-      "";
-    const src = cleanImageCandidate(raw, baseUrl);
-    if (src) image.src = src;
-    else image.removeAttribute("src");
-    image.removeAttribute("srcset");
-    image.removeAttribute("data-srcset");
-    image.loading = "lazy";
-    image.decoding = "async";
-    // Keep the normal origin referrer. A number of CDNs reject reader images
-    // when the request has no referrer at all.
-    image.referrerPolicy = "strict-origin-when-cross-origin";
-  });
-  doc.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>("video[src], audio[src], source[src]").forEach((media) => {
-    const src = absoluteUrl(media.getAttribute("src") ?? "", baseUrl);
-    if (/^https?:\/\//i.test(src)) media.setAttribute("src", src);
-    else media.removeAttribute("src");
-  });
-  const normalized = doc.body.innerHTML.trim();
-  return normalized.length > MAX_READER_HTML_CHARS ? normalized.slice(0, MAX_READER_HTML_CHARS) : normalized;
-}
-
-function markdownFromReaderHtml(html: string): string {
-  if (!html.trim()) return "";
-  const host = createHostDiv();
-  appendSafeHtml(host, html);
-  return htmlToMarkdownFromElement(host).slice(0, 40000);
-}
-
-function readerCandidateScore(html: string, text: string, root?: Element | null): number {
-  const textLength = text.replace(/\s+/g, " ").trim().length;
-  const paragraphCount = root?.querySelectorAll("p").length ?? 0;
-  const headingCount = root?.querySelectorAll("h1, h2, h3").length ?? 0;
-  const listCount = root?.querySelectorAll("li").length ?? 0;
-  const tableCount = root?.querySelectorAll("table").length ?? 0;
-  const linkText = Array.from(root?.querySelectorAll("a") ?? []).reduce((sum, anchor) => sum + textFromElement(anchor).length, 0);
-  const structure = paragraphCount * 90 + headingCount * 120 + listCount * 25 + tableCount * 160;
-  return textLength + structure - Math.min(textLength, linkText) * 0.55 + Math.min(1200, html.length / 20);
-}
-
-function readabilityCandidate(doc: Document, url: string): ReaderCandidate | null {
-  try {
-    const clone = doc.cloneNode(true) as Document;
-    const base = clone.createElement("base");
-    base.href = url;
-    clone.head?.prepend(base);
-    const article = new Readability(clone, {
-      charThreshold: 120,
-      keepClasses: false,
-      maxElemsToParse: 0
-    }).parse();
-    if (!article?.content) return null;
-    const html = normalizeReaderHtml(article.content, url);
-    const text = markdownFromReaderHtml(html) || article.textContent?.trim() || "";
-    if (text.replace(/\s+/g, " ").length < MIN_USEFUL_READER_TEXT) return null;
-    const parsed = new DOMParser().parseFromString(html, "text/html");
-    return {
-      title: article.title?.trim() || "",
-      byline: article.byline?.trim() || article.siteName?.trim() || "",
-      html,
-      text,
-      method: "readability",
-      score: readerCandidateScore(html, text, parsed.body) + 600
-    };
-  } catch {
-    return null;
-  }
-}
-
-function collectStructuredObjects(value: unknown, output: Record<string, unknown>[], depth = 0): void {
-  if (depth > 8 || output.length > 240 || value == null) return;
-  if (Array.isArray(value)) {
-    value.slice(0, 80).forEach((item) => collectStructuredObjects(item, output, depth + 1));
-    return;
-  }
-  if (typeof value !== "object") return;
-  const record = value as Record<string, unknown>;
-  output.push(record);
-  for (const child of Object.values(record)) collectStructuredObjects(child, output, depth + 1);
-}
-
-function structuredAuthor(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) return value.map(structuredAuthor).filter(Boolean).join(", ");
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return typeof record.name === "string" ? record.name.trim() : "";
-  }
-  return "";
-}
-
-function structuredImages(value: unknown, baseUrl: string): string[] {
-  const values = Array.isArray(value) ? value : [value];
-  const images: string[] = [];
-  for (const item of values) {
-    const raw = typeof item === "string"
-      ? item
-      : item && typeof item === "object"
-        ? String((item as Record<string, unknown>).url ?? (item as Record<string, unknown>).contentUrl ?? "")
-        : "";
-    const url = cleanImageCandidate(raw, baseUrl);
-    if (url && !images.includes(url)) images.push(url);
-  }
-  return images.slice(0, 8);
-}
-
-function structuredDataCandidate(doc: Document, url: string): ReaderCandidate | null {
-  const objects: Record<string, unknown>[] = [];
-  doc.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"]').forEach((script) => {
-    try {
-      collectStructuredObjects(JSON.parse(script.textContent || "null"), objects);
-    } catch {
-      // Ignore malformed structured data and continue with other candidates.
-    }
-  });
-  let best: ReaderCandidate | null = null;
-  for (const record of objects) {
-    const typeValue = record["@type"];
-    const types = (Array.isArray(typeValue) ? typeValue : [typeValue]).map(String).join(" ");
-    const body = [record.articleBody, record.text, record.description]
-      .find((value) => typeof value === "string" && value.trim().length >= MIN_USEFUL_READER_TEXT) as string | undefined;
-    if (!body) continue;
-    const articleLike = /article|posting|report|review|news/i.test(types);
-    const host = createHostDiv();
-    if (/<[a-z][\s\S]*>/i.test(body)) {
-      appendSafeHtml(host, normalizeReaderHtml(body, url));
-    } else {
-      body
-        .replace(/([。！？.!?])\s+/g, "$1\n")
-        .split(/\n+/)
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .forEach((part) => host.createEl("p", { text: part }));
-    }
-    const html = normalizeReaderHtml(host.innerHTML, url);
-    const text = markdownFromReaderHtml(html);
-    const candidate: ReaderCandidate = {
-      title: typeof record.headline === "string" ? record.headline.trim() : typeof record.name === "string" ? record.name.trim() : "",
-      byline: structuredAuthor(record.author ?? record.creator ?? record.publisher),
-      html,
-      text,
-      method: "structured-data",
-      score: readerCandidateScore(html, text, host) + (articleLike ? 500 : 0) + structuredImages(record.image, url).length * 40
-    };
-    if (!best || candidate.score > best.score) best = candidate;
-  }
-  return best;
-}
-
-function heuristicCandidate(doc: Document, url: string): ReaderCandidate | null {
-  const selectors = [
-    "article",
-    "main",
-    "[role='main']",
-    "[itemprop='articleBody']",
-    "[class*='article-body' i]",
-    "[class*='article-content' i]",
-    "[class*='post-content' i]",
-    "[class*='entry-content' i]",
-    "[class*='story-body' i]",
-    "#content",
-    "body"
-  ];
-  const seen = new Set<Element>();
-  let best: ReaderCandidate | null = null;
-  for (const selector of selectors) {
-    for (const root of Array.from(doc.querySelectorAll(selector)).slice(0, 30)) {
-      if (seen.has(root)) continue;
-      seen.add(root);
-      const rawText = textFromElement(root);
-      if (rawText.length < 100) continue;
-      const html = normalizeReaderHtml(root.innerHTML, url);
-      const text = markdownFromReaderHtml(html) || rawText;
-      const name = `${root.id} ${root.className}`;
-      const penalty = /nav|menu|footer|header|sidebar|comment|related|recommend|advert|cookie/i.test(name) ? 900 : 0;
-      const candidate: ReaderCandidate = {
-        title: "",
-        byline: "",
-        html,
-        text,
-        method: "heuristic",
-        score: readerCandidateScore(html, text, root) - penalty
-      };
-      if (!best || candidate.score > best.score) best = candidate;
-    }
-  }
-  return best;
-}
-
-function readerCandidatesFromDocument(doc: Document, url: string): ReaderCandidate[] {
-  return [
-    readabilityCandidate(doc, url),
-    structuredDataCandidate(doc, url),
-    heuristicCandidate(doc, url)
-  ]
-    .filter((candidate): candidate is ReaderCandidate => Boolean(candidate && candidate.html && candidate.text))
-    .sort((left, right) => right.score - left.score);
-}
-
 function appendSafeHtml(element: HTMLElement, html: string): void {
   element.empty();
   element.appendChild(sanitizeHTMLToDom(html));
-}
-
-function bindSafeReaderLinks(container: HTMLElement, baseUrl: string, onOpen: (url: string) => void): void {
-  container.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
-    const href = absoluteUrl(anchor.getAttribute("href") ?? "", baseUrl);
-    if (!/^https?:\/\//i.test(href)) return;
-    anchor.href = href;
-    anchor.dataset.mwvOpenUrl = href;
-    anchor.removeAttribute("target");
-    if (anchor.dataset.mwvReaderLinkBound) return;
-    anchor.dataset.mwvReaderLinkBound = "true";
-    anchor.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onOpen(href);
-    });
-  });
 }
 
 function appendSafeDoodleSvg(svg: SVGSVGElement, markup: string): void {
@@ -4681,7 +4409,6 @@ class MobileWebviewerView extends ItemView {
     } catch (error) {
       console.error("[mobile-webviewer] note render failed", error);
       this.subtitleEl.setText(hostName(url));
-      if (Platform.isMobile && await this.plugin.openOfficialWebViewer(url)) return;
       this.setFrontendMode("web");
       void this.plugin.addConsole("warn", "Reader extraction failed; showing live web page", url);
       void this.showReaderFallbackForCurrentPage(url, error instanceof Error ? error.message : "Reader extraction failed");
@@ -4989,7 +4716,6 @@ class MobileWebviewerView extends ItemView {
       }
     });
     this.populateWebNoteContent(content, page, note);
-    bindSafeReaderLinks(content, page.url, (url) => this.navigate(url, true));
     const doodleLayer = content.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
     doodleLayer.addClass("mwv-doodle-layer");
     doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
@@ -5022,10 +4748,6 @@ class MobileWebviewerView extends ItemView {
     if (note?.noteHtml) {
       appendSafeHtml(content, note.noteHtml);
       return;
-    }
-    if (page.contentHtml?.trim()) {
-      appendSafeHtml(content, page.contentHtml);
-      if (content.innerHTML.trim()) return;
     }
     const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
     if (!blocks.length && page.excerpt) {
@@ -5363,9 +5085,7 @@ class MobileWebviewerView extends ItemView {
     }));
 
     addAction(pageActions, "external-link", this.plugin.tr("openInBrowser"), () => {
-      void this.plugin.openOfficialWebViewer(url).then((opened) => {
-        if (!opened) window.open(url, "_blank");
-      });
+      window.open(url, "_blank");
     });
     addAction(pageActions, "copy", this.plugin.tr("copyLink"), () => runAsync(async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
@@ -6982,28 +6702,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, 80);
   }
 
-  async openOfficialWebViewer(url: string): Promise<boolean> {
-    const normalized = normalizeInput(url, this.settings.searchUrl);
-    if (!Platform.isMobile || !/^https?:\/\//i.test(normalized)) return false;
-    try {
-      const leaf = this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({
-        type: "webviewer",
-        active: true,
-        state: { url: normalized }
-      });
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
-      await this.addHistory({ title: hostName(normalized), url: normalized, time: Date.now() });
-      await this.addConsole("info", "Opened with Obsidian Web Viewer", normalized);
-      return true;
-    } catch (error) {
-      await this.addConsole("warn", `Official Web Viewer unavailable: ${error instanceof Error ? error.message : String(error)}`, normalized);
-      return false;
-    }
-  }
-
   async activateBrowserView(url?: string, newTab = false, tabId?: string): Promise<void> {
-    if (url && await this.openOfficialWebViewer(url)) return;
     let leaf = newTab ? undefined : this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
@@ -7768,13 +7467,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         const currentUrl = failedUrl ?? embed.dataset.url ?? url;
         this.updateEmbedStatus(embed, currentUrl, hostName(currentUrl));
         void this.addConsole("warn", `Note Browser load issue: ${message}`, currentUrl);
-        if (Platform.isMobile && embed.hasClass("is-web-front")) {
-          void this.openOfficialWebViewer(currentUrl).then((opened) => {
-            if (!opened) void this.renderEmbedReaderFallback(embed, currentUrl, message);
-          });
-        } else {
-          void this.renderEmbedReaderFallback(embed, currentUrl, message);
-        }
+        void this.renderEmbedReaderFallback(embed, currentUrl, message);
         this.notifyNoteDrawWebviewChanged(embed);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
@@ -7921,7 +7614,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (page.images.length) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
-        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "strict-origin-when-cross-origin" } });
+        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
       }
     }
     const noteWrap = panel.createDiv({ cls: "mwv-webnote-wrap" });
@@ -7931,8 +7624,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
     if (note?.noteHtml) {
       appendSafeHtml(content, note.noteHtml);
-    } else if (page.contentHtml?.trim()) {
-      appendSafeHtml(content, page.contentHtml);
     } else {
       const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
       const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
@@ -7945,9 +7636,6 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (clean) content.createEl("p", { text: clean });
       }
     }
-    bindSafeReaderLinks(content, page.url, (nextUrl) => {
-      if (embed) void this.openUrlInEmbed(embed, nextUrl);
-    });
     const doodleLayer = content.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
     doodleLayer.addClass("mwv-doodle-layer");
     doodleLayer.setAttribute("viewBox", "0 0 1000 1000");
@@ -8274,13 +7962,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
         button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
       });
-      if (mode === "web" && Platform.isMobile && !embed.dataset.mwvOfficialOpening) {
-        const liveUrl = embed.dataset.url || url;
-        embed.dataset.mwvOfficialOpening = "true";
-        void this.openOfficialWebViewer(liveUrl).finally(() => {
-          delete embed.dataset.mwvOfficialOpening;
-        });
-      }
     };
     const makeNavButton = (icon: string, label: string, onClick: () => void, disabled = false) => {
       const button = controls.createEl("button", {
@@ -8557,9 +8238,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction(tabActions, "bot", this.tr("cancipAi"), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("cancip", url)), true);
 
     addAction(pageActions, "external-link", this.tr("openInBrowser"), () => {
-      void this.openOfficialWebViewer(url).then((opened) => {
-        if (!opened) window.open(url, "_blank");
-      });
+      window.open(url, "_blank");
     });
     addAction(pageActions, "copy", this.tr("copyLink"), async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
@@ -8655,7 +8334,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!frame) return;
       const count = await this.autofillFrame(frame, url);
       if (count) new Notice(this.tr("completedAction", { label: this.tr("autofillPage") }));
-      else new Notice("No compatible empty fields found");
     });
     addAction(toolActions, "wand-sparkles", this.tr("scriptsCount", { count: activeScripts.length }), () => {
       this.toggleUserScriptsPanel(body, url);
@@ -8702,21 +8380,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, false);
 
     const enabled = body.createDiv({ cls: "mwv-extension-grid" });
-    const cachedPage = this.getCachedPage(url);
-    const activeFrame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-    const autofillReady = hasAutofillProfileValue({
-      name: this.settings.autofillName.trim(),
-      email: this.settings.autofillEmail.trim(),
-      phone: this.settings.autofillPhone.trim(),
-      address: this.settings.autofillAddress.trim()
-    });
     for (const item of [
-      ["Live View", activeFrame ? (this.isElectronWebview(activeFrame) ? "Electron webview" : Platform.isMobile ? "Official fallback" : "iframe") : "Not loaded", "Direct page surface inside Note Browser."],
-      ["Reader", cachedPage ? `${cachedPage.extractionMethod || "legacy"} / ${cachedPage.content.length}` : "Not cached", "Article text and media layer."],
+      ["Live View", "On", "Direct page surface inside Note Browser."],
+      ["Reader", "Auto", "Article text and media layer."],
       ["Cache", `${this.settings.pageCache.length}`, "Reader pages retained for faster internal display."],
       ["View Mode", this.settings.desktopMode ? "Desktop" : "Mobile", "Switches live page width and zoom surface."],
       ["Downloads", `${this.settings.downloads.length}`, "Files, HTML, and MHT saves inside the vault folder."],
-      ["Autofill", autofillReady ? "Ready" : "Empty", "Address suggestions and accessible form fill."],
+      ["Autofill", "On", "Address suggestions and accessible form fill."],
       ["User Scripts", this.settings.userScriptsEnabled ? String(activeScripts.length) : "Off", "Matched reader CSS/JavaScript rules."],
       ["Reading List", `${this.settings.readingList.length}`, "Saved pages stay available from the browser bar."]
     ]) {
@@ -9086,25 +8756,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.removeUtilityPanels(panel);
     const reportPanel = panel.createDiv({ cls: "mwv-report-panel" });
-    const cached = this.getCachedPage(url);
-    const frame = panel.closest<HTMLElement>(".mwv-embed")?.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-    const errors = this.settings.consoleEntries.filter((entry) => entry.level !== "info" && (!entry.url || entry.url === url)).slice(0, 8);
-    const report = [
-      `Host: ${hostName(url)}`,
-      `URL: ${url}`,
-      `Kernel: ${frame ? (this.isElectronWebview(frame) ? "Electron webview" : Platform.isMobile ? "iframe / official Web Viewer fallback" : "iframe") : "reader"}`,
-      `Reader: ${cached ? `${cached.extractionMethod || "legacy"}, ${cached.content.length} chars` : "not cached"}`,
-      `Images: ${cached?.images.length ?? 0}`,
-      `History: ${this.settings.incognitoMode ? "off (incognito)" : "on"}`,
-      `JavaScript: ${this.settings.jsDisabled ? "off" : "on"}`,
-      `Ad filtering: ${this.settings.adBlockEnabled ? "block" : this.settings.markAdsEnabled ? "mark" : "off"}`,
-      errors.length ? `Recent errors: ${errors.map((entry) => entry.message).join(" | ")}` : "Recent errors: none"
-    ];
     reportPanel.createDiv({ cls: "mwv-report-title", text: this.tr("reportUrl") });
-    report.forEach((line) => reportPanel.createDiv({ cls: "mwv-report-row", text: line }));
+    reportPanel.createDiv({ cls: "mwv-report-row", text: hostName(url) });
+    reportPanel.createDiv({ cls: "mwv-report-row", text: url });
     const copy = reportPanel.createEl("button", { cls: "mwv-source-copy", text: this.tr("copyReport"), attr: { type: "button" } });
     copy.addEventListener("click", () => runAsync(async () => {
-      await navigator.clipboard.writeText(report.join("\n"));
+      await navigator.clipboard.writeText(`Report URL\n${url}`);
       new Notice(this.tr("reportCopied"));
     }));
   }
@@ -9132,8 +8789,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       item.createDiv({ cls: "mwv-userscript-name", text: rule.name || this.tr("ruleName") });
       item.createDiv({ cls: "mwv-userscript-match", text: rule.match || "*://*/*" });
       const state = item.createDiv({ cls: "mwv-userscript-state" });
-      state.createSpan({ text: rule.css.trim() ? "CSS active" : `${this.tr("no")} CSS` });
-      state.createSpan({ text: rule.id.startsWith("builtin-") && rule.js.trim() ? "JS active" : rule.js.trim() ? "JS stored" : `${this.tr("no")} JS` });
+      state.createSpan({ text: rule.css.trim() ? "CSS" : `${this.tr("no")} CSS` });
+      state.createSpan({ text: rule.js.trim() ? "JS" : `${this.tr("no")} JS` });
     }
   }
 
@@ -9198,22 +8855,17 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (page.images.length) {
       const media = embed.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
-        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "strict-origin-when-cross-origin" } });
+        media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
       }
     }
     const content = embed.createDiv({ cls: "mwv-md-content" });
-    if (page.contentHtml?.trim()) {
-      appendSafeHtml(content, page.contentHtml);
-    } else {
-      const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-      const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
-      for (const block of visibleBlocks.slice(0, 80)) {
-        const clean = block.replace(/^#{1,3}\s+/, "");
-        if (clean) content.createEl("p", { text: clean });
-      }
+    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+    const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
+    for (const block of visibleBlocks.slice(0, 80)) {
+      const clean = block.replace(/^#{1,3}\s+/, "");
+      if (clean) content.createEl("p", { text: clean });
     }
-    bindSafeReaderLinks(content, page.url, (nextUrl) => void this.openUrlInEmbed(embed, nextUrl));
-    if (!page.contentHtml?.trim() && !page.content.trim() && !page.excerpt.trim()) {
+    if (!visibleBlocks.length) {
       content.createEl("iframe", {
         cls: "mwv-reader-frame",
         attr: {
@@ -9333,16 +8985,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   getCachedPage(url: string): NotePage | null {
     const entry = this.settings.pageCache.find((item) => item.url === url);
     if (!entry) return null;
-    if (!entry.contentHtml && (entry.content || "").replace(/\s+/g, "").length < MIN_USEFUL_READER_TEXT && !(entry.images?.length)) {
-      return null;
-    }
     return {
       title: entry.title,
       url: entry.url,
       byline: entry.byline,
       content: entry.content,
-      contentHtml: typeof entry.contentHtml === "string" ? entry.contentHtml : undefined,
-      extractionMethod: entry.extractionMethod,
       excerpt: entry.excerpt,
       images: Array.isArray(entry.images) ? [...entry.images] : [],
       links: Array.isArray(entry.links) ? [...entry.links] : []
@@ -9390,15 +9037,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     const id = webNoteId(page.url);
     const existing = this.settings.webNotes.find((entry) => entry.id === id || entry.url === page.url);
     if (existing) {
-      // Older notes were created from plain paragraphs. Enrich only empty
-      // notes, so an edited page is never overwritten by a later extraction.
-      if (!existing.noteHtml?.trim() && page.contentHtml?.trim()) {
-        return await this.saveWebNote({
-          ...existing,
-          noteHtml: page.contentHtml,
-          noteText: page.content || page.excerpt || existing.noteText
-        });
-      }
       return existing;
     }
     const note = this.createWebNoteFromPage(page);
@@ -9409,10 +9047,6 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   notePageToHtml(page: NotePage): string {
     const temp = createHostDiv();
-    if (page.contentHtml?.trim()) {
-      appendSafeHtml(temp, page.contentHtml);
-      if (temp.innerHTML.trim()) return temp.innerHTML;
-    }
     const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
     for (const block of blocks.slice(0, 100)) {
       if (/^#{1,3}\s+/.test(block)) {
@@ -9724,7 +9358,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     const entry = this.createDownloadEntry(url, fileName, path, "html", "text/html");
     await this.upsertDownload({ ...entry, status: "downloading", message: "Saving HTML" });
     try {
-      const response = await this.requestPageSource(url, "text/html,application/xhtml+xml,*/*");
+      const response = await requestUrl({
+        url,
+        method: "GET",
+        headers: this.requestHeaders("text/html,application/xhtml+xml,*/*")
+      });
       const bytes = textToArrayBuffer(response.text);
       await this.app.vault.adapter.writeBinary(path, bytes);
       await this.updateDownload(entry.id, {
@@ -9810,9 +9448,6 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async readPageAloud(url: string): Promise<void> {
-    if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
-      throw new Error("Text to speech is unavailable in this host");
-    }
     const page = await this.fetchNotePage(url);
     const text = `${page.title}. ${page.excerpt || page.content}`.replace(/\s+/g, " ").slice(0, 1800);
     if (!text) return;
@@ -9824,7 +9459,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async extractPageAssets(url: string): Promise<{ links: string[]; media: string[]; scripts: string[]; styles: string[]; html: string }> {
-    const response = await this.requestPageSource(url, "text/html,application/xhtml+xml,*/*");
+    const response = await requestUrl({
+      url,
+      method: "GET",
+      headers: this.requestHeaders("text/html,application/xhtml+xml,*/*")
+    });
     const parser = new DOMParser();
     const doc = parser.parseFromString(response.text, "text/html");
     const unique = (items: string[]) => Array.from(new Set(items.filter((item) => /^https?:\/\//i.test(item)))).slice(0, 80);
@@ -9842,7 +9481,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async buildMhtml(url: string, title: string): Promise<string> {
-    const pageResponse = await this.requestPageSource(url, "text/html,application/xhtml+xml,*/*");
+    const pageResponse = await requestUrl({
+      url,
+      method: "GET",
+        headers: this.requestHeaders("text/html,application/xhtml+xml,*/*")
+    });
     const parser = new DOMParser();
     const doc = parser.parseFromString(pageResponse.text, "text/html");
     const resources: { url: string; cid: string; mime: string; body: ArrayBuffer }[] = [];
@@ -10991,9 +10634,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     (this.settings as unknown as Record<string, boolean>)[key] = !this.settings[key];
     await this.saveSettings();
     if (root) this.applyRuntimePreferencesIn(root);
-    if (key === "incognitoMode" && root?.hasClass("mwv-embed")) {
-      await this.refreshEmbed(root);
-    }
     await this.addConsole("info", `${label ?? String(key)} ${this.settings[key] ? "enabled" : "disabled"}`);
   }
 
@@ -11145,65 +10785,13 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   applyReaderCustomizations(container: HTMLElement, page: NotePage): void {
     if (!this.settings.userScriptsEnabled) return;
+    const styleEnabled = Boolean(this.settings.readerUserStyle.trim());
+    const scriptEnabled = Boolean(this.settings.readerUserScript.trim());
     const rules = this.getActiveUserScriptRules(page.url);
-    const css = [
-      this.settings.readerUserStyle,
-      ...rules.map((rule) => rule.css)
-    ].map((value) => value.trim()).filter(Boolean).join("\n");
-    if (css) {
-      container.querySelector<HTMLElement>(":scope > style[data-mwv-reader-style]")?.remove();
-      const style = container.ownerDocument.createElement("style");
-      style.dataset.mwvReaderStyle = "true";
-      style.textContent = css;
-      container.prepend(style);
-      container.addClass("mwv-reader-customizations-active");
-    }
-
-    for (const rule of rules) {
-      if (rule.id === "builtin-copy-unlock") {
-        container.addClass("mwv-reader-copy-unlocked");
-        container.querySelectorAll<HTMLElement>("*").forEach((element) => {
-          for (const attribute of ["oncopy", "oncut", "onpaste", "onselectstart", "oncontextmenu", "ondragstart"]) {
-            element.removeAttribute(attribute);
-          }
-        });
-      } else if (rule.id === "builtin-reader-clean") {
-        container.addClass("mwv-reader-clean-layout");
-      } else if (rule.id === "builtin-image-viewer") {
-        container.addClass("mwv-reader-image-viewer");
-        container.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
-          image.loading = "lazy";
-          image.decoding = "async";
-          if (image.dataset.mwvImageViewerBound) return;
-          image.dataset.mwvImageViewerBound = "true";
-          image.addEventListener("click", (event) => {
-            event.preventDefault();
-            const src = image.currentSrc || image.src;
-            if (!src) return;
-            void this.openOfficialWebViewer(src).then((opened) => {
-              if (!opened) window.open(src, "_blank");
-            });
-          });
-        });
-      } else if (rule.id === "builtin-table-scroll") {
-        container.addClass("mwv-reader-table-scroll");
-        container.querySelectorAll<HTMLTableElement>("table").forEach((table) => {
-          if (table.parentElement?.classList.contains("mwv-table-scroll")) return;
-          const wrap = container.ownerDocument.createElement("div");
-          wrap.className = "mwv-table-scroll";
-          table.parentElement?.insertBefore(wrap, table);
-          wrap.appendChild(table);
-        });
-      }
-    }
-
-    const customJs = [
-      this.settings.readerUserScript,
-      ...rules.filter((rule) => !rule.id.startsWith("builtin-")).map((rule) => rule.js)
-    ].map((value) => value.trim()).filter(Boolean);
-    if (customJs.length) {
+    const hasCustomRule = rules.some((rule) => !rule.id.startsWith("builtin-") && (rule.css.trim() || rule.js.trim()));
+    if (styleEnabled || scriptEnabled || hasCustomRule) {
       container.addClass("mwv-reader-customizations-disabled");
-      void this.addConsole("warn", "Custom reader JavaScript is stored but disabled in the safe build; built-in reader actions are active", page.url);
+      void this.addConsole("warn", "Reader custom CSS/JavaScript is disabled in the community-safe build", page.url);
     }
   }
 
@@ -11413,131 +11001,93 @@ export default class MobileWebviewerPlugin extends Plugin {
     return fallbackSearchResults(cleanQuery);
   }
 
-  async requestPageSource(url: string, accept = "text/html,application/xhtml+xml,*/*"): Promise<PageSourceResponse> {
-    const desktopHeaders = this.requestHeaders(accept);
-    desktopHeaders["User-Agent"] =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
-    const headerSets = [
-      this.requestHeaders(accept),
-      desktopHeaders,
-      {
-        Accept: accept,
-        "Accept-Language": acceptLanguageHeader(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE),
-        "User-Agent": this.getUserAgentHeader()
-      }
-    ];
-    let lastError: unknown = undefined;
-    for (const headers of headerSets) {
-      try {
-        const response = await requestUrl({ url, method: "GET", headers });
-        const typed = response as unknown as { text?: string; status?: number; headers?: Record<string, string> };
-        const text = typeof typed.text === "string" ? typed.text : "";
-        const status = Number(typed.status ?? 200) || 200;
-        const responseHeaders = typed.headers ?? {};
-        const contentType = headerValue(responseHeaders, "content-type").toLowerCase();
-        const looksLikeHtml = /<!doctype\s+html|<html[\s>]|<body[\s>]|<article[\s>]|<main[\s>]/i.test(text);
-        if (status >= 400) {
-          lastError = new Error(`HTTP ${status}`);
-          continue;
-        }
-        if (!text.trim()) {
-          lastError = new Error("Empty page response");
-          continue;
-        }
-        if (contentType && !/(html|xhtml|text\/plain|json)/i.test(contentType) && !looksLikeHtml) {
-          lastError = new Error(`Unsupported page type: ${contentType}`);
-          continue;
-        }
-        return { text, status, headers: responseHeaders, requestedUrl: url };
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    const message = lastError instanceof Error ? lastError.message : String(lastError || "Request failed");
-    void this.addConsole("warn", `Page source request failed after retries: ${message}`, url);
-    throw new Error(`${hostName(url)}: ${message}`);
-  }
-
   async fetchNotePage(url: string): Promise<NotePage> {
     const cached = this.getCachedPage(url);
     if (cached) {
-      void this.addConsole("info", `Cache hit (${cached.extractionMethod || "legacy"})`, url);
+      void this.addConsole("info", "Cache hit", url);
       return cached;
     }
 
     void this.addConsole("info", "Fetch reader layer", url);
-    const response = await this.requestPageSource(url);
+    const response = await requestUrl({
+      url,
+      method: "GET",
+      headers: this.requestHeaders("text/html,application/xhtml+xml")
+    });
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(response.text, "text/html");
     this.cleanDocumentForModes(doc);
-    const metadataTitle =
-      metadataValue(doc, ["meta[property='og:title']", "meta[name='twitter:title']", "title"]) ||
+    const images = imageCandidatesFromDocument(doc, url, 8);
+
+    doc.querySelectorAll("script, style, noscript, svg, canvas, iframe, nav, footer, form, aside").forEach((node) => node.remove());
+
+    const title =
+      textFromElement(doc.querySelector("meta[property='og:title']")) ||
+      textFromElement(doc.querySelector("title")) ||
       hostName(url);
-    const metadataByline =
-      metadataValue(doc, ["meta[name='author']", "meta[property='article:author']", "[rel='author']", ".author", ".byline"]) ||
+    const byline =
+      textFromElement(doc.querySelector("meta[name='author']")) ||
+      textFromElement(doc.querySelector("[rel='author'], .author, .byline")) ||
       hostName(url);
 
-    let candidate = readerCandidatesFromDocument(doc, url)[0];
-    let candidateDoc = candidate ? parser.parseFromString(candidate.html, "text/html") : null;
+    const root =
+      doc.querySelector("article") ||
+      doc.querySelector("main") ||
+      doc.querySelector("[role='main']") ||
+      doc.body;
+    if (!root) throw new Error("No readable document body");
 
-    // AMP pages often contain the server-rendered article when the normal URL
-    // only returns a JavaScript shell or a consent page.
-    const ampHref = doc.querySelector<HTMLLinkElement>("link[rel~='amphtml'][href]")?.getAttribute("href");
-    const candidateTextLength = candidate?.text.replace(/\s+/g, "").length ?? 0;
-    if (ampHref && candidateTextLength < MIN_USEFUL_READER_TEXT * 2) {
-      const ampUrl = absoluteUrl(ampHref, url);
-      if (ampUrl !== url) {
-        try {
-          const ampResponse = await this.requestPageSource(ampUrl);
-          const ampDoc = parser.parseFromString(ampResponse.text, "text/html");
-          const ampCandidate = readerCandidatesFromDocument(ampDoc, ampUrl)[0];
-          if (ampCandidate && (!candidate || ampCandidate.score > candidate.score || ampCandidate.text.length > candidate.text.length * 1.15)) {
-            candidate = ampCandidate;
-            candidateDoc = parser.parseFromString(candidate.html, "text/html");
-          }
-        } catch (error) {
-          void this.addConsole("info", `AMP reader fallback unavailable: ${error instanceof Error ? error.message : String(error)}`, url);
+    const blocks: string[] = [];
+    const blockNodes = Array.from(root.querySelectorAll("h1, h2, h3, p, li, blockquote"));
+    for (const node of blockNodes) {
+      const text = textFromElement(node);
+      if (text.length < 12) continue;
+      const tag = node.tagName.toLowerCase();
+      if (/^h[1-3]$/.test(tag)) {
+        blocks.push(`${"#".repeat(Number(tag.slice(1)))} ${text}`);
+      } else if (tag === "li") {
+        blocks.push(`- ${text}`);
+      } else {
+        blocks.push(text);
+      }
+      if (blocks.join("\n").length > 18000) break;
+    }
+
+    if (!blocks.length) {
+      const bodyText = textFromElement(root);
+      if (bodyText) {
+        const sentenceSource = bodyText.replace(/([。！？.!?])\s+/g, "$1\n");
+        for (const sentence of sentenceSource.split(/\n+/).map((part) => part.trim()).filter(Boolean)) {
+          if (sentence.length < 12) continue;
+          blocks.push(sentence);
+          if (blocks.join("\n").length > 12000) break;
         }
       }
     }
 
-    if (!candidate || candidate.text.replace(/\s+/g, "").length < 100) {
-      throw new Error("No readable article content; the site may require JavaScript or block reader requests");
-    }
-
-    const sourceDocs = [candidateDoc, doc].filter((item): item is Document => Boolean(item));
-    const images = this.settings.noImageMode
-      ? []
-      : Array.from(new Set(sourceDocs.flatMap((source) => imageCandidatesFromDocument(source, url, 16)))).slice(0, 12);
     const links: SearchResult[] = [];
     const seen = new Set<string>();
-    for (const source of sourceDocs) {
-      for (const anchor of Array.from(source.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
-        const href = absoluteUrl(anchor.getAttribute("href") ?? "", url);
-        if (!/^https?:\/\//i.test(href) || seen.has(href)) continue;
-        const label = textFromElement(anchor).replace(/\s+/g, " ").trim();
-        if (label.length < 2 || /^https?:\/\//i.test(label)) continue;
-        seen.add(href);
-        links.push({ title: label.slice(0, 160), url: href, snippet: hostName(href) });
-        if (links.length >= 24) break;
-      }
-      if (links.length >= 24) break;
+    for (const anchor of Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+      const href = absoluteUrl(anchor.getAttribute("href") ?? "", url);
+      if (!/^https?:\/\//i.test(href) || seen.has(href)) continue;
+      const label = textFromElement(anchor);
+      if (label.length < 3) continue;
+      seen.add(href);
+      links.push({ title: label.slice(0, 120), url: href, snippet: hostName(href) });
+      if (links.length >= 12) break;
     }
 
-    const content = candidate.text.slice(0, 50000).trim();
-    const page: NotePage = {
-      title: candidate.title || metadataTitle,
+    const page = {
+      title,
       url,
-      byline: candidate.byline || metadataByline,
-      excerpt: content.replace(/\s+/g, " ").slice(0, 520),
+      byline,
+      excerpt: blocks.slice(0, 3).join(" ").slice(0, 420),
       images,
-      content,
-      contentHtml: candidate.html,
-      extractionMethod: candidate.method,
+      content: blocks.join("\n\n"),
       links
     };
     await this.rememberPageCache(page);
-    void this.addConsole("info", `Reader extracted ${content.length} chars via ${candidate.method}`, url);
     return page;
   }
 

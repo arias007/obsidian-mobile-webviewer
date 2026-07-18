@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.3.54",
+  "version": "0.3.53",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {
@@ -23,7 +23,6 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0",
     "qrcode-generator": "^2.0.4"
   }
 }
