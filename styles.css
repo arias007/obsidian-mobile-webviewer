@@ -1432,6 +1432,43 @@
   display: block;
 }
 
+.mwv-note-browser-document .markdown-preview-sizer {
+  width: 100%;
+  max-width: none;
+  margin-right: 0;
+  margin-left: 0;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.markdown-preview-view.mwv-note-browser-document,
+.markdown-rendered.mwv-note-browser-document {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.mwv-note-browser-document .mwv-embed,
+.mwv-note-browser-document .mwv-note-embed,
+.mwv-note-browser-document .mwv-note-surface,
+.mwv-note-browser-document .mwv-bing-results {
+  width: 100%;
+  max-width: none;
+}
+
+.mwv-note-browser-redundant-title {
+  display: none;
+}
+
+.mwv-note-browser-document .markdown-preview-sizer > .el-h1 {
+  display: none;
+}
+
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-embed-layer,
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-static-canvas,
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-canvas {
+  display: none !important;
+}
+
 .mwv-note-embed {
   display: block;
   position: relative;
@@ -3186,6 +3223,13 @@
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-note-surface {
   max-width: 100%;
   padding: 14px 12px 96px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home-quick,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results {
+  max-width: none;
+  margin-right: 0;
+  margin-left: 0;
 }
 
 .workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home.mwv-reader-strip {

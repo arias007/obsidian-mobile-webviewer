@@ -1,11 +1,12 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.3.54",
+  "version": "0.3.55",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {
     "verify:cancip": "node scripts/verify-cancip-integration.mjs",
-    "build": "npm run verify:cancip && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "verify:note-browser": "node scripts/verify-note-browser.mjs",
+    "build": "npm run verify:cancip && npm run verify:note-browser && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs"
   },
   "keywords": [

@@ -46,6 +46,7 @@ const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
 const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.53";
+const NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION = 3;
 const AD_CANDIDATE_SELECTOR = [
   "[id*='ad' i]",
   "[class*='ad-' i]",
@@ -2173,6 +2174,7 @@ interface MobileWebviewerSettings {
   uiLanguage: string;
   openOnStartup: boolean;
   noteBrowserStartupDefaultVersion?: string;
+  noteDrawLegacyWebviewerMigrationVersion: number;
   compactToolbar: boolean;
   showReaderHint: boolean;
   showFloatingWand: boolean;
@@ -2371,7 +2373,7 @@ interface NoteDrawControllerLike {
   active?: boolean;
   previewEl?: HTMLElement;
   button?: HTMLElement;
-  file?: { path?: string };
+  file?: NoteDrawFileLike;
   plugin?: unknown;
   surfaceType?: string;
   allowTextEdit?: boolean;
@@ -2383,6 +2385,7 @@ interface NoteDrawControllerLike {
   textPanel?: HTMLElement | null;
   selectionMenu?: HTMLElement | null;
   canvas?: HTMLElement | null;
+  drawingData?: NoteDrawDrawingDataLike;
   createFormatToolbar?: () => void;
   syncFloatingControlClasses?: () => void;
   ensureDrawingsLoaded?: () => Promise<void>;
@@ -2400,6 +2403,21 @@ interface NoteDrawControllerLike {
   scheduleLayoutRefresh?: () => void;
   updateFloatingControlsPosition?: () => void;
   destroy?: () => void;
+}
+
+interface NoteDrawFileLike {
+  path?: string;
+  name?: string;
+  extension?: string;
+}
+
+interface NoteDrawDrawingDataLike {
+  sourcePath?: string;
+  visible?: boolean;
+  strokes?: unknown[];
+  webEdits?: unknown[];
+  updatedAt?: string | null;
+  [key: string]: unknown;
 }
 
 interface NoteDrawButtonElement extends HTMLElement {
@@ -2423,9 +2441,13 @@ interface NoteDrawPluginLike {
   syncMobileWebviewerHeaderButtons?: () => void;
   scheduleWebviewSync?: () => void;
   webviewControllers?: Map<HTMLElement, NoteDrawControllerLike>;
-  drawingPathForFile?: (file?: { path?: string }) => string;
-  writeDrawings?: (file?: { path?: string }, data?: unknown) => Promise<void>;
-  scheduleDrawingSave?: (file?: { path?: string }, data?: unknown) => void;
+  drawingPathForFile?: (file?: NoteDrawFileLike) => string;
+  writeDrawings?: (file?: NoteDrawFileLike, data?: unknown) => Promise<void>;
+  scheduleDrawingSave?: (file?: NoteDrawFileLike, data?: unknown) => void;
+  api?: {
+    readDrawings?: (file?: NoteDrawFileLike) => Promise<NoteDrawDrawingDataLike>;
+    writeDrawings?: (file?: NoteDrawFileLike, data?: unknown) => Promise<NoteDrawDrawingDataLike>;
+  };
 }
 
 interface MobileWebviewerSyntheticEvent extends Event {
@@ -2437,6 +2459,7 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   searchUrl: DEFAULT_SEARCH,
   uiLanguage: DEFAULT_UI_LANGUAGE,
   openOnStartup: false,
+  noteDrawLegacyWebviewerMigrationVersion: 0,
   compactToolbar: true,
   showReaderHint: true,
   showFloatingWand: true,
@@ -3617,6 +3640,8 @@ class MobileWebviewerView extends ItemView {
   currentWebNote?: WebNoteEntry;
   webNoteSaveTimer?: number;
   webNoteDoodleSaveTimer?: number;
+  noteDrawPageRefreshTimer?: number;
+  noteDrawPageRefreshForceEdit = false;
   activeDoodlePath?: SVGPathElement;
   activeDoodlePointerId?: number;
   activeDoodleSvg?: SVGSVGElement;
@@ -3653,6 +3678,10 @@ class MobileWebviewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.noteDrawPageRefreshTimer) {
+      window.clearTimeout(this.noteDrawPageRefreshTimer);
+      this.noteDrawPageRefreshTimer = undefined;
+    }
     await this.saveCurrentWebNoteNow();
   }
 
@@ -3700,7 +3729,7 @@ class MobileWebviewerView extends ItemView {
     });
 
     const meta = header.createDiv({ cls: "mwv-meta" });
-    this.titleEl = meta.createDiv({ cls: "mwv-title", text: this.plugin.tr("noteBrowser") });
+    this.titleEl = meta.createDiv({ cls: "mwv-title" });
     this.subtitleEl = meta.createDiv({ cls: "mwv-subtitle", text: this.plugin.tr("ready") });
     this.tabStripEl = header.createDiv({ cls: "mwv-tab-strip" });
 
@@ -3781,7 +3810,7 @@ class MobileWebviewerView extends ItemView {
 
     this.renderDrawer("bookmarks");
     this.syncSurfaceIdentity();
-    this.plugin.queueNoteDrawButtonDedupe(root);
+    this.queueNoteDrawPageRefresh();
   }
 
   makeModeButton(parent: HTMLElement, icon: string, label: string, mode: "note" | "web" | "split"): HTMLButtonElement {
@@ -3824,6 +3853,7 @@ class MobileWebviewerView extends ItemView {
 
   syncSurfaceIdentity(url = this.currentUrl || this.plugin.settings.homeUrl, title = this.currentTitle || hostName(url)): void {
     const root = this.containerEl.children[1] as HTMLElement | undefined;
+    const pageChanged = Boolean(root && root.dataset.url !== url);
     if (root) {
       root.dataset.url = url;
       root.dataset.mwvTitle = title;
@@ -3837,6 +3867,19 @@ class MobileWebviewerView extends ItemView {
       frameWrap.setAttribute("data-url", url);
       frameWrap.setAttribute("data-mwv-title", title);
     }
+    if (pageChanged) this.queueNoteDrawPageRefresh();
+  }
+
+  queueNoteDrawPageRefresh(forceEditMode = false): void {
+    this.noteDrawPageRefreshForceEdit ||= forceEditMode;
+    if (this.noteDrawPageRefreshTimer) window.clearTimeout(this.noteDrawPageRefreshTimer);
+    this.noteDrawPageRefreshTimer = window.setTimeout(() => {
+      this.noteDrawPageRefreshTimer = undefined;
+      const root = this.containerEl.children[1] as HTMLElement | undefined;
+      const shouldForceEdit = this.noteDrawPageRefreshForceEdit;
+      this.noteDrawPageRefreshForceEdit = false;
+      if (root?.isConnected) this.plugin.notifyNoteDrawWebviewChanged(root, shouldForceEdit);
+    }, 60);
   }
 
   handleSurfaceReady(): void {
@@ -4091,7 +4134,7 @@ class MobileWebviewerView extends ItemView {
     this.homeEl.empty();
 
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface mwv-search-note" });
-    article.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer / Bing backend" });
+    article.dataset.url = this.currentUrl || this.plugin.settings.homeUrl;
     article.createEl("h1", { text: query ? `${this.plugin.tr("search")}: ${query}` : this.plugin.tr("search") });
 
     const form = article.createEl("form", { cls: "mwv-home-search" });
@@ -4158,6 +4201,7 @@ class MobileWebviewerView extends ItemView {
         });
       }
     }
+    this.queueNoteDrawPageRefresh();
   }
 
   openDrawer(kind: "bookmarks" | "history" | "reading" | "downloads" | "console"): void {
@@ -4521,7 +4565,6 @@ class MobileWebviewerView extends ItemView {
     this.homeEl.empty();
     const article = this.homeEl.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
     article.dataset.url = url;
-    article.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
     article.createEl("h1", { text: this.currentTitle });
     const actions = article.createDiv({ cls: "mwv-note-actions" });
     const refresh = actions.createEl("button", { attr: { type: "button", title: this.plugin.tr("refresh"), "aria-label": this.plugin.tr("refresh") } });
@@ -4534,6 +4577,7 @@ class MobileWebviewerView extends ItemView {
     }
     const content = article.createDiv({ cls: "mwv-utility-content" });
     this.renderUtilityContent(content, kind);
+    this.queueNoteDrawPageRefresh();
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
   }
@@ -4841,6 +4885,7 @@ class MobileWebviewerView extends ItemView {
     if (this.frontendMode) {
       this.setFrontendMode(this.frontendMode);
     }
+    this.queueNoteDrawPageRefresh();
   }
 
   populateWebNoteContent(content: HTMLElement, page: NotePage, note?: WebNoteEntry): void {
@@ -5376,10 +5421,15 @@ class MobileWebviewerView extends ItemView {
 export default class MobileWebviewerPlugin extends Plugin {
   settings: MobileWebviewerSettings = DEFAULT_SETTINGS;
   processorSeq = 0;
+  processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
+  noteDrawControllerRepairs = new WeakSet<HTMLElement>();
   noteDrawHeaderActivationTokens = new WeakMap<HTMLElement, number>();
   noteDrawHeaderActivationSeq = 0;
+  noteDrawLegacyMigrationTimer = 0;
+  noteDrawLegacyMigrationPromise: Promise<boolean> | null = null;
+  noteDrawLegacyMigrationRetry = 0;
   private apiListeners = new Set<MobileWebviewerApiListener>();
   readonly api: MobileWebviewerApi = {
     apiVersion: MOBILE_WEBVIEWER_API_VERSION,
@@ -5444,6 +5494,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.installNoteDrawDedupeObserver();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
+      this.app.workspace.containerEl
+        .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
+        .forEach((root) => this.queueNoteDrawButtonDedupe(root));
+      this.app.workspace.containerEl
+        .querySelectorAll<HTMLElement>(".mwv-note-browser-document")
+        .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
     }));
 
     this.addRibbonIcon("notebook-tabs", "Note browser", () => {
@@ -5504,13 +5560,20 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.app.workspace.containerEl
         .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
         .forEach((root) => this.queueNoteDrawButtonDedupe(root));
+      this.app.workspace.containerEl
+        .querySelectorAll<HTMLElement>(".mwv-note-browser-document")
+        .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
       if (this.settings.openOnStartup) {
         void this.openNoteBrowser(this.settings.noteBrowserUrl || this.settings.homeUrl);
       }
     });
+    this.app.workspace.containerEl
+      .querySelectorAll<HTMLElement>(".mwv-note-browser-document")
+      .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
   }
 
   onunload(): void {
+    if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
     // Preserve user-arranged leaves when the plugin unloads.
   }
 
@@ -5528,6 +5591,7 @@ export default class MobileWebviewerPlugin extends Plugin {
             continue;
           }
           this.queueNoteDrawButtonDedupe(root);
+          this.queueLegacyNoteDrawWebviewerMigration(root);
           return;
         }
       }
@@ -5590,6 +5654,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       for (const button of buttons) {
         const controller = (button as NoteDrawButtonElement)._noteDrawController;
         if (controller?.surfaceType === "webview" && this.isMobileWebviewerSurface(controller.previewEl ?? surface)) {
+          if (!this.isVisibleNoteDrawSurface(controller.previewEl ?? surface)) {
+            button.removeClass("mwv-notedraw-top-button");
+            hideSourceButton(button);
+            continue;
+          }
           if (button.parentElement !== anchor) anchor.appendChild(button);
           button.addClass("mwv-notedraw-top-button");
           button.removeClass("mwv-notedraw-source-button");
@@ -6087,6 +6156,26 @@ export default class MobileWebviewerPlugin extends Plugin {
     );
   }
 
+  repairStaleNoteDrawController(surface?: HTMLElement | null): void {
+    if (!surface?.isConnected || this.noteDrawControllerRepairs.has(surface)) return;
+    this.noteDrawControllerRepairs.add(surface);
+    void this.resetNoteDrawWebviewControllers(surface)
+      .then(() => {
+        if (!surface.isConnected) return;
+        const noteDrawPlugin = this.getNoteDrawPlugin();
+        noteDrawPlugin?.syncWebviewControllers?.();
+        noteDrawPlugin?.scheduleWebviewSync?.();
+        this.queueNoteDrawButtonDedupe(surface);
+        this.queueNoteDrawControllerSync(surface, false);
+      })
+      .catch((error) => {
+        console.error("[mobile-webviewer] NoteDraw controller repair failed", error);
+      })
+      .finally(() => {
+        window.setTimeout(() => this.noteDrawControllerRepairs.delete(surface), 700);
+      });
+  }
+
   toggleMountedNoteDrawController(controller: NoteDrawControllerLike, surface: HTMLElement, allowUnready = false): boolean {
     if (!allowUnready && !this.isNoteDrawControllerMounted(controller)) return false;
     const afterActivation = () => {
@@ -6300,6 +6389,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     for (const controller of this.collectNoteDrawControllers(root)) {
       if (!controller.previewEl?.isConnected || controller.surfaceType !== "webview") continue;
       if (!this.isMobileWebviewerSurface(controller.previewEl)) continue;
+      if (!this.isNoteDrawControllerMounted(controller)) {
+        this.repairStaleNoteDrawController(controller.previewEl);
+        continue;
+      }
 
       controller.allowTextEdit = true;
       if ((!controller.formatToolbar || !controller.formatToolbar.isConnected) && typeof controller.createFormatToolbar === "function") {
@@ -6340,6 +6433,226 @@ export default class MobileWebviewerPlugin extends Plugin {
         console.warn("[mobile-webviewer] NoteDraw controller sync skipped", error);
       }
     }
+    this.queueLegacyNoteDrawWebviewerMigration(root);
+  }
+
+  queueLegacyNoteDrawWebviewerMigration(root?: HTMLElement): void {
+    const documentEl =
+      root?.closest<HTMLElement>(".mwv-note-browser-document") ??
+      root?.querySelector<HTMLElement>(".mwv-note-browser-document") ??
+      null;
+    if (!documentEl) return;
+    if (this.settings.noteDrawLegacyWebviewerMigrationVersion >= NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION) {
+      documentEl.addClass("mwv-notedraw-legacy-migrated");
+      return;
+    }
+    if (this.noteDrawLegacyMigrationPromise || this.noteDrawLegacyMigrationTimer) return;
+    const runMigration = () => {
+      const migration = this.migrateLegacyNoteDrawWebviewer(documentEl)
+        .catch((error) => {
+          console.warn("[mobile-webviewer] legacy NoteDraw migration skipped", error);
+          return false;
+        });
+      this.noteDrawLegacyMigrationPromise = migration;
+      void migration.then((completed) => {
+        this.noteDrawLegacyMigrationPromise = null;
+        if (completed) {
+          this.noteDrawLegacyMigrationRetry = 0;
+        } else if (documentEl.isConnected) {
+          this.noteDrawLegacyMigrationRetry += 1;
+          this.queueLegacyNoteDrawWebviewerMigration(documentEl);
+        }
+      });
+    };
+    if (this.noteDrawLegacyMigrationRetry === 0) {
+      runMigration();
+      return;
+    }
+    this.noteDrawLegacyMigrationTimer = window.setTimeout(() => {
+      this.noteDrawLegacyMigrationTimer = 0;
+      runMigration();
+    }, [800, 1600, 3200, 6000, 10000][Math.min(this.noteDrawLegacyMigrationRetry - 1, 4)]);
+  }
+
+  async migrateLegacyNoteDrawWebviewer(documentEl: HTMLElement): Promise<boolean> {
+    if (!documentEl.isConnected) return false;
+    const noteDrawPlugin = this.getNoteDrawPlugin();
+    const noteDrawApi = noteDrawPlugin?.api;
+    if (typeof noteDrawApi?.readDrawings !== "function" || typeof noteDrawApi.writeDrawings !== "function") return false;
+
+    const legacyController = (documentEl as NoteDrawSurfaceElement)._noteDrawController;
+    if (legacyController?.surfaceType !== "preview" || legacyController.file?.path !== WEBVIEW_NOTE_PATH) return false;
+    const homeController = this.collectNoteDrawControllers(documentEl).find((controller) => {
+      const surface = controller.previewEl;
+      if (controller.surfaceType !== "webview" || !surface?.isConnected || !surface.matches(".mwv-bing-home")) return false;
+      return this.sameWebPage(surface.dataset.url, this.settings.homeUrl);
+    });
+    const homeFile = homeController?.file ?? this.noteDrawWebviewFileForUrl(this.settings.homeUrl);
+    if (!homeFile?.path) return false;
+
+    await Promise.all([
+      legacyController.ensureDrawingsLoaded?.(),
+      homeController?.ensureDrawingsLoaded?.()
+    ]);
+    const [legacyData, homeData] = await Promise.all([
+      noteDrawApi.readDrawings(legacyController.file),
+      noteDrawApi.readDrawings(homeFile)
+    ]);
+    const legacyCounts = this.noteDrawDataCounts(legacyData);
+    const homeCounts = this.noteDrawDataCounts(homeData);
+    const homeAlreadyContainsLegacy = this.noteDrawContentMatches(homeData, legacyData);
+    if (legacyCounts.total === 0 || (homeCounts.total !== 0 && !homeAlreadyContainsLegacy)) return true;
+
+    const pendingSave = homeController ? this.noteDrawDrawingSaveTimers.get(homeController) : 0;
+    if (pendingSave && homeController) {
+      window.clearTimeout(pendingSave);
+      this.noteDrawDrawingSaveTimers.delete(homeController);
+    }
+
+    const migrated = JSON.parse(JSON.stringify(legacyData)) as NoteDrawDrawingDataLike;
+    migrated.sourcePath = homeFile.path;
+    migrated.updatedAt = new Date().toISOString();
+    migrated.strokes = (migrated.strokes ?? []).map((item) => {
+      return this.rebaseLegacyNoteDrawStroke(item, homeFile.path ?? "");
+    });
+    await noteDrawApi.writeDrawings(homeFile, migrated);
+    const verified = await noteDrawApi.readDrawings(homeFile);
+    const verifiedCounts = this.noteDrawDataCounts(verified);
+    if (
+      verifiedCounts.strokes !== legacyCounts.strokes ||
+      verifiedCounts.webEdits !== legacyCounts.webEdits ||
+      this.noteDrawDataHasForeignAnchors(verified, homeFile.path ?? "")
+    ) {
+      throw new Error("NoteDraw homepage migration readback did not match the legacy data");
+    }
+
+    this.settings.noteDrawLegacyWebviewerMigrationVersion = NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION;
+    await this.saveSettings();
+    documentEl.addClass("mwv-notedraw-legacy-migrated");
+    homeController?.applyWebEdits?.();
+    homeController?.resizeCanvas?.();
+    homeController?.render?.();
+    return true;
+  }
+
+  noteDrawDataCounts(data?: NoteDrawDrawingDataLike | null): { strokes: number; webEdits: number; total: number } {
+    const strokes = Array.isArray(data?.strokes) ? data.strokes.length : 0;
+    const webEdits = Array.isArray(data?.webEdits) ? data.webEdits.length : 0;
+    return { strokes, webEdits, total: strokes + webEdits };
+  }
+
+  noteDrawContentMatches(left?: NoteDrawDrawingDataLike | null, right?: NoteDrawDrawingDataLike | null): boolean {
+    const exactMatch = (
+      JSON.stringify(left?.strokes ?? []) === JSON.stringify(right?.strokes ?? []) &&
+      JSON.stringify(left?.webEdits ?? []) === JSON.stringify(right?.webEdits ?? [])
+    );
+    if (exactMatch) return true;
+    const strokeIds = (data?: NoteDrawDrawingDataLike | null) => {
+      return (data?.strokes ?? []).map((item) => {
+        if (!item || typeof item !== "object") return "";
+        const layout = (item as Record<string, unknown>).layout;
+        return layout && typeof layout === "object" ? String((layout as Record<string, unknown>).id ?? "") : "";
+      });
+    };
+    const leftIds = strokeIds(left);
+    const rightIds = strokeIds(right);
+    return (
+      leftIds.length > 0 &&
+      leftIds.length === rightIds.length &&
+      leftIds.every(Boolean) &&
+      JSON.stringify(leftIds) === JSON.stringify(rightIds) &&
+      JSON.stringify(left?.webEdits ?? []) === JSON.stringify(right?.webEdits ?? [])
+    );
+  }
+
+  rebaseLegacyNoteDrawStroke(item: unknown, targetPath: string): unknown {
+    if (!item || typeof item !== "object") return item;
+    const stroke = item as Record<string, unknown>;
+    const layout = stroke.layout;
+    if (layout && typeof layout === "object") {
+      const corners = (layout as Record<string, unknown>).corners;
+      if (corners && typeof corners === "object") {
+        for (const corner of Object.values(corners)) {
+          if (corner && typeof corner === "object") (corner as Record<string, unknown>).path = targetPath;
+        }
+      }
+    }
+    if (Array.isArray(stroke.points)) {
+      stroke.points = stroke.points.map((itemPoint) => {
+        if (!itemPoint || typeof itemPoint !== "object") return itemPoint;
+        const point = itemPoint as Record<string, unknown>;
+        const anchor = point.anchor;
+        if (anchor && typeof anchor === "object") (anchor as Record<string, unknown>).path = targetPath;
+        return point;
+      });
+    }
+    return stroke;
+  }
+
+  noteDrawDataHasForeignAnchors(data: NoteDrawDrawingDataLike | null | undefined, targetPath: string): boolean {
+    return (data?.strokes ?? []).some((item) => {
+      if (!item || typeof item !== "object") return false;
+      const stroke = item as Record<string, unknown>;
+      const layout = stroke.layout;
+      if (layout && typeof layout === "object") {
+        const corners = (layout as Record<string, unknown>).corners;
+        if (corners && typeof corners === "object") {
+          const hasForeignCorner = Object.values(corners).some((corner) => {
+            return Boolean(corner && typeof corner === "object" && (corner as Record<string, unknown>).path !== targetPath);
+          });
+          if (hasForeignCorner) return true;
+        }
+      }
+      return Array.isArray(stroke.points) && stroke.points.some((itemPoint) => {
+        if (!itemPoint || typeof itemPoint !== "object") return false;
+        const anchor = (itemPoint as Record<string, unknown>).anchor;
+        return Boolean(anchor && typeof anchor === "object" && (anchor as Record<string, unknown>).path !== targetPath);
+      });
+    });
+  }
+
+  sameWebPage(left?: string, right?: string): boolean {
+    const normalize = (value?: string) => {
+      try {
+        const url = new URL(value || "");
+        url.hash = "";
+        return url.href.replace(/\/$/, "").toLowerCase();
+      } catch {
+        return String(value || "").trim().replace(/\/$/, "").toLowerCase();
+      }
+    };
+    return Boolean(left && right && normalize(left) === normalize(right));
+  }
+
+  noteDrawWebviewFileForUrl(value?: string): NoteDrawFileLike | null {
+    let identity = "";
+    try {
+      identity = new URL(value || "").toString();
+    } catch {
+      identity = String(value || "").trim();
+    }
+    if (!identity) return null;
+    let label = "webview";
+    try {
+      label = new URL(identity).hostname.replace(/^www\./, "") || label;
+    } catch {
+      // Keep the generic label for non-URL identities.
+    }
+    label = label
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()!
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "webview";
+    let hash = 2166136261;
+    for (let index = 0; index < identity.length; index += 1) {
+      hash ^= identity.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    const suffix = (hash >>> 0).toString(16).padStart(8, "0");
+    const path = `webviews/${label}__${suffix}.md`;
+    return { path, name: path.split("/").pop() || "webview.md", extension: "md" };
   }
 
   queueNoteDrawDrawingSave(controller?: NoteDrawControllerLike | null): void {
@@ -6511,6 +6824,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!surface?.isConnected || !button?.isConnected) return;
     if (!this.isMobileWebviewerSurface(surface)) return;
     if (!controller) return;
+    if (!this.isNoteDrawControllerMounted(controller)) {
+      button.removeClass("mwv-notedraw-top-button");
+      button.addClass("mwv-notedraw-source-button");
+      button.setAttribute("aria-hidden", "true");
+      button.tabIndex = -1;
+      this.repairStaleNoteDrawController(surface);
+      return;
+    }
+    if (!this.isVisibleNoteDrawSurface(surface)) {
+      button.removeClass("mwv-notedraw-top-button");
+      button.addClass("mwv-notedraw-source-button");
+      button.setAttribute("aria-hidden", "true");
+      button.tabIndex = -1;
+      return;
+    }
     const anchor = this.ensureNoteDrawStableAnchor(surface);
     if (button.parentElement !== anchor) {
       anchor.appendChild(button);
@@ -6521,6 +6849,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     button.tabIndex = 0;
     this.decorateNoteDrawWebWandButton(button);
     this.bindNoteDrawWebviewButton(button, controller);
+  }
+
+  isVisibleNoteDrawSurface(surface?: HTMLElement | null): boolean {
+    if (!surface?.isConnected) return false;
+    const rect = surface.getBoundingClientRect();
+    const style = window.getComputedStyle(surface);
+    return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden";
   }
 
   decorateNoteDrawWebWandButton(button: NoteDrawButtonElement): void {
@@ -6537,32 +6872,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   bindNoteDrawWebviewButton(button: NoteDrawButtonElement, controller: NoteDrawControllerLike): void {
-    if (button._mwvNoteDrawBound) {
-      button._mwvNoteDrawBoundController = controller;
-      return;
-    }
+    // NoteDraw owns this button's pointer/touch lifecycle. Mobile Webviewer only
+    // keeps it anchored and associated with the current URL controller.
     button._mwvNoteDrawBound = true;
     button._mwvNoteDrawBoundController = controller;
-    const handleActivation = (event: Event) => {
-      const now = Date.now();
-      if (event.type === "click" && button._mwvNoteDrawLastTouchMs && now - button._mwvNoteDrawLastTouchMs < 700) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation?.();
-        return;
-      }
-      if (event.type === "touchend") button._mwvNoteDrawLastTouchMs = now;
-      const current = button._noteDrawController ?? button._mwvNoteDrawBoundController ?? controller;
-      if (current?.surfaceType !== "webview" || !this.isMobileWebviewerSurface(current.previewEl)) return;
-      const surface = current.previewEl;
-      if (!surface?.isConnected) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-      this.activateNoteDrawWebviewController(current, surface);
-    };
-    button.addEventListener("click", handleActivation, { capture: true });
-    button.addEventListener("touchend", handleActivation, { capture: true, passive: false });
   }
 
   isMobileWebviewerSurface(surface?: HTMLElement | null): boolean {
@@ -6757,6 +7070,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
       };
       const webviewController = this.findWebviewNoteDrawController(root, true);
+      if (webviewController?.previewEl && this.activateNoteDrawWebviewController(webviewController, webviewController.previewEl)) {
+        return;
+      }
       if (toggleController(webviewController)) {
         return;
       }
@@ -6868,8 +7184,6 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async ensureWebviewerNote(): Promise<TFile> {
     const content = [
-      "# Mobile Webviewer",
-      "",
       `<div class="mwv-embed mwv-bing-home" data-url="${this.escapeAttr(this.settings.homeUrl)}" data-mwv-browser-mode="note">`,
       "  <div class=\"mwv-bing-logo\">Bing</div>",
       "  <div class=\"mwv-bing-search\" role=\"search\">",
@@ -6892,10 +7206,22 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   processWebviewerEmbeds(root: HTMLElement): void {
-    const embeds = Array.from(root.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"));
+    this.dedupeNoteBrowserEmbedRoots(root);
+    this.restoreMissingNoteBrowserEmbed(root);
+    this.dedupeNoteBrowserEmbedRoots(root);
+    const embeds = Array.from(root.querySelectorAll<HTMLElement>(".mwv-embed[data-url]")).filter((embed) => {
+      const sourceView = embed.closest<HTMLElement>(".markdown-source-view");
+      return !sourceView || window.getComputedStyle(sourceView).display !== "none";
+    });
     for (const embed of embeds) {
-      if (embed.dataset.mwvProcessed) continue;
-      embed.dataset.mwvProcessed = String(++this.processorSeq);
+      this.prepareWebviewerDocumentLayout(embed);
+      const hasCurrentRenderer =
+        embed.dataset.mwvProcessed === this.processorSessionId &&
+        (embed.dataset.mwvRendering === this.processorSessionId || Boolean(embed.querySelector(":scope > .mwv-browser-chrome")));
+      if (hasCurrentRenderer) continue;
+      this.processorSeq += 1;
+      embed.dataset.mwvProcessed = this.processorSessionId;
+      embed.dataset.mwvRendering = this.processorSessionId;
       embed.dataset.mwvBack = JSON.stringify(this.settings.noteBrowserBack ?? []);
       embed.dataset.mwvForward = JSON.stringify(this.settings.noteBrowserForward ?? []);
       embed.dataset.mwvBrowserMode = "note";
@@ -6903,8 +7229,83 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvActiveTabId = tab.id;
       const url = this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl;
       embed.dataset.url = url;
-      void this.renderEmbed(embed, url);
+      void this.renderEmbed(embed, url)
+        .catch((error) => {
+          console.error("[mobile-webviewer] NoteWeb render failed", error);
+        })
+        .finally(() => {
+          if (embed.dataset.mwvRendering === this.processorSessionId) delete embed.dataset.mwvRendering;
+        });
     }
+  }
+
+  dedupeNoteBrowserEmbedRoots(root: HTMLElement): void {
+    const hosts = root.matches(".el-div")
+      ? [root]
+      : Array.from(root.querySelectorAll<HTMLElement>(".mwv-note-browser-document .el-div"));
+    for (const host of hosts) {
+      const embeds = Array.from(host.children).filter((element): element is HTMLElement => {
+        return isHtmlElement(element) && element.matches(".mwv-embed[data-url]");
+      });
+      if (embeds.length < 2) continue;
+      const winner = embeds.find((embed) => {
+        const controller = (embed as NoteDrawSurfaceElement)._noteDrawController;
+        return Boolean(controller?.previewEl === embed && controller.canvas?.isConnected);
+      }) ?? embeds.find((embed) => embed.dataset.mwvRecovered === "true") ?? embeds[0];
+      for (const embed of embeds) {
+        if (embed === winner) continue;
+        const controller = (embed as NoteDrawSurfaceElement)._noteDrawController;
+        if (controller) {
+          void this.resetNoteDrawWebviewControllers(embed).finally(() => embed.remove());
+        } else {
+          embed.remove();
+        }
+      }
+    }
+  }
+
+  restoreMissingNoteBrowserEmbed(root: HTMLElement): void {
+    const previews = root.matches(".markdown-preview-view")
+      ? [root]
+      : Array.from(root.querySelectorAll<HTMLElement>(".markdown-preview-view"));
+    for (const preview of previews) {
+      if (preview.querySelector(".mwv-embed[data-url]")) continue;
+      const leaf = this.findWorkspaceLeafForElement(preview);
+      const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+      if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) continue;
+      const sizer = preview.querySelector<HTMLElement>(".markdown-preview-sizer");
+      if (!sizer) continue;
+      let host = Array.from(sizer.children).find((element) => {
+        return isHtmlElement(element) && element.hasClass("el-div") && !element.textContent?.trim();
+      });
+      if (!isHtmlElement(host)) {
+        host = sizer.createDiv({ cls: "el-div" });
+        const footer = sizer.querySelector<HTMLElement>(":scope > .mod-footer");
+        if (footer) sizer.insertBefore(host, footer);
+      }
+      const embed = host.createDiv({ cls: "mwv-embed mwv-bing-home" });
+      embed.dataset.mwvRecovered = "true";
+      const url = this.settings.noteBrowserUrl || this.settings.homeUrl;
+      embed.dataset.url = url;
+      embed.dataset.mwvBrowserMode = "note";
+      embed.setAttribute("data-url", url);
+    }
+  }
+
+  prepareWebviewerDocumentLayout(embed: HTMLElement): void {
+    const preview = embed.closest<HTMLElement>(".markdown-preview-view, .markdown-rendered");
+    if (!preview) return;
+    preview.addClass("mwv-note-browser-document");
+    preview.toggleClass(
+      "mwv-notedraw-legacy-migrated",
+      this.settings.noteDrawLegacyWebviewerMigrationVersion >= NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION
+    );
+    preview.querySelectorAll<HTMLElement>("h1, .inline-title").forEach((title) => {
+      if (title.textContent?.trim().toLowerCase() === "mobile webviewer") {
+        title.addClass("mwv-note-browser-redundant-title");
+      }
+    });
+    this.queueLegacyNoteDrawWebviewerMigration(preview);
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -7326,7 +7727,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.renderBrowserChrome(embed, url, title);
     const page = embed.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
     page.dataset.url = url;
-    page.createDiv({ cls: "mwv-note-source", text: "Mobile Webviewer" });
     page.createEl("h2", { cls: "mwv-page-title", text: title });
     const content = page.createDiv({ cls: "mwv-utility-content" });
     if (kind === "downloads") {
@@ -9943,10 +10343,27 @@ export default class MobileWebviewerPlugin extends Plugin {
     return preferences.join(",");
   }
 
+  safeWebviewUrl(webview: ElectronWebviewElement): string {
+    try {
+      return webview.getURL?.() || webview.src || "";
+    } catch {
+      return webview.src || "";
+    }
+  }
+
+  safeWebviewTitle(webview: ElectronWebviewElement): string {
+    try {
+      return webview.getTitle?.() || "";
+    } catch {
+      return "";
+    }
+  }
+
   bindRealBrowserSurface(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
     const emitNavigate = (event: Event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { url?: string };
-      const url = detail.url || webview.getURL?.() || webview.src;
+      const url = detail.url || this.safeWebviewUrl(webview);
       const downloadUrl = this.extractInternalDownloadUrl(url);
       if (downloadUrl) {
         webview.stop?.();
@@ -9956,20 +10373,23 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (url) void callbacks.onNavigate?.(url);
     };
     const emitTitle = (event: Event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { title?: string };
-      const title = detail.title || webview.getTitle?.() || "";
+      const title = detail.title || this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
     };
 
     webview.addEventListener("dom-ready", () => {
+      if (!webview.isConnected) return;
       void this.applyWebviewRuntime(webview);
       this.installWebviewBrowserBridge(webview, callbacks);
       this.hydrateWebviewPageNote(webview);
       void callbacks.onReady?.();
-      const title = webview.getTitle?.();
+      const title = this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
     });
     webview.addEventListener("did-start-navigation", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { url?: string; isMainFrame?: boolean; preventDefault?: () => void };
       const url = detail.url || "";
       const downloadUrl = this.extractInternalDownloadUrl(url);
@@ -9986,6 +10406,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     });
     webview.addEventListener("will-navigate", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { url?: string; preventDefault?: () => void };
       const url = detail.url || "";
       const downloadUrl = this.extractInternalDownloadUrl(url);
@@ -10000,37 +10421,43 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     });
     webview.addEventListener("did-start-loading", () => {
+      if (!webview.isConnected) return;
       webview.removeClass("has-load-error");
-      void callbacks.onLoading?.(true, webview.getURL?.() || webview.src);
+      void callbacks.onLoading?.(true, this.safeWebviewUrl(webview));
     });
     webview.addEventListener("did-stop-loading", () => {
+        if (!webview.isConnected) return;
         void this.flushWebviewPageNote(webview, callbacks);
-        void callbacks.onLoading?.(false, webview.getURL?.() || webview.src);
+        void callbacks.onLoading?.(false, this.safeWebviewUrl(webview));
     });
     webview.addEventListener("did-navigate", emitNavigate);
     webview.addEventListener("did-navigate-in-page", emitNavigate);
     webview.addEventListener("page-title-updated", emitTitle);
     webview.addEventListener("page-favicon-updated", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { favicons?: string[] };
       const favicon = detail.favicons?.find(Boolean);
       if (favicon) void callbacks.onFavicon?.(favicon);
     });
     webview.addEventListener("did-finish-load", () => {
+      if (!webview.isConnected) return;
       webview.removeClass("has-load-error");
-      const url = webview.getURL?.() || webview.src;
+      const url = this.safeWebviewUrl(webview);
       void this.flushWebviewPageNote(webview, callbacks);
       if (url) void callbacks.onNavigate?.(url);
-      const title = webview.getTitle?.();
+      const title = this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
     });
     webview.addEventListener("did-fail-load", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
       if (detail.errorCode === -3) return;
       void this.flushWebviewPageNote(webview, callbacks);
       webview.addClass("has-load-error");
-      void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || webview.getURL?.() || webview.src);
+      void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || this.safeWebviewUrl(webview));
     });
     webview.addEventListener("console-message", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { message?: string; level?: number };
       const bridgePrefix = "__MWV_BRIDGE__";
       if (typeof detail.message === "string" && detail.message.startsWith(bridgePrefix)) {
@@ -10057,15 +10484,17 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
       }
       const level = detail.level === 2 ? "error" : detail.level === 1 ? "warn" : "info";
-      if (detail.message) void callbacks.onConsole?.(level, detail.message, webview.getURL?.() || webview.src);
+      if (detail.message) void callbacks.onConsole?.(level, detail.message, this.safeWebviewUrl(webview));
     });
     webview.addEventListener("new-window", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { url?: string; preventDefault?: () => void };
       if (!detail.url) return;
       detail.preventDefault?.();
       void callbacks.onNewWindow?.(detail.url);
     });
     webview.addEventListener("ipc-message", (event) => {
+      if (!webview.isConnected) return;
       const detail = event as Event & { channel?: string; args?: unknown[] };
       if (detail.channel !== "mwv-browser-bridge") return;
       const [kind, url, title] = detail.args ?? [];
@@ -10096,7 +10525,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     try {
       await webview.executeJavaScript("window.__mwvFlushPageNote && window.__mwvFlushPageNote();", false);
     } catch {
-      void callbacks?.onConsole?.("warn", "Browser page note flush skipped", webview.getURL?.() || webview.src);
+      void callbacks?.onConsole?.("warn", "Browser page note flush skipped", this.safeWebviewUrl(webview));
     }
   }
 
@@ -10407,13 +10836,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       })();
     `;
     webview.executeJavaScript(code, false).catch(() => {
-      void callbacks.onConsole?.("warn", "Browser bridge injection failed", webview.getURL?.() || webview.src);
+      void callbacks.onConsole?.("warn", "Browser bridge injection failed", this.safeWebviewUrl(webview));
     });
   }
 
   hydrateWebviewPageNote(webview: ElectronWebviewElement): void {
     if (!webview.executeJavaScript) return;
-    const url = webview.getURL?.() || webview.src || "";
+    const url = this.safeWebviewUrl(webview);
     const note = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
     if (!note) return;
     const payload = {
@@ -10488,7 +10917,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const isWebview = this.isElectronWebview(surface);
     const currentUrl = surface
       ? this.isElectronWebview(surface)
-        ? surface.getURL?.() || surface.src || fallbackUrl
+        ? this.safeWebviewUrl(surface) || fallbackUrl
         : surface.src || fallbackUrl
       : fallbackUrl;
     const rows = [
@@ -10512,10 +10941,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     try {
       surface.openDevTools();
-      await this.addConsole("info", "Opened webview DevTools", surface.getURL?.() || surface.src);
+      await this.addConsole("info", "Opened webview DevTools", this.safeWebviewUrl(surface));
       return true;
     } catch (error) {
-      await this.addConsole("error", `Open DevTools failed: ${error instanceof Error ? error.message : String(error)}`, surface.getURL?.() || surface.src);
+      await this.addConsole("error", `Open DevTools failed: ${error instanceof Error ? error.message : String(error)}`, this.safeWebviewUrl(surface));
       return false;
     }
   }
@@ -10937,7 +11366,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     try {
       webview.setZoomFactor?.(zoom);
     } catch {
-      await this.addConsole("warn", "Webview zoom unavailable", webview.getURL?.() || webview.src);
+      await this.addConsole("warn", "Webview zoom unavailable", this.safeWebviewUrl(webview));
     }
 
     const cssParts: string[] = [];
@@ -10993,7 +11422,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     try {
       await webview.executeJavaScript(code, false);
     } catch {
-      await this.addConsole("warn", "Webview runtime filters limited", webview.getURL?.() || webview.src);
+      await this.addConsole("warn", "Webview runtime filters limited", this.safeWebviewUrl(webview));
     }
   }
 
@@ -11639,6 +12068,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       : {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
     let shouldSaveSettings = false;
+    this.settings.noteDrawLegacyWebviewerMigrationVersion = Number.isFinite(this.settings.noteDrawLegacyWebviewerMigrationVersion)
+      ? Math.max(0, Math.floor(this.settings.noteDrawLegacyWebviewerMigrationVersion))
+      : 0;
     if (this.settings.noteBrowserStartupDefaultVersion !== NOTE_BROWSER_STARTUP_DEFAULT_VERSION) {
       this.settings.openOnStartup = false;
       this.settings.browserFrontendMode = "note";
