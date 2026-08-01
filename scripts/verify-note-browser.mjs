@@ -6,6 +6,9 @@ const styles = fs.readFileSync("styles.css", "utf8");
 const bindStart = source.indexOf("bindNoteDrawWebviewButton(");
 const bindEnd = source.indexOf("\n  isMobileWebviewerSurface(", bindStart);
 const bindMethod = bindStart >= 0 && bindEnd > bindStart ? source.slice(bindStart, bindEnd) : "";
+const chromeStart = source.indexOf("renderBrowserChrome(");
+const chromeEnd = source.indexOf("\n  watchEmbedChrome(", chromeStart);
+const chromeMethod = chromeStart >= 0 && chromeEnd > chromeStart ? source.slice(chromeStart, chromeEnd) : "";
 
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
@@ -17,12 +20,18 @@ const checks = [
   ["hidden Live Preview copies do not join NoteWeb processing", source.includes('sourceView = embed.closest<HTMLElement>(\".markdown-source-view\")') && source.includes('window.getComputedStyle(sourceView).display !== \"none\"')],
   ["NoteWeb removes redundant nested reading-view gutters", styles.includes(".markdown-preview-view.mwv-note-browser-document") && styles.includes("padding-right: 8px")],
   ["duplicate in-page Mobile Webviewer branding is removed", !source.includes("Mobile Webviewer / Bing backend") && !source.includes('cls: "mwv-note-source", text: "Mobile Webviewer"')],
-  ["duplicate NoteWeb document headings are hidden without changing page titles", source.includes('title.textContent?.trim().toLowerCase() === "mobile webviewer"') && styles.includes(".mwv-note-browser-redundant-title") && styles.includes(".mwv-note-browser-document .markdown-preview-sizer > .el-h1")],
+  ["duplicate NoteWeb document headings are hidden without changing page titles", source.includes('title.textContent?.trim().toLowerCase() === "mobile webviewer"') && styles.includes(".mwv-note-browser-redundant-title") && styles.includes('h1[data-heading="Mobile Webviewer"]')],
+  ["NoteWeb uses the URL as its native Obsidian identity", source.includes("syncNoteBrowserNativeIdentity") && source.includes('file.path !== WEBVIEW_NOTE_PATH') && source.includes("tabHeaderInnerTitleEl") && source.includes('title.setText(url)')],
   ["new NoteWeb notes omit the redundant heading", !source.includes('"# Mobile Webviewer"')],
   ["home and search pages expose their own URL identity", source.includes("article.dataset.url = this.currentUrl || this.plugin.settings.homeUrl")],
   ["page identity changes refresh the NoteDraw URL controller", source.includes("if (pageChanged) this.queueNoteDrawPageRefresh()")],
   ["rebuilt home and reader content restore NoteDraw state", (source.match(/this\.queueNoteDrawPageRefresh\(\);/g) ?? []).length >= 4],
-  ["Mobile Webviewer leaves NoteDraw native button events intact", bindMethod.includes("NoteDraw owns this button") && !bindMethod.includes("preventDefault") && !bindMethod.includes("addEventListener")],
+  ["NoteWeb forwards wand hold and context actions to the current URL controller", bindMethod.includes('_mwvNoteDrawBoundController') && source.includes("handleNoteDrawWebWandLifecycle") && source.includes('? "onButtonPointerDown"') && source.includes('? "onButtonContextMenu"')],
+  ["NoteWeb removes its internal tab strip, status row, and more menu", !chromeMethod.includes('createDiv({ cls: "mwv-tab-strip mwv-embed-tab-strip"') && !chromeMethod.includes('createDiv({ cls: "mwv-browser-status"') && !chromeMethod.includes('mwv-browser-more')],
+  ["NoteWeb uses Obsidian tabs for explicit new-window navigation", source.includes('event.type === "auxclick"') && source.includes('await this.openNoteBrowser(url, true)') && source.includes('onNewWindow: (nextUrl) => this.openNoteBrowser(nextUrl, true)') && source.includes("boundToLeaf") && source.includes("requestedUrl")],
+  ["NoteWeb keeps ordinary links in the current note", source.includes('await this.openUrlInEmbed(embed, url)')],
+  ["NoteWeb toolbar has stable two-row layout", styles.includes('"controls actions"') && styles.includes('"address address"') && styles.includes("grid-area: address") && styles.includes(".mwv-bing-home .mwv-bing-note-content button") && !styles.includes(".mwv-bing-home button,")],
+  ["NoteWeb real-web mode renders the original page including the home URL", source.includes('mode === "web" && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-bing-home.is-web-front > .mwv-bing-note-content")],
   ["hidden browser tabs cannot leave visible NoteDraw wands", source.includes("if (!this.isVisibleNoteDrawSurface(surface))") && source.includes('button.setAttribute("aria-hidden", "true")')],
   ["stale NoteDraw controllers are rebuilt through NoteDraw itself", source.includes("repairStaleNoteDrawController") && source.includes("noteDrawPlugin?.syncWebviewControllers?.()")],
   ["programmatic wand activation prefers the webview controller", source.includes("this.activateNoteDrawWebviewController(webviewController, webviewController.previewEl)")],

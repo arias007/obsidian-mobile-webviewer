@@ -2400,6 +2400,7 @@ interface NoteDrawControllerLike {
   onButtonPointerDown?: (event?: Event) => void | Promise<void>;
   onButtonPointerUp?: (event?: Event) => void | Promise<void>;
   onButtonTouchEnd?: (event?: Event) => void | Promise<void>;
+  onButtonContextMenu?: (event?: Event) => void | Promise<void>;
   scheduleLayoutRefresh?: () => void;
   updateFloatingControlsPosition?: () => void;
   destroy?: () => void;
@@ -5461,10 +5462,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.loadSettings();
 
     this.registerView(VIEW_TYPE, (leaf) => new MobileWebviewerView(leaf, this));
+    const hostWindow = appDocument().defaultView ?? window;
+    for (const eventName of ["pointerdown", "pointerup", "pointercancel", "pointerleave", "touchend", "click", "contextmenu"] as const) {
+      this.registerDomEvent(hostWindow, eventName, (event) => {
+        this.handleNoteDrawWebWandLifecycle(event);
+      }, { capture: true });
+    }
     this.registerMarkdownPostProcessor((el) => {
       this.processWebviewerEmbeds(el);
     });
     this.registerDomEvent(appDocument(), "click", (event) => {
+      void this.handleGlobalBingEvent(event);
+    }, { capture: true });
+    this.registerDomEvent(appDocument(), "auxclick", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
     this.registerDomEvent(appDocument(), "click", (event) => {
@@ -5636,6 +5646,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       : Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR));
     for (const surface of new Set(baseSurfaces)) {
       if (!this.isMobileWebviewerSurface(surface)) continue;
+      this.prepareWebviewerDocumentLayout(surface);
       const hideSourceButton = (button: HTMLElement) => {
         button.addClass("mwv-notedraw-source-button");
         button.setAttribute("aria-hidden", "true");
@@ -6872,10 +6883,33 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   bindNoteDrawWebviewButton(button: NoteDrawButtonElement, controller: NoteDrawControllerLike): void {
-    // NoteDraw owns this button's pointer/touch lifecycle. Mobile Webviewer only
-    // keeps it anchored and associated with the current URL controller.
-    button._mwvNoteDrawBound = true;
     button._mwvNoteDrawBoundController = controller;
+    button._mwvNoteDrawBound = true;
+  }
+
+  handleNoteDrawWebWandLifecycle(event: Event): void {
+    const target = isHtmlElement(event.target)
+      ? event.target.closest<NoteDrawButtonElement>(".mwv-notedraw-web-wand.notedraw-webview-button")
+      : null;
+    const controller = target?._mwvNoteDrawBoundController;
+    if (!target || !controller || !this.isVisibleNoteDrawSurface(controller.previewEl)) return;
+    const method = event.type === "pointerdown"
+      ? "onButtonPointerDown"
+      : event.type === "pointerup" || event.type === "pointercancel" || event.type === "pointerleave"
+      ? "onButtonPointerUp"
+      : event.type === "touchend"
+      ? "onButtonTouchEnd"
+      : event.type === "contextmenu"
+      ? "onButtonContextMenu"
+      : event.type === "click"
+      ? "onButtonClick"
+      : null;
+    if (!method) return;
+    const handler = controller[method];
+    if (typeof handler !== "function") return;
+    if (event.type === "contextmenu") event.preventDefault();
+    event.stopImmediatePropagation?.();
+    void Promise.resolve(handler.call(controller, event));
   }
 
   isMobileWebviewerSurface(surface?: HTMLElement | null): boolean {
@@ -7149,9 +7183,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  async openNoteBrowser(input?: string): Promise<void> {
+  async openNoteBrowser(input?: string, newTab = false): Promise<void> {
+    const requestedUrl = input
+      ? normalizeInput(input, this.settings.searchUrl)
+      : this.settings.noteBrowserUrl || this.settings.homeUrl;
     if (input) {
-      this.settings.noteBrowserUrl = normalizeInput(input, this.settings.searchUrl);
+      this.settings.noteBrowserUrl = requestedUrl;
       this.settings.noteBrowserBack = [];
       this.settings.noteBrowserForward = [];
       const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
@@ -7163,9 +7200,25 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.saveSettings();
     }
     const file = await this.ensureWebviewerNote();
-    const leaf = this.app.workspace.getLeaf(false);
+    const leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
     await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.setNoteBrowserReadingMode(leaf);
+    let boundToLeaf = false;
+    for (const delay of [0, 80, 240, 600, 1200]) {
+      window.setTimeout(() => {
+        if (boundToLeaf || !leaf.view?.containerEl?.isConnected) return;
+        this.processWebviewerEmbeds(leaf.view.containerEl);
+        const embeds = Array.from(leaf.view.containerEl.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"));
+        const embed = embeds.find((candidate) => this.isVisibleNoteDrawSurface(candidate)) ?? embeds[0];
+        if (!embed) return;
+        boundToLeaf = true;
+        this.syncNoteBrowserNativeIdentity(embed, requestedUrl);
+        if (embed.dataset.url !== requestedUrl) {
+          void this.openUrlInEmbed(embed, requestedUrl, false);
+        }
+      }, delay);
+    }
   }
 
   setNoteBrowserReadingMode(leaf: WorkspaceLeaf): void {
@@ -7305,7 +7358,28 @@ export default class MobileWebviewerPlugin extends Plugin {
         title.addClass("mwv-note-browser-redundant-title");
       }
     });
+    this.syncNoteBrowserNativeIdentity(embed, embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl);
     this.queueLegacyNoteDrawWebviewerMigration(preview);
+  }
+
+  syncNoteBrowserNativeIdentity(embed: HTMLElement, url: string): void {
+    if (!url) return;
+    const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
+    if (!leafContent) return;
+    const leaf = this.findWorkspaceLeafForElement(leafContent);
+    const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+    if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+    const leafEl = leafContent.closest<HTMLElement>(".workspace-leaf") ?? leafContent;
+    const tabTitle = (leaf as WorkspaceLeaf & { tabHeaderInnerTitleEl?: HTMLElement }).tabHeaderInnerTitleEl;
+    const titles = [
+      ...Array.from(leafEl.querySelectorAll<HTMLElement>(".view-header-title")),
+      ...(tabTitle ? [tabTitle] : [])
+    ];
+    for (const title of titles) {
+      title.setText(url);
+      title.setAttribute("title", url);
+      title.addClass("mwv-note-browser-native-title");
+    }
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -7331,7 +7405,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     const openTarget =
-      event.type === "click"
+      event.type === "click" || event.type === "auxclick"
         ? target.closest<HTMLElement>("[data-mwv-open-url], .mwv-bing-shortcuts a[href]")
         : null;
 
@@ -7343,7 +7417,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      await this.openUrlInEmbed(embed, url);
+      const mouseEvent = event as MouseEvent;
+      const openInObsidianTab = (event.type === "auxclick" && mouseEvent.button === 1)
+        || mouseEvent.ctrlKey
+        || mouseEvent.metaKey
+        || mouseEvent.shiftKey;
+      if (openInObsidianTab) {
+        await this.openNoteBrowser(url, true);
+      } else {
+        await this.openUrlInEmbed(embed, url);
+      }
       return;
     }
 
@@ -7998,7 +8081,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         this.notifyNoteDrawWebviewChanged(embed);
       },
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
-      onNewWindow: (nextUrl) => this.activateBrowserView(nextUrl, true),
+      onNewWindow: (nextUrl) => this.openNoteBrowser(nextUrl, true),
       onLoading: (loading, loadingUrl) => {
         this.updateEmbedLoading(embed, loading, loadingUrl || url);
         if (!loading) this.notifyNoteDrawWebviewChanged(embed);
@@ -8101,18 +8184,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     const form = embed.querySelector<HTMLElement>(".mwv-browser-address");
     if (form) form.setAttribute("title", url);
-    const lock = embed.querySelector<HTMLElement>(".mwv-browser-lock");
-    if (lock) lock.setText(/^https:\/\//i.test(url) ? "https" : "page");
-    const titleEl = embed.querySelector<HTMLElement>(".mwv-browser-page-title");
-    if (titleEl) titleEl.setText(title || hostName(url));
-    const status = embed.querySelector<HTMLElement>(".mwv-browser-status-text");
-    if (status) status.setText(hostName(url));
-    const more = embed.querySelector<HTMLElement>(".mwv-browser-more");
-    if (more) {
-      more.dataset.mwvUrl = url;
-      more.dataset.mwvTitle = title;
-    }
-    this.renderEmbedTabStrip(embed);
+    this.syncNoteBrowserNativeIdentity(embed, url);
   }
 
   updateEmbedStatus(embed: HTMLElement, url: string, title = ""): void {
@@ -8332,9 +8404,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.renderBrowserChrome(embed, currentUrl, query ? `Bing: ${query}` : "Bing");
     this.notifyNoteDrawWebviewChanged(embed);
 
+    const noteContent = embed.createDiv({ cls: "mwv-bing-note-content" });
     const searchHeader = query.trim()
-      ? embed.createDiv({ cls: "mwv-bing-serp-head" })
-      : embed;
+      ? noteContent.createDiv({ cls: "mwv-bing-serp-head" })
+      : noteContent;
 
     if (query.trim()) {
       const brand = searchHeader.createDiv({ cls: "mwv-bing-mini-brand" });
@@ -8343,7 +8416,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       brand.createSpan({ cls: "mwv-ms-dot mwv-ms-blue" });
       brand.createSpan({ cls: "mwv-ms-dot mwv-ms-yellow" });
     } else {
-      embed.createDiv({ cls: "mwv-bing-logo", text: "Bing" });
+      noteContent.createDiv({ cls: "mwv-bing-logo", text: "Bing" });
     }
 
     const search = searchHeader.createDiv({ cls: "mwv-bing-search", attr: { role: "search" } });
@@ -8363,7 +8436,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     if (query.trim()) {
-      const tabs = embed.createDiv({ cls: "mwv-bing-tabs" });
+      const tabs = noteContent.createDiv({ cls: "mwv-bing-tabs" });
       const tabItems = [
         [this.tr("webResultsTab"), DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(query))],
         [this.tr("imageResultsTab"), `https://www.bing.com/images/search?q=${encodeURIComponent(query)}`],
@@ -8382,7 +8455,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       });
     }
 
-    const resultHost = embed.createDiv({ cls: "mwv-bing-results" });
+    const resultHost = noteContent.createDiv({ cls: "mwv-bing-results" });
     const runSearch = async (event?: Event) => {
       event?.preventDefault();
       event?.stopPropagation();
@@ -8484,10 +8557,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   renderBrowserChrome(embed: HTMLElement, url: string, title: string): void {
     embed.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab-strip, :scope > .mwv-browser-chrome, :scope > .mwv-browser-status, :scope > .mwv-bookmarks-bar").forEach((node) => node.remove());
     embed.dataset.mwvCurrentTitle = title || hostName(url);
-    embed.createDiv({ cls: "mwv-tab-strip mwv-embed-tab-strip" });
-    this.renderEmbedTabStrip(embed);
     const chrome = embed.createDiv({ cls: "mwv-browser-chrome" });
     const controls = chrome.createDiv({ cls: "mwv-browser-controls" });
+    const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
     const setMode = (mode: "note" | "web" | "split") => {
       embed.dataset.mwvBrowserMode = mode;
       embed.toggleClass("is-web-front", mode === "web");
@@ -8495,6 +8567,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
         button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
       });
+      if (mode === "web" && !embed.querySelector(":scope > .mwv-live-browser")) {
+        const liveUrl = embed.dataset.url || url;
+        if (/^https?:\/\//i.test(liveUrl)) this.renderLiveBrowserSurface(embed, liveUrl);
+      }
     };
     const makeNavButton = (icon: string, label: string, onClick: () => void, disabled = false) => {
       const button = controls.createEl("button", {
@@ -8511,8 +8587,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       return button;
     };
     const makeModeButton = (icon: string, label: string, mode: "note" | "web" | "split") => {
-      const button = controls.createEl("button", {
-        cls: "mwv-browser-nav mwv-browser-mode",
+      const button = actions.createEl("button", {
+        cls: "mwv-browser-action mwv-browser-mode",
         attr: { type: "button", title: label, "aria-label": label }
       });
       button.dataset.mwvEmbedMode = mode;
@@ -8528,16 +8604,33 @@ export default class MobileWebviewerPlugin extends Plugin {
     makeNavButton("arrow-left", this.tr("back"), () => void this.navigateEmbedBack(embed), this.getEmbedStack(embed, "mwvBack").length === 0);
     makeNavButton("arrow-right", this.tr("forward"), () => void this.navigateEmbedForward(embed), this.getEmbedStack(embed, "mwvForward").length === 0);
     makeNavButton("rotate-cw", this.tr("reload"), () => void this.refreshEmbed(embed));
-    makeNavButton("home", this.tr("home"), () => void this.openUrlInEmbed(embed, this.settings.homeUrl));
     makeModeButton("file-text", this.tr("note"), "note");
     makeModeButton("globe-2", this.tr("web"), "web");
-    makeNavButton("file-down", this.tr("saveMd"), () => void this.exportEmbedWebNote(embed));
+    const save = actions.createEl("button", {
+      cls: "mwv-browser-action",
+      attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
+    });
+    setIcon(save, "file-down");
+    save.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.exportEmbedWebNote(embed);
+    });
 
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
       attr: { title: url }
     });
-    address.createSpan({ cls: "mwv-browser-lock", text: /^https:\/\//i.test(url) ? "https" : "page" });
+    const home = address.createEl("button", {
+      cls: "mwv-browser-home",
+      attr: { type: "button", title: this.tr("home"), "aria-label": this.tr("home") }
+    });
+    setIcon(home, "home");
+    home.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.openUrlInEmbed(embed, this.settings.homeUrl);
+    });
     const addressInput = address.createEl("input", {
       cls: "mwv-browser-url",
       value: url,
@@ -8561,21 +8654,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       void this.openUrlInEmbed(embed, addressInput.value);
     });
 
-    const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
-    const more = actions.createEl("button", { cls: "mwv-browser-action mwv-browser-more", attr: { type: "button", title: this.tr("more"), "aria-label": this.tr("more") } });
-    more.dataset.mwvUrl = url;
-    more.dataset.mwvTitle = title;
-    setIcon(more, "more-horizontal");
-    more.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const liveUrl = more.dataset.mwvUrl || embed.dataset.url || url;
-      const liveTitle = more.dataset.mwvTitle || this.getEmbedSurfaceTitle(embed) || title || hostName(liveUrl);
-      this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
-    });
-    const status = embed.createDiv({ cls: "mwv-browser-status" });
-    status.createDiv({ cls: "mwv-browser-page-title", text: title || hostName(url) });
-    status.createDiv({ cls: "mwv-browser-status-text", text: hostName(url) });
     this.renderBookmarksBar(embed);
     const initialMode = ["note", "web"].includes(embed.dataset.mwvBrowserMode ?? "")
       ? embed.dataset.mwvBrowserMode as "note" | "web"
@@ -8601,9 +8679,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (mutation.type !== "childList") continue;
         const touchedChrome = Array.from(mutation.removedNodes).some((node) =>
           isHtmlElement(node) &&
-          (node.hasClass("mwv-browser-chrome") || node.hasClass("mwv-browser-status") || node.hasClass("mwv-embed-tab-strip") || node.querySelector?.(".mwv-browser-chrome, .mwv-browser-status, .mwv-embed-tab-strip"))
+          (node.hasClass("mwv-browser-chrome") || Boolean(node.querySelector?.(".mwv-browser-chrome")))
         );
-        const missingChrome = !embed.querySelector(":scope > .mwv-browser-chrome") || !embed.querySelector(":scope > .mwv-embed-tab-strip");
+        const missingChrome = !embed.querySelector(":scope > .mwv-browser-chrome");
         if (touchedChrome || missingChrome) {
           schedule();
           break;
@@ -8637,9 +8715,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const url = embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const title = embed.dataset.mwvCurrentTitle || this.getEmbedSurfaceTitle(embed) || hostName(url);
     const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-    const strip = embed.querySelector<HTMLElement>(":scope > .mwv-embed-tab-strip");
-    const status = embed.querySelector<HTMLElement>(":scope > .mwv-browser-status");
-    if (chrome && strip && status) {
+    if (chrome) {
       this.updateEmbedChrome(embed, url, title);
       this.pinEmbedChrome(embed);
       return;
@@ -8653,9 +8729,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   pinEmbedChrome(embed: HTMLElement): void {
     const nodes = [
-      embed.querySelector<HTMLElement>(":scope > .mwv-embed-tab-strip"),
       embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome"),
-      embed.querySelector<HTMLElement>(":scope > .mwv-browser-status"),
       embed.querySelector<HTMLElement>(":scope > .mwv-bookmarks-bar")
     ].filter((node): node is HTMLElement => Boolean(node));
     let anchor: ChildNode | null = embed.firstChild;
@@ -11161,7 +11235,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const options = typeof input === "string" ? { url: input } : input;
     const url = normalizeInput(options.url || this.settings.homeUrl, this.settings.searchUrl);
     if (options.mode === "note") {
-      await this.openNoteBrowser(url);
+      await this.openNoteBrowser(url, Boolean(options.newTab));
     } else {
       await this.activateBrowserView(url, Boolean(options.newTab));
     }

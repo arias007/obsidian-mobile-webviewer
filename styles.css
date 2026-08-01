@@ -1463,6 +1463,19 @@
   display: none;
 }
 
+.markdown-preview-view:has(.mwv-embed[data-url]):has(h1[data-heading="Mobile Webviewer"])
+  > .markdown-preview-sizer > .mod-header,
+.markdown-preview-view:has(.mwv-embed[data-url]):has(h1[data-heading="Mobile Webviewer"])
+  > .markdown-preview-sizer > .el-h1 {
+  display: none;
+}
+
+.mwv-note-browser-native-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-embed-layer,
 .mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-static-canvas,
 .mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-canvas {
@@ -1572,24 +1585,38 @@
 }
 
 .mwv-bing-home-empty {
-  display: grid;
-  align-content: center;
-  min-height: calc(100dvh - 72px);
-  padding: max(118px, min(18vh, 150px)) 10px max(32vh, 220px);
+  display: block;
+  min-height: calc(100dvh - 120px);
+  padding: 0 10px 28px;
 }
 
 .mwv-bing-home-empty .mwv-browser-chrome {
-  align-self: start;
   margin: 0 -10px;
 }
 
 .mwv-bing-home-empty .mwv-bing-search {
   width: min(100%, 760px);
-  align-self: start;
 }
 
-.markdown-rendered .mwv-bing-home button,
-.markdown-preview-view .mwv-bing-home button {
+.mwv-bing-home:not(.is-web-front) > .mwv-live-browser {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+  visibility: hidden;
+}
+
+.mwv-bing-home.is-web-front {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.mwv-bing-home.is-web-front > .mwv-bing-note-content {
+  display: none;
+}
+
+.markdown-rendered .mwv-bing-home .mwv-bing-note-content button,
+.markdown-preview-view .mwv-bing-home .mwv-bing-note-content button {
   height: auto;
   min-height: 0;
   max-height: none;
@@ -1993,7 +2020,10 @@
   position: sticky;
   top: 0;
   z-index: 1205;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "controls actions"
+    "address address";
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
@@ -2037,11 +2067,10 @@
   display: inline-flex;
   position: relative;
   z-index: 1205;
+  grid-area: controls;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
 }
 
 .mwv-browser-nav {
@@ -2081,6 +2110,7 @@
   display: grid;
   position: relative;
   z-index: 1205;
+  grid-area: address;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
@@ -2098,13 +2128,23 @@
   text-align: left;
 }
 
-.mwv-browser-lock {
-  overflow: hidden;
-  max-width: 42px;
-  color: var(--text-faint);
-  font-size: 11px;
-  text-transform: uppercase;
-  white-space: nowrap;
+.mwv-browser-home {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mwv-browser-home:hover,
+.mwv-browser-home:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 .mwv-browser-url {
@@ -2167,6 +2207,7 @@
   display: inline-flex;
   position: relative;
   z-index: 1205;
+  grid-area: actions;
   align-items: center;
   gap: 2px;
 }
@@ -2302,7 +2343,7 @@
 .mwv-note-embed > .mwv-browser-chrome,
 .mwv-bing-home > .mwv-browser-chrome,
 .mwv-utility-embed > .mwv-browser-chrome {
-  top: 34px;
+  top: 0;
   z-index: 1206;
 }
 
@@ -2877,6 +2918,9 @@
 
   .mwv-browser-chrome {
     grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "controls actions"
+      "address address";
     gap: 5px;
     padding: 8px 8px 7px;
   }
@@ -2884,7 +2928,7 @@
   .mwv-note-embed > .mwv-browser-chrome,
   .mwv-bing-home > .mwv-browser-chrome,
   .mwv-utility-embed > .mwv-browser-chrome {
-    top: 34px;
+    top: 0;
   }
 
   .mwv-note-embed > .mwv-browser-status,
@@ -2894,14 +2938,14 @@
   }
 
   .mwv-browser-controls {
-    grid-column: 1 / -1;
+    grid-area: controls;
     width: 100%;
     min-width: 0;
     justify-content: flex-start;
   }
 
   .mwv-browser-address {
-    grid-column: 1;
+    grid-area: address;
     grid-template-columns: 28px minmax(0, 1fr) 28px;
     gap: 4px;
     min-width: 0;
@@ -2927,7 +2971,7 @@
   }
 
   .mwv-browser-actions {
-    grid-column: 2;
+    grid-area: actions;
     justify-content: flex-end;
     width: auto;
   }
