@@ -106,6 +106,31 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Open links through Obsidian's link menu where supported.
 - Open `obsidian://mobile-webviewer?url=https%3A%2F%2Fexample.com`.
 
+## Cancip integration API
+
+Mobile Webviewer exposes a versioned API at
+`app.plugins.plugins["mobile-webviewer"].api`. Cancip uses this API before
+falling back to generic plugin commands or a second network fetch.
+
+The API can read the active Browser View or Note Browser embed, including the
+current URL, title, selected text, edited reader text, extracted images and
+links. It also opens URLs, lists/creates/switches/closes web tabs, toggles
+bookmarks, adds reading-list entries, sends structured context to Cancip, and
+publishes navigation/tab/list events through `subscribe`.
+
+```js
+const api = app.plugins.plugins["mobile-webviewer"].api;
+const status = api.getStatus();
+const page = await api.getCurrentContext({ includeContent: true });
+await api.open({ url: "https://obsidian.md", newTab: true });
+await api.sendToCancip({ prompt: "总结这页", submit: false });
+```
+
+`sendToCancip` attaches context and prepares an optional prompt. It does not
+submit a model request unless `submit: true` is explicitly supplied. The API
+version is independent from the plugin version so clients can negotiate future
+changes without parsing release numbers.
+
 ## Commands
 
 - `Mobile Webviewer: Open Note Browser`

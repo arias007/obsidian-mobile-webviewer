@@ -19,6 +19,7 @@ import {
 import * as qrcodeFactory from "qrcode-generator";
 
 const VIEW_TYPE = "mobile-webviewer-view";
+const MOBILE_WEBVIEWER_API_VERSION = "1.0.0";
 const DEFAULT_HOME = "https://www.bing.com/";
 const DEFAULT_SEARCH = "https://www.bing.com/search?q={{query}}";
 const WEBVIEW_NOTE_PATH = "Mobile Webviewer.md";
@@ -130,6 +131,16 @@ interface BrowserTab {
   back: string[];
   forward: string[];
   time: number;
+}
+
+interface MobileWebviewerTabSummary {
+  id: string;
+  title: string;
+  url: string;
+  active: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  updatedAt: number;
 }
 
 interface UserScriptRule {
@@ -382,6 +393,8 @@ type UiTextKey =
   | "cancipDetectedDesc"
   | "cancipNotEnabledDesc"
   | "copyCurrentContext"
+  | "sendCurrentToCancip"
+  | "sentCurrentToCancip"
   | "cancipContextPrompt"
   | "copiedCancipContext"
   | "downloadComplete"
@@ -715,6 +728,8 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   cancipDetectedDesc: "Version {version}; open the AI panel from here.",
   cancipNotEnabledDesc: "After installing or enabling Cancip, Mobile Webviewer can provide the current web context as an AI entry.",
   copyCurrentContext: "Copy current web context",
+  sendCurrentToCancip: "Send current page to Cancip",
+  sentCurrentToCancip: "Current page added to Cancip",
   cancipContextPrompt: "Use this web context to analyze, organize, excerpt, or generate notes.",
   copiedCancipContext: "Copied Cancip context",
   downloadComplete: "Download complete: {path}",
@@ -1047,6 +1062,8 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   cancipDetectedDesc: "版本 {version}，可从这里打开 AI 面板。",
   cancipNotEnabledDesc: "安装或启用 Cancip 后，Mobile Webviewer 会把网页上下文作为 AI 入口提供。",
   copyCurrentContext: "复制当前网页上下文",
+  sendCurrentToCancip: "发送当前网页到 Cancip",
+  sentCurrentToCancip: "当前网页已加入 Cancip",
   cancipContextPrompt: "请基于这个网页上下文继续分析、整理、摘录或生成笔记。",
   copiedCancipContext: "已复制 Cancip 上下文",
   downloadComplete: "下载完成：{path}",
@@ -2561,6 +2578,77 @@ interface WindowWithFind extends Window {
 
 interface CancipPluginLike {
   activateView?: () => Promise<void> | void;
+  receiveExternalContext?: (input: CancipExternalContextInput) => Promise<unknown> | unknown;
+  api?: {
+    receiveExternalContext?: (input: CancipExternalContextInput) => Promise<unknown> | unknown;
+  };
+}
+
+interface CancipExternalContextInput {
+  source: "mobile-webviewer";
+  label: string;
+  content: string;
+  url?: string;
+  title?: string;
+  prompt?: string;
+  submit?: boolean;
+  reveal?: boolean;
+  focus?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+interface MobileWebviewerContextOptions {
+  includeContent?: boolean;
+  includeHtml?: boolean;
+  includeSelection?: boolean;
+  refresh?: boolean;
+  maxChars?: number;
+}
+
+interface MobileWebviewerContext {
+  apiVersion: string;
+  pluginVersion: string;
+  url: string;
+  title: string;
+  tabId: string;
+  source: "view" | "embed" | "settings";
+  selectedText: string;
+  byline: string;
+  excerpt: string;
+  content: string;
+  html: string;
+  images: string[];
+  links: SearchResult[];
+  capturedAt: number;
+}
+
+interface MobileWebviewerApiEvent {
+  type: "navigate" | "tab-change" | "tab-close" | "bookmark-change" | "reading-list-change";
+  time: number;
+  url?: string;
+  title?: string;
+  tabId?: string;
+  detail?: Record<string, unknown>;
+}
+
+type MobileWebviewerApiListener = (event: MobileWebviewerApiEvent) => void;
+
+interface MobileWebviewerApi {
+  apiVersion: string;
+  getCapabilities: () => Record<string, unknown>;
+  getStatus: () => Record<string, unknown>;
+  getCurrentContext: (options?: MobileWebviewerContextOptions) => Promise<MobileWebviewerContext>;
+  getSelection: () => Promise<{ text: string; url: string; title: string }>;
+  readPage: (input?: string | ({ url?: string } & MobileWebviewerContextOptions)) => Promise<MobileWebviewerContext>;
+  open: (input?: string | { url?: string; newTab?: boolean; mode?: "view" | "note" }) => Promise<Record<string, unknown>>;
+  listTabs: () => MobileWebviewerTabSummary[];
+  newTab: (input?: string | { url?: string }) => Promise<MobileWebviewerTabSummary>;
+  switchTab: (input: string | { id: string }) => Promise<MobileWebviewerTabSummary>;
+  closeTab: (input: string | { id: string }) => Promise<{ closed: string; activeTabId: string }>;
+  toggleBookmark: (input?: { url?: string; title?: string }) => Promise<{ bookmarked: boolean; url: string; title: string }>;
+  addToReadingList: (input?: { url?: string; title?: string }) => Promise<{ added: boolean; url: string; title: string }>;
+  sendToCancip: (input?: { prompt?: string; submit?: boolean; reveal?: boolean; focus?: boolean; maxChars?: number }) => Promise<Record<string, unknown>>;
+  subscribe: (listener: MobileWebviewerApiListener) => () => void;
 }
 
 interface AutofillProfile {
@@ -3817,6 +3905,7 @@ class MobileWebviewerView extends ItemView {
         time: Date.now()
       });
     }
+    this.plugin.emitApiEvent({ type: "navigate", url: nextUrl, title: this.currentTitle, tabId: this.activeBrowserTabId });
   }
 
   applyBrowserTab(tab: BrowserTab): void {
@@ -3890,6 +3979,7 @@ class MobileWebviewerView extends ItemView {
     this.applyBrowserTab(tab);
     this.renderTabStrip();
     this.navigateWithoutStack(this.currentUrl || this.plugin.settings.homeUrl);
+    this.plugin.emitApiEvent({ type: "tab-change", tabId: id, url: tab.url, title: tab.title, detail: { operation: "switch" } });
   }
 
   async newBrowserTab(url = this.plugin.settings.homeUrl): Promise<void> {
@@ -3901,6 +3991,7 @@ class MobileWebviewerView extends ItemView {
     this.plugin.settings.activeBrowserTabId = tab.id;
     await this.plugin.saveSettings();
     await this.plugin.activateBrowserView(url, true, tab.id);
+    this.plugin.emitApiEvent({ type: "tab-change", tabId: tab.id, url: tab.url, title: tab.title, detail: { operation: "new" } });
   }
 
   async closeBrowserTab(id: string): Promise<void> {
@@ -3921,6 +4012,7 @@ class MobileWebviewerView extends ItemView {
     }
 
     tabs.splice(index, 1);
+    this.plugin.emitApiEvent({ type: "tab-close", tabId: id });
     if (this.activeBrowserTabId === id) {
       const next = tabs[Math.min(index, tabs.length - 1)];
       this.activeBrowserTabId = next.id;
@@ -4211,6 +4303,7 @@ class MobileWebviewerView extends ItemView {
     this.titleEl.setText(this.currentTitle);
     this.subtitleEl.setText(this.plugin.tr("readingStatus"));
     this.syncSurfaceIdentity();
+    this.plugin.emitApiEvent({ type: "navigate", url: nextUrl, title: this.currentTitle, tabId: this.activeBrowserTabId });
     void this.renderUrlAsNote(nextUrl);
     void this.syncActiveBrowserTab();
     this.renderTabStrip();
@@ -4592,6 +4685,12 @@ class MobileWebviewerView extends ItemView {
     const open = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("openCancip"), attr: { type: "button" } });
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.plugin.openCancip());
+    const send = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("sendCurrentToCancip"), attr: { type: "button" } });
+    send.disabled = !status.enabled;
+    send.addEventListener("click", () => runAsync(async () => {
+      await this.plugin.sendCurrentToCancip({ reveal: true, focus: true });
+      new Notice(this.plugin.tr("sentCurrentToCancip"));
+    }));
     const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.plugin.tr("copyCurrentContext"), attr: { type: "button" } });
     copy.addEventListener("click", () => runAsync(async () => {
       const text = [
@@ -5281,6 +5380,24 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
   noteDrawHeaderActivationTokens = new WeakMap<HTMLElement, number>();
   noteDrawHeaderActivationSeq = 0;
+  private apiListeners = new Set<MobileWebviewerApiListener>();
+  readonly api: MobileWebviewerApi = {
+    apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+    getCapabilities: () => this.mobileWebviewerCapabilities(),
+    getStatus: () => this.mobileWebviewerStatus(),
+    getCurrentContext: (options) => this.getCurrentWebContext(options),
+    getSelection: () => this.getCurrentWebSelection(),
+    readPage: (input) => this.readWebPageForApi(input),
+    open: (input) => this.openFromApi(input),
+    listTabs: () => this.listBrowserTabsForApi(),
+    newTab: (input) => this.newBrowserTabFromApi(input),
+    switchTab: (input) => this.switchBrowserTabFromApi(input),
+    closeTab: (input) => this.closeBrowserTabFromApi(input),
+    toggleBookmark: (input) => this.toggleBookmarkFromApi(input),
+    addToReadingList: (input) => this.addToReadingListFromApi(input),
+    sendToCancip: (input) => this.sendCurrentToCancip(input),
+    subscribe: (listener) => this.subscribeApi(listener)
+  };
 
   tr(key: UiTextKey, values: Record<string, string | number> = {}): string {
     return translateUiText(this.settings.uiLanguage || DEFAULT_UI_LANGUAGE, key, values);
@@ -7049,6 +7166,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.noteBrowserForward = [...(tab.forward ?? [])];
     await this.saveSettings();
     await this.openUrlInEmbed(embed, tab.url, false);
+    this.emitApiEvent({ type: "tab-change", tabId: id, url: tab.url, title: tab.title, detail: { operation: "switch" } });
   }
 
   async newEmbedBrowserTab(embed: HTMLElement, url = this.settings.homeUrl): Promise<void> {
@@ -7065,6 +7183,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.setEmbedStack(embed, "mwvForward", []);
     await this.saveSettings();
     await this.openUrlInEmbed(embed, tab.url, false);
+    this.emitApiEvent({ type: "tab-change", tabId: tab.id, url: tab.url, title: tab.title, detail: { operation: "new" } });
   }
 
   async closeEmbedBrowserTab(embed: HTMLElement, id: string): Promise<void> {
@@ -7080,9 +7199,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvActiveTabId = replacement.id;
       await this.saveSettings();
       await this.openUrlInEmbed(embed, replacement.url, false);
+      this.emitApiEvent({ type: "tab-close", tabId: id, detail: { activeTabId: replacement.id } });
       return;
     }
     tabs.splice(index, 1);
+    this.emitApiEvent({ type: "tab-close", tabId: id });
     if (embed.dataset.mwvActiveTabId === id) {
       const next = tabs[Math.min(index, tabs.length - 1)];
       embed.dataset.mwvActiveTabId = next.id;
@@ -7330,6 +7451,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("openCancip"), attr: { type: "button" } });
     open.disabled = !status.enabled;
     open.addEventListener("click", () => void this.openCancip());
+    const send = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("sendCurrentToCancip"), attr: { type: "button" } });
+    send.disabled = !status.enabled;
+    send.addEventListener("click", () => runAsync(async () => {
+      await this.sendCurrentToCancip({ reveal: true, focus: true });
+      new Notice(this.tr("sentCurrentToCancip"));
+    }));
     const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copyCurrentContext"), attr: { type: "button" } });
     copy.addEventListener("click", () => runAsync(async () => {
       await navigator.clipboard.writeText([
@@ -7545,6 +7672,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       title: this.getEmbedSurfaceTitle(embed) || hostName(nextUrl),
       url: nextUrl,
       time: Date.now()
+    });
+    this.emitApiEvent({
+      type: "navigate",
+      url: nextUrl,
+      title: this.getEmbedSurfaceTitle(embed) || hostName(nextUrl),
+      tabId: embed.dataset.mwvActiveTabId
     });
     window.setTimeout(() => void this.syncEmbedReaderFromUrl(embed, nextUrl), 600);
   }
@@ -10384,6 +10517,382 @@ export default class MobileWebviewerPlugin extends Plugin {
     } catch (error) {
       await this.addConsole("error", `Open DevTools failed: ${error instanceof Error ? error.message : String(error)}`, surface.getURL?.() || surface.src);
       return false;
+    }
+  }
+
+  private mobileWebviewerCapabilities(): Record<string, unknown> {
+    return {
+      id: this.manifest.id,
+      name: this.manifest.name,
+      pluginVersion: this.manifest.version,
+      apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+      methods: [
+        "getCapabilities",
+        "getStatus",
+        "getCurrentContext",
+        "getSelection",
+        "readPage",
+        "open",
+        "listTabs",
+        "newTab",
+        "switchTab",
+        "closeTab",
+        "toggleBookmark",
+        "addToReadingList",
+        "sendToCancip",
+        "subscribe"
+      ],
+      context: ["url", "title", "selection", "reader text", "reader html", "images", "links"],
+      events: ["navigate", "tab-change", "tab-close", "bookmark-change", "reading-list-change"],
+      cancip: this.getCancipStatus()
+    };
+  }
+
+  private mobileWebviewerStatus(): Record<string, unknown> {
+    const active = this.resolveActiveWebContextTarget();
+    return {
+      id: this.manifest.id,
+      pluginVersion: this.manifest.version,
+      apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+      active: Boolean(active.view || active.embed),
+      source: active.view ? "view" : active.embed ? "embed" : "settings",
+      url: active.url,
+      title: active.title,
+      activeTabId: active.tabId,
+      tabs: this.settings.browserTabs.length,
+      bookmarks: this.settings.bookmarks.filter((entry) => !isBuiltInShortcut(entry)).length,
+      readingList: this.settings.readingList.length,
+      cancip: this.getCancipStatus()
+    };
+  }
+
+  private resolveActiveWebContextTarget(): {
+    view: MobileWebviewerView | null;
+    embed: HTMLElement | null;
+    url: string;
+    title: string;
+    tabId: string;
+  } {
+    const activeLeaf = this.app.workspace.activeLeaf ?? this.app.workspace.getMostRecentLeaf();
+    const activeView = activeLeaf?.view instanceof MobileWebviewerView ? activeLeaf.view : null;
+    const activeContainer = (activeLeaf?.view as { containerEl?: HTMLElement } | undefined)?.containerEl;
+    const activeEmbeds = activeContainer
+      ? Array.from(activeContainer.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"))
+      : [];
+    const visibleEmbed = activeEmbeds.find((embed) => {
+      const rect = embed.getBoundingClientRect();
+      return embed.isConnected && rect.width > 0 && rect.height > 0;
+    }) ?? activeEmbeds[0] ?? null;
+    const fallbackView = this.app.workspace.getLeavesOfType(VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .find((view): view is MobileWebviewerView => view instanceof MobileWebviewerView) ?? null;
+    const view = activeView ?? (visibleEmbed ? null : fallbackView);
+    const embed = activeView ? null : visibleEmbed;
+    const tabId = view?.activeBrowserTabId
+      || embed?.dataset.mwvActiveTabId
+      || this.settings.activeBrowserTabId;
+    const tab = this.settings.browserTabs.find((entry) => entry.id === tabId)
+      ?? this.settings.browserTabs[0]
+      ?? this.createBrowserTab(this.settings.homeUrl);
+    const rawUrl = view?.currentUrl || embed?.dataset.url || tab.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    const url = internalUtilityContextUrl(rawUrl) || rawUrl;
+    const title = view?.currentTitle
+      || embed?.dataset.mwvTitle
+      || tab.title
+      || hostName(url);
+    return { view, embed, url, title, tabId: tab.id };
+  }
+
+  private async selectionFromSurface(surface?: BrowserSurfaceElement | null): Promise<string> {
+    if (!surface) return "";
+    if (this.isElectronWebview(surface) && surface.executeJavaScript) {
+      try {
+        const selected = await surface.executeJavaScript("window.getSelection ? String(window.getSelection() || '') : ''", false);
+        return typeof selected === "string" ? selected.trim() : "";
+      } catch {
+        return "";
+      }
+    }
+    try {
+      return (surface as HTMLIFrameElement).contentWindow?.getSelection?.()?.toString().trim() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  private selectionWithin(root?: HTMLElement | null): string {
+    if (!root) return "";
+    const selection = root.ownerDocument.getSelection();
+    const anchor = selection?.anchorNode;
+    if (!selection || !anchor || !root.contains(anchor)) return "";
+    return selection.toString().trim();
+  }
+
+  async getCurrentWebSelection(): Promise<{ text: string; url: string; title: string }> {
+    const target = this.resolveActiveWebContextTarget();
+    const root = target.view
+      ? target.view.containerEl
+      : target.embed;
+    let text = this.selectionWithin(root);
+    if (!text && target.view?.surfaceEl) text = await this.selectionFromSurface(target.view.surfaceEl);
+    if (!text && target.embed) {
+      text = await this.selectionFromSurface(target.embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame"));
+    }
+    return { text, url: target.url, title: target.title };
+  }
+
+  async getCurrentWebContext(options: MobileWebviewerContextOptions = {}): Promise<MobileWebviewerContext> {
+    const target = this.resolveActiveWebContextTarget();
+    const maxChars = clampNumber(Math.round(options.maxChars ?? 40000), 1000, 200000);
+    const includeContent = options.includeContent !== false;
+    const includeSelection = options.includeSelection !== false;
+    const selectedText = includeSelection ? (await this.getCurrentWebSelection()).text.slice(0, maxChars) : "";
+    let page: NotePage | null = null;
+    let html = "";
+
+    const cached = this.getCachedPage(target.url);
+    if (target.view?.currentWebNote && target.view.currentWebNote.url === target.url) {
+      const note = target.view.currentWebNote;
+      page = {
+        title: note.sourceTitle || note.title || target.title,
+        url: note.url,
+        byline: cached?.byline || hostName(note.url),
+        excerpt: (note.noteText || note.pageText || cached?.excerpt || "").slice(0, 420),
+        images: cached?.images ?? [],
+        content: note.noteText || note.pageText,
+        links: cached?.links ?? []
+      };
+      html = note.pageHtml || note.noteHtml;
+    }
+    if (!page && cached) page = cached;
+    if (includeContent && /^https?:\/\//i.test(target.url) && (!page || options.refresh)) {
+      const previousCache = options.refresh ? [...this.settings.pageCache] : null;
+      if (previousCache) this.settings.pageCache = this.settings.pageCache.filter((entry) => entry.url !== target.url);
+      try {
+        page = await this.fetchNotePage(target.url);
+      } catch (error) {
+        if (previousCache) this.settings.pageCache = previousCache;
+        await this.addConsole("warn", `API reader extraction skipped: ${error instanceof Error ? error.message : String(error)}`, target.url);
+      }
+    }
+
+    return {
+      apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+      pluginVersion: this.manifest.version,
+      url: target.url,
+      title: page?.title || target.title,
+      tabId: target.tabId,
+      source: target.view ? "view" : target.embed ? "embed" : "settings",
+      selectedText,
+      byline: page?.byline ?? "",
+      excerpt: page?.excerpt?.slice(0, Math.min(maxChars, 1200)) ?? "",
+      content: includeContent ? (page?.content ?? "").slice(0, maxChars) : "",
+      html: options.includeHtml ? html.slice(0, maxChars) : "",
+      images: page?.images?.slice(0, 24) ?? [],
+      links: page?.links?.slice(0, 40) ?? [],
+      capturedAt: Date.now()
+    };
+  }
+
+  private async readWebPageForApi(input: string | ({ url?: string } & MobileWebviewerContextOptions) = {}): Promise<MobileWebviewerContext> {
+    const options = typeof input === "string" ? { url: input } : input;
+    const url = options.url?.trim();
+    if (!url) return await this.getCurrentWebContext({ ...options, includeContent: true });
+    const normalized = normalizeInput(url, this.settings.searchUrl);
+    if (!/^https?:\/\//i.test(normalized)) throw new Error("Mobile Webviewer readPage requires an http(s) URL");
+    const previousCache = options.refresh ? [...this.settings.pageCache] : null;
+    if (previousCache) this.settings.pageCache = this.settings.pageCache.filter((entry) => entry.url !== normalized);
+    let page: NotePage;
+    try {
+      page = await this.fetchNotePage(normalized);
+    } catch (error) {
+      if (previousCache) this.settings.pageCache = previousCache;
+      throw error;
+    }
+    const maxChars = clampNumber(Math.round(options.maxChars ?? 40000), 1000, 200000);
+    return {
+      apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+      pluginVersion: this.manifest.version,
+      url: page.url,
+      title: page.title,
+      tabId: "",
+      source: "settings",
+      selectedText: "",
+      byline: page.byline,
+      excerpt: page.excerpt.slice(0, Math.min(maxChars, 1200)),
+      content: page.content.slice(0, maxChars),
+      html: "",
+      images: page.images.slice(0, 24),
+      links: page.links.slice(0, 40),
+      capturedAt: Date.now()
+    };
+  }
+
+  private async openFromApi(input: string | { url?: string; newTab?: boolean; mode?: "view" | "note" } = {}): Promise<Record<string, unknown>> {
+    const options = typeof input === "string" ? { url: input } : input;
+    const url = normalizeInput(options.url || this.settings.homeUrl, this.settings.searchUrl);
+    if (options.mode === "note") {
+      await this.openNoteBrowser(url);
+    } else {
+      await this.activateBrowserView(url, Boolean(options.newTab));
+    }
+    this.emitApiEvent({ type: "navigate", url, title: hostName(url) });
+    return { opened: true, url, mode: options.mode ?? "view", newTab: Boolean(options.newTab) };
+  }
+
+  private browserTabSummaryForApi(tab: BrowserTab): MobileWebviewerTabSummary {
+    return {
+      id: tab.id,
+      title: tab.title,
+      url: tab.url,
+      active: tab.id === this.settings.activeBrowserTabId,
+      canGoBack: tab.back.length > 0,
+      canGoForward: tab.forward.length > 0,
+      updatedAt: tab.time
+    };
+  }
+
+  private listBrowserTabsForApi(): MobileWebviewerTabSummary[] {
+    return this.settings.browserTabs.map((tab) => this.browserTabSummaryForApi(tab));
+  }
+
+  private async newBrowserTabFromApi(input: string | { url?: string } = {}): Promise<MobileWebviewerTabSummary> {
+    const url = normalizeInput(typeof input === "string" ? input : input.url || this.settings.homeUrl, this.settings.searchUrl);
+    const target = this.resolveActiveWebContextTarget();
+    if (target.view) {
+      await target.view.newBrowserTab(url);
+    } else if (target.embed) {
+      await this.newEmbedBrowserTab(target.embed, url);
+    } else {
+      const tab = this.createBrowserTab(url);
+      this.settings.browserTabs.unshift(tab);
+      this.settings.activeBrowserTabId = tab.id;
+      await this.saveSettings();
+      await this.activateBrowserView(url, true, tab.id);
+    }
+    const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
+    this.emitApiEvent({ type: "tab-change", tabId: tab.id, url: tab.url, title: tab.title, detail: { operation: "new" } });
+    return this.browserTabSummaryForApi(tab);
+  }
+
+  private async switchBrowserTabFromApi(input: string | { id: string }): Promise<MobileWebviewerTabSummary> {
+    const id = typeof input === "string" ? input : input.id;
+    const tab = this.settings.browserTabs.find((entry) => entry.id === id);
+    if (!tab) throw new Error(`Mobile Webviewer tab not found: ${id}`);
+    const target = this.resolveActiveWebContextTarget();
+    if (target.view) await target.view.switchBrowserTab(id);
+    else if (target.embed) await this.switchEmbedBrowserTab(target.embed, id);
+    else {
+      this.settings.activeBrowserTabId = id;
+      await this.saveSettings();
+      await this.activateBrowserView(tab.url, false, id);
+    }
+    this.emitApiEvent({ type: "tab-change", tabId: id, url: tab.url, title: tab.title, detail: { operation: "switch" } });
+    return this.browserTabSummaryForApi(tab);
+  }
+
+  private async closeBrowserTabFromApi(input: string | { id: string }): Promise<{ closed: string; activeTabId: string }> {
+    const id = typeof input === "string" ? input : input.id;
+    if (!this.settings.browserTabs.some((entry) => entry.id === id)) throw new Error(`Mobile Webviewer tab not found: ${id}`);
+    const target = this.resolveActiveWebContextTarget();
+    if (target.view) await target.view.closeBrowserTab(id);
+    else if (target.embed) await this.closeEmbedBrowserTab(target.embed, id);
+    else {
+      this.settings.browserTabs = this.settings.browserTabs.filter((entry) => entry.id !== id);
+      const next = this.ensureBrowserTab(this.settings.activeBrowserTabId === id ? "" : this.settings.activeBrowserTabId);
+      this.settings.activeBrowserTabId = next.id;
+      await this.saveSettings();
+    }
+    const activeTabId = this.settings.activeBrowserTabId;
+    this.emitApiEvent({ type: "tab-close", tabId: id, detail: { activeTabId } });
+    return { closed: id, activeTabId };
+  }
+
+  private async toggleBookmarkFromApi(input: { url?: string; title?: string } = {}): Promise<{ bookmarked: boolean; url: string; title: string }> {
+    const current = this.resolveActiveWebContextTarget();
+    const url = normalizeInput(input.url || current.url, this.settings.searchUrl);
+    const title = input.title?.trim() || current.title || hostName(url);
+    const bookmarked = await this.toggleBookmarkEntry(url, title);
+    this.emitApiEvent({ type: "bookmark-change", url, title, detail: { bookmarked } });
+    return { bookmarked, url, title };
+  }
+
+  private async addToReadingListFromApi(input: { url?: string; title?: string } = {}): Promise<{ added: boolean; url: string; title: string }> {
+    const current = this.resolveActiveWebContextTarget();
+    const url = normalizeInput(input.url || current.url, this.settings.searchUrl);
+    const title = input.title?.trim() || current.title || hostName(url);
+    await this.addReadingList({ url, title, time: Date.now() });
+    this.emitApiEvent({ type: "reading-list-change", url, title, detail: { added: true } });
+    return { added: true, url, title };
+  }
+
+  private contextForCancip(context: MobileWebviewerContext): string {
+    return [
+      "Mobile Webviewer context",
+      `Title: ${context.title}`,
+      `URL: ${context.url}`,
+      context.byline ? `Byline: ${context.byline}` : "",
+      context.selectedText ? `Selected text:\n${context.selectedText}` : "",
+      context.content ? `Reader content:\n${context.content}` : "",
+      context.images.length ? `Images:\n${context.images.map((url) => `- ${url}`).join("\n")}` : "",
+      context.links.length ? `Links:\n${context.links.map((link) => `- [${link.title}](${link.url})`).join("\n")}` : ""
+    ].filter(Boolean).join("\n\n");
+  }
+
+  async sendCurrentToCancip(input: { prompt?: string; submit?: boolean; reveal?: boolean; focus?: boolean; maxChars?: number } = {}): Promise<Record<string, unknown>> {
+    const context = await this.getCurrentWebContext({
+      includeContent: true,
+      includeSelection: true,
+      maxChars: input.maxChars ?? 40000
+    });
+    const plugin = (this.app as AppWithRuntimePlugins).plugins?.plugins?.cancip;
+    const cancip = plugin && typeof plugin === "object" ? plugin as CancipPluginLike : null;
+    const receiver = cancip?.api?.receiveExternalContext ?? cancip?.receiveExternalContext;
+    const payload: CancipExternalContextInput = {
+      source: "mobile-webviewer",
+      label: `Web: ${context.title}`,
+      content: this.contextForCancip(context),
+      url: context.url,
+      title: context.title,
+      prompt: input.prompt?.trim() || "",
+      submit: Boolean(input.submit),
+      reveal: input.reveal !== false,
+      focus: input.focus !== false,
+      metadata: {
+        apiVersion: MOBILE_WEBVIEWER_API_VERSION,
+        tabId: context.tabId,
+        selected: Boolean(context.selectedText),
+        images: context.images.length,
+        links: context.links.length
+      }
+    };
+    if (typeof receiver === "function") {
+      const owner = cancip?.api?.receiveExternalContext === receiver ? cancip.api : cancip;
+      const result = await Promise.resolve(receiver.call(owner, payload));
+      await this.addConsole("info", "Sent structured web context to Cancip", context.url);
+      return { sent: true, route: "api", context, result };
+    }
+
+    await navigator.clipboard.writeText(payload.content);
+    await this.openCancip();
+    await this.addConsole("warn", "Cancip context API unavailable; copied context to clipboard", context.url);
+    return { sent: false, route: "clipboard", context };
+  }
+
+  private subscribeApi(listener: MobileWebviewerApiListener): () => void {
+    if (typeof listener !== "function") throw new Error("Mobile Webviewer subscribe requires a listener function");
+    this.apiListeners.add(listener);
+    return () => this.apiListeners.delete(listener);
+  }
+
+  emitApiEvent(event: Omit<MobileWebviewerApiEvent, "time">): void {
+    const payload: MobileWebviewerApiEvent = { ...event, time: Date.now() };
+    for (const listener of this.apiListeners) {
+      try {
+        listener(payload);
+      } catch (error) {
+        console.warn("[mobile-webviewer] API listener failed", error);
+      }
     }
   }
 
