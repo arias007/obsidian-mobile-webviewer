@@ -2219,6 +2219,7 @@
   align-items: center;
   justify-content: center;
   width: 30px;
+  flex: 0 0 30px;
   height: 30px;
   border: 0;
   border-radius: 8px;
@@ -2978,6 +2979,7 @@
 
   .mwv-browser-action {
     width: 36px;
+    flex-basis: 36px;
     height: 36px;
   }
 }
@@ -3307,6 +3309,20 @@
 
 .mwv-notedraw-anchor .notedraw-webview-button {
   pointer-events: auto;
+}
+
+.mwv-embed.notedraw-shell > .notedraw-toolbar {
+  z-index: 1300;
+}
+
+.mwv-embed.notedraw-shell > .notedraw-palette-panel,
+.mwv-embed.notedraw-shell > .notedraw-text-panel {
+  z-index: 1301;
+}
+
+.mwv-embed.notedraw-shell > .notedraw-selection-menu,
+.mwv-embed.notedraw-shell > .notedraw-format-toolbar {
+  z-index: 1302;
 }
 
 .workspace-leaf-content.mwv-notedraw-surface-leaf .view-header,

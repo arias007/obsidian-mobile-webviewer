@@ -2371,10 +2371,14 @@ interface MobileWebviewerEmbedElement extends HTMLElement {
 
 interface NoteDrawControllerLike {
   active?: boolean;
+  buttonLongPressed?: boolean;
+  suppressNextButtonClick?: boolean;
   previewEl?: HTMLElement;
   button?: HTMLElement;
   file?: NoteDrawFileLike;
-  plugin?: unknown;
+  plugin?: {
+    setInteractionController?: (controller: NoteDrawControllerLike) => void;
+  };
   surfaceType?: string;
   allowTextEdit?: boolean;
   toolMode?: string;
@@ -6019,6 +6023,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       void controller.ensureDrawingsLoaded?.().catch((error) => {
         console.warn("[mobile-webviewer] NoteDraw webview drawing load skipped", error);
       });
+      controller.plugin?.setInteractionController?.(controller);
       controller.syncFloatingControlClasses?.();
       controller.scheduleLayoutRefresh?.();
       controller.updateFloatingControlsPosition?.();
@@ -6060,6 +6065,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       controller.button?.removeClass("is-active");
       for (const element of [controller.previewEl, controller.toolbar, controller.formatToolbar, controller.palettePanel, controller.textPanel, controller.selectionMenu, controller.canvas]) {
         element?.removeClass("is-drawing-active");
+        element?.removeClass("is-notedraw-controls-visible");
         element?.removeClass("is-palette-open");
         element?.removeClass("is-text-panel-open");
         element?.removeClass("is-selection-menu-open");
@@ -6893,6 +6899,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       : null;
     const controller = target?._mwvNoteDrawBoundController;
     if (!target || !controller || !this.isVisibleNoteDrawSurface(controller.previewEl)) return;
+    if (
+      event.type === "click" &&
+      !controller.buttonLongPressed &&
+      !controller.suppressNextButtonClick &&
+      controller.previewEl &&
+      this.activateNoteDrawWebviewController(controller, controller.previewEl)
+    ) {
+      event.stopImmediatePropagation?.();
+      return;
+    }
     const method = event.type === "pointerdown"
       ? "onButtonPointerDown"
       : event.type === "pointerup" || event.type === "pointercancel" || event.type === "pointerleave"
@@ -8184,6 +8200,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     const form = embed.querySelector<HTMLElement>(".mwv-browser-address");
     if (form) form.setAttribute("title", url);
+    const more = embed.querySelector<HTMLElement>(".mwv-browser-more");
+    if (more) {
+      more.dataset.mwvUrl = url;
+      more.dataset.mwvTitle = title;
+    }
     this.syncNoteBrowserNativeIdentity(embed, url);
   }
 
@@ -8616,6 +8637,28 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       void this.exportEmbedWebNote(embed);
     });
+    const more = actions.createEl("button", {
+      cls: "mwv-browser-action mwv-browser-more",
+      attr: {
+        type: "button",
+        title: this.tr("more"),
+        "aria-label": this.tr("more")
+      }
+    });
+    more.dataset.mwvUrl = url;
+    more.dataset.mwvTitle = title;
+    setIcon(more, "more-horizontal");
+    more.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const liveUrl = more.dataset.mwvUrl || embed.dataset.url || url;
+      const liveTitle =
+        more.dataset.mwvTitle ||
+        this.getEmbedSurfaceTitle(embed) ||
+        title ||
+        hostName(liveUrl);
+      this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
+    });
 
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
@@ -8715,7 +8758,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const url = embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const title = embed.dataset.mwvCurrentTitle || this.getEmbedSurfaceTitle(embed) || hostName(url);
     const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-    if (chrome) {
+    if (chrome?.querySelector(".mwv-browser-more")) {
       this.updateEmbedChrome(embed, url, title);
       this.pinEmbedChrome(embed);
       return;
