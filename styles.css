@@ -1455,6 +1455,17 @@
   max-width: none;
 }
 
+/* The native Obsidian view title already carries the current URL. Avoid
+   repeating the same address inside the NoteWeb content area. */
+.mwv-note-browser-document .mwv-browser-chrome {
+  grid-template-areas: "controls actions";
+  gap: 0;
+}
+
+.mwv-note-browser-document .mwv-browser-address {
+  display: none;
+}
+
 .mwv-note-browser-redundant-title {
   display: none;
 }
@@ -1754,6 +1765,23 @@
   font-size: 13px;
 }
 
+/* NoteWeb is rendered inside Markdown, where Obsidian can add button chrome.
+   Keep the Bing-style result tabs quiet and text-like instead of boxed. */
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:hover,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:focus,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:focus-visible,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab.is-active {
+  min-height: 0;
+  margin: 0;
+  padding: 9px 0 11px;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none;
+}
+
 .mwv-bing-tab.is-active {
   color: var(--text-normal);
   font-weight: 650;
@@ -1926,6 +1954,12 @@
   border-radius: 10px;
   object-fit: cover;
   background: var(--background-secondary);
+}
+
+.mwv-note-browser-document .mwv-result-thumb,
+.mwv-note-browser-document .mwv-page-media img {
+  border: 0;
+  box-shadow: none;
 }
 
 .mwv-result-actions {
