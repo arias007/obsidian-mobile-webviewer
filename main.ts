@@ -7405,6 +7405,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
     if (!leafContent) return;
     const leaf = this.findWorkspaceLeafForElement(leafContent);
+    if (!leaf) return;
     const file = (leaf?.view as { file?: unknown } | undefined)?.file;
     if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
     const leafEl = leafContent.closest<HTMLElement>(".workspace-leaf") ?? leafContent;
