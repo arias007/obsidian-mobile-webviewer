@@ -9,6 +9,11 @@ const bindMethod = bindStart >= 0 && bindEnd > bindStart ? source.slice(bindStar
 const chromeStart = source.indexOf("renderBrowserChrome(");
 const chromeEnd = source.indexOf("\n  watchEmbedChrome(", chromeStart);
 const chromeMethod = chromeStart >= 0 && chromeEnd > chromeStart ? source.slice(chromeStart, chromeEnd) : "";
+const doubleActivationStart = source.indexOf("\n  handleNoteBrowserDoubleActivation(");
+const doubleActivationEnd = source.indexOf("\n  installNoteDrawDedupeObserver(", doubleActivationStart);
+const doubleActivationMethod = doubleActivationStart >= 0 && doubleActivationEnd > doubleActivationStart
+  ? source.slice(doubleActivationStart, doubleActivationEnd)
+  : "";
 
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
@@ -37,6 +42,12 @@ const checks = [
   ["NoteWeb hides the duplicate in-content URL row", styles.includes(".mwv-note-browser-document .mwv-browser-address") && styles.includes("display: none") && styles.includes('grid-template-areas: "controls actions"')],
   ["NoteWeb result tabs and media stay borderless", styles.includes(".mwv-note-browser-document .mwv-bing-home .mwv-bing-tab") && styles.includes("border: 0 !important") && styles.includes(".mwv-note-browser-document .mwv-page-media img")],
   ["NoteWeb real-web mode renders the original page including the home URL", source.includes('mode === "web" && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-bing-home.is-web-front > .mwv-bing-note-content")],
+  ["NoteWeb keeps the real page below active NoteDraw controls", styles.includes("--mwv-web-safe-top") && styles.includes("notedraw-shell.is-drawing-active") && styles.includes("calc(100% - var(--mwv-web-safe-top))")],
+  ["NoteWeb hides duplicate chrome after a Markdown preview rebuild", styles.includes(":has(.mwv-embed[data-url]) .mwv-browser-chrome") && source.includes("markdown-preview-sizer")],
+  ["NoteWeb double-clicks cannot switch Obsidian into edit mode", source.includes('["mousedown", "click", "dblclick"]') && doubleActivationMethod.includes("event.detail < 2") && doubleActivationMethod.includes("event.stopImmediatePropagation()") && doubleActivationMethod.includes("file.path !== WEBVIEW_NOTE_PATH")],
+  ["NoteWeb double-click containment preserves native text selection", !doubleActivationMethod.includes("event.preventDefault")],
+  ["NoteWeb blocks source mode at the view-state boundary", source.includes("guardedSetState") && source.includes('state.mode === "source" || state.source === true') && source.includes('file.path === WEBVIEW_NOTE_PATH') && source.includes('binding.view.setState === binding.guardedSetState')],
+  ["NoteWeb also recovers from unexpected source mode", source.includes("this.enforceNoteBrowserReadingMode();") && source.includes("enforceNoteBrowserReadingMode(): void") && source.includes('state.mode !== "preview" || state.source !== false') && source.includes("applyReadingMode();")],
   ["NoteWeb Markdown controls are fused into Obsidian native actions and pane menu", source.includes("syncNoteBrowserNativeActions") && source.includes("view.addAction") && source.includes("view.onPaneMenu") && source.includes("view-header-nav-buttons") && source.includes("mwv-note-browser-native-nav") && styles.includes(".mwv-note-browser-document .mwv-browser-chrome") && styles.includes("display: none !important")],
   ["NoteWeb replaces the Obsidian edit toggle with Note/Web mode", source.includes("mwv-note-browser-mode-action") && source.includes("mwv-note-browser-replaced-edit-action") && styles.includes(".mwv-note-browser-replaced-edit-action") && !source.includes('addNativeAction("arrow-left"') && !source.includes('addNativeAction("arrow-right"')],
   ["NoteWeb search results omit the recommendation column", !source.includes('side.createEl("h3"') && !source.includes('cls: "mwv-related-pill"') && styles.includes(".mwv-bing-serp") && styles.includes("grid-template-columns: minmax(0, 1fr)")],

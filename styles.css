@@ -1474,6 +1474,14 @@
   display: none !important;
 }
 
+/* Markdown preview roots can be rebuilt by Obsidian without giving the
+   post-processor another chance to add mwv-note-browser-document. Keep the
+   embedded NoteWeb chrome hidden from the structural marker as well. */
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  display: none !important;
+}
+
 .mwv-note-browser-document .mwv-bing-home,
 .mwv-note-browser-document .mwv-note-embed,
 .mwv-note-browser-document .mwv-utility-embed {
@@ -1527,6 +1535,40 @@
   height: 100%;
   min-height: 480px;
   max-height: none;
+}
+
+/* NoteDraw's mobile webview controls are fixed above the page. Reserve a
+   matching top-safe area only while drawing is active, so the real page does
+   not slide underneath the T/A/pen toolbar. */
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) {
+  --mwv-web-safe-top: clamp(68px, 8vh, 96px);
+}
+
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser,
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser {
+  box-sizing: border-box;
+  padding-top: var(--mwv-web-safe-top);
+}
+
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  height: calc(100% - var(--mwv-web-safe-top));
+  min-height: 0;
+}
+
+.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) {
+  --mwv-web-safe-top: clamp(68px, 8vh, 96px);
+  box-sizing: border-box;
+  padding-top: var(--mwv-web-safe-top);
+}
+
+.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-frame,
+.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-real-webview,
+.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-live-frame {
+  height: calc(100% - var(--mwv-web-safe-top));
+  min-height: 0;
 }
 
 .mwv-note-browser-redundant-title {

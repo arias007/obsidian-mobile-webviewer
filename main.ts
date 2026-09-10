@@ -2465,6 +2465,8 @@ interface NoteBrowserNativeBinding {
   view: {
     addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
     onPaneMenu?: (menu: Menu, source: string) => any;
+    getState?: () => Record<string, unknown>;
+    setState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
   };
   modeAction?: HTMLElement;
   hiddenEditButtons: HTMLElement[];
@@ -2475,6 +2477,8 @@ interface NoteBrowserNativeBinding {
     originalDisabled: boolean;
   }>;
   originalPaneMenu?: (menu: Menu, source: string) => any;
+  originalSetState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
+  guardedSetState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
 }
 
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
@@ -5487,6 +5491,11 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE, (leaf) => new MobileWebviewerView(leaf, this));
     const hostWindow = appDocument().defaultView ?? window;
+    for (const eventName of ["mousedown", "click", "dblclick"] as const) {
+      this.registerDomEvent(hostWindow, eventName, (event) => {
+        this.handleNoteBrowserDoubleActivation(event);
+      }, { capture: true });
+    }
     for (const eventName of ["pointerdown", "pointerup", "pointercancel", "pointerleave", "touchend", "click", "contextmenu"] as const) {
       this.registerDomEvent(hostWindow, eventName, (event) => {
         this.handleNoteDrawWebWandLifecycle(event);
@@ -5527,6 +5536,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.installNoteDrawDedupeObserver();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
+      this.enforceNoteBrowserReadingMode();
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
       this.app.workspace.containerEl
         .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
@@ -5623,9 +5633,32 @@ export default class MobileWebviewerPlugin extends Plugin {
       } else {
         delete binding.view.onPaneMenu;
       }
+      if (binding.originalSetState && binding.view.setState === binding.guardedSetState) {
+        binding.view.setState = binding.originalSetState;
+      }
     }
     this.noteBrowserNativeBindingRecords.clear();
     // Preserve user-arranged leaves when the plugin unloads.
+  }
+
+  handleNoteBrowserDoubleActivation(event: MouseEvent): void {
+    if (event.detail < 2) return;
+    const target = event.composedPath().find(isHtmlElement) ?? null;
+    const noteBrowserRoot =
+      target?.closest<HTMLElement>(".mwv-note-browser-document") ??
+      target?.closest<HTMLElement>(".mwv-embed[data-url]") ??
+      null;
+    if (!noteBrowserRoot) return;
+
+    const leaf = this.findWorkspaceLeafForElement(noteBrowserRoot);
+    const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+    if (!leaf || !(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+
+    // Keep Obsidian's reading-view double-click gesture outside NoteWeb. Do
+    // not preventDefault(): native word selection inside NoteWeb should stay.
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    if (event.type !== "click") this.setNoteBrowserReadingMode(leaf);
   }
 
   installNoteDrawDedupeObserver(): void {
@@ -7276,16 +7309,30 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   setNoteBrowserReadingMode(leaf: WorkspaceLeaf): void {
     const view = leaf.view as { setState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>; getState?: () => Record<string, unknown> };
+    const applyReadingMode = () => {
+      try {
+        const state = view.getState?.() ?? {};
+        if (state.mode === "preview" && state.source === false) return;
+        void view.setState?.({ ...state, mode: "preview", source: false }, { history: false });
+      } catch (error) {
+        console.warn("[mobile-webviewer] note browser preview mode skipped", error);
+      }
+    };
+    applyReadingMode();
     for (const delay of [80, 240, 600]) {
       window.setTimeout(() => {
-        try {
-          const state = view.getState?.() ?? {};
-          void view.setState?.({ ...state, mode: "preview", source: false }, { history: false });
-        } catch (error) {
-          console.warn("[mobile-webviewer] note browser preview mode skipped", error);
-        }
+        if (leaf.view === view) applyReadingMode();
       }, delay);
     }
+  }
+
+  enforceNoteBrowserReadingMode(): void {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const view = leaf.view as { file?: unknown; getState?: () => Record<string, unknown> };
+      if (!(view.file instanceof TFile) || view.file.path !== WEBVIEW_NOTE_PATH) return;
+      const state = view.getState?.() ?? {};
+      if (state.mode !== "preview" || state.source !== false) this.setNoteBrowserReadingMode(leaf);
+    });
   }
 
   async ensureWebviewerNote(): Promise<TFile> {
@@ -7399,7 +7446,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   prepareWebviewerDocumentLayout(embed: HTMLElement): void {
-    const preview = embed.closest<HTMLElement>(".markdown-preview-view, .markdown-rendered");
+    const preview =
+      embed.closest<HTMLElement>(".markdown-preview-view, .markdown-rendered") ??
+      embed.closest<HTMLElement>(".markdown-preview-sizer")?.parentElement;
     if (!preview) return;
     preview.addClass("mwv-note-browser-document");
     preview.toggleClass(
@@ -7449,16 +7498,31 @@ export default class MobileWebviewerPlugin extends Plugin {
     const view = leaf.view as unknown as {
       addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
       onPaneMenu?: (menu: Menu, source: string) => any;
+      getState?: () => Record<string, unknown>;
+      setState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
     };
     if (!view) return;
 
     let binding = this.noteBrowserNativeBindings.get(leaf);
     if (!binding) {
       const originalPaneMenu = view.onPaneMenu;
+      const originalSetState = view.setState;
       const navButtons: NoteBrowserNativeBinding["navButtons"] = [];
-      binding = { leaf, view, navButtons, hiddenEditButtons: [], originalPaneMenu };
+      binding = { leaf, view, navButtons, hiddenEditButtons: [], originalPaneMenu, originalSetState };
       this.noteBrowserNativeBindings.set(leaf, binding);
       this.noteBrowserNativeBindingRecords.add(binding);
+      if (originalSetState) {
+        const guardedSetState = (state: Record<string, unknown>, result?: unknown) => {
+          const file = (leaf.view as { file?: unknown } | undefined)?.file;
+          const protectsNoteBrowser = file instanceof TFile && file.path === WEBVIEW_NOTE_PATH;
+          const nextState = protectsNoteBrowser && (state.mode === "source" || state.source === true)
+            ? { ...state, mode: "preview", source: false }
+            : state;
+          return originalSetState.call(view, nextState, result);
+        };
+        binding.guardedSetState = guardedSetState;
+        view.setState = guardedSetState;
+      }
       const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
       const addMenuItem = (menu: Menu, title: string, icon: IconName, callback: () => void, checked?: boolean) => {
         menu.addItem((item) => {
