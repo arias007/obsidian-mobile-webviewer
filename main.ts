@@ -2466,7 +2466,14 @@ interface NoteBrowserNativeBinding {
     addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
     onPaneMenu?: (menu: Menu, source: string) => any;
   };
-  actions: HTMLElement[];
+  modeAction?: HTMLElement;
+  hiddenEditButtons: HTMLElement[];
+  navButtons: Array<{
+    element: HTMLElement;
+    direction: "back" | "forward";
+    handler: (event: Event) => void;
+    originalDisabled: boolean;
+  }>;
   originalPaneMenu?: (menu: Menu, source: string) => any;
 }
 
@@ -5602,7 +5609,15 @@ export default class MobileWebviewerPlugin extends Plugin {
   onunload(): void {
     if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
     for (const binding of this.noteBrowserNativeBindingRecords) {
-      binding.actions.forEach((action) => action.remove());
+      binding.modeAction?.remove();
+      binding.hiddenEditButtons.forEach((button) => button.removeClass("mwv-note-browser-replaced-edit-action"));
+      binding.navButtons.forEach((entry) => {
+        entry.element.removeEventListener("click", entry.handler, true);
+        entry.element.removeClass("mwv-note-browser-native-nav");
+        entry.element.removeClass("is-disabled");
+        entry.element.removeAttribute("aria-disabled");
+        (entry.element as HTMLButtonElement).disabled = entry.originalDisabled;
+      });
       if (binding.originalPaneMenu) {
         binding.view.onPaneMenu = binding.originalPaneMenu;
       } else {
@@ -7435,13 +7450,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
       onPaneMenu?: (menu: Menu, source: string) => any;
     };
-    if (!view || typeof view.addAction !== "function") return;
+    if (!view) return;
 
     let binding = this.noteBrowserNativeBindings.get(leaf);
     if (!binding) {
       const originalPaneMenu = view.onPaneMenu;
-      const actions: HTMLElement[] = [];
-      binding = { leaf, view, actions, originalPaneMenu };
+      const navButtons: NoteBrowserNativeBinding["navButtons"] = [];
+      binding = { leaf, view, navButtons, hiddenEditButtons: [], originalPaneMenu };
       this.noteBrowserNativeBindings.set(leaf, binding);
       this.noteBrowserNativeBindingRecords.add(binding);
       const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
@@ -7468,34 +7483,88 @@ export default class MobileWebviewerPlugin extends Plugin {
           if (chrome) this.toggleMorePanel(current, chrome, current.dataset.url || this.settings.homeUrl, current.dataset.mwvCurrentTitle || "");
         });
       };
-      const addNativeAction = (icon: IconName, title: string, callback: () => void): HTMLElement => {
-        const action = view.addAction!(icon, title, () => callback());
-        action.addClass("mwv-note-browser-native-action");
-        return action;
-      };
-      actions.push(
-        addNativeAction("arrow-left", this.tr("back"), () => {
+      if (typeof view.addAction === "function") {
+        const modeAction = view.addAction("file-text", this.tr("note"), () => {
           const current = findEmbed();
-          if (current && this.getEmbedStack(current, "mwvBack").length) void this.navigateEmbedBack(current);
-        }),
-        addNativeAction("arrow-right", this.tr("forward"), () => {
-          const current = findEmbed();
-          if (current && this.getEmbedStack(current, "mwvForward").length) void this.navigateEmbedForward(current);
-        })
-      );
+          if (!current) return;
+          this.setNoteBrowserEmbedMode(current, current.dataset.mwvBrowserMode === "web" ? "note" : "web");
+        });
+        modeAction.addClass("mwv-note-browser-mode-action");
+        binding.modeAction = modeAction;
+        const actionHost = (leaf.view.containerEl?.closest<HTMLElement>(".workspace-leaf") ?? leaf.view.containerEl)
+          ?.querySelector<HTMLElement>(".view-actions");
+        const moreAction = actionHost?.querySelector<HTMLElement>(
+          ".view-action.mod-more, [aria-label*='More' i], [aria-label*='更多'], [title*='More' i], [title*='更多']"
+        );
+        if (moreAction && modeAction.parentElement && moreAction.parentElement === modeAction.parentElement) {
+          modeAction.parentElement.insertBefore(modeAction, moreAction);
+        }
+      }
     }
+
+    this.bindNoteBrowserNativeNav(leaf, binding, embed);
+    this.hideNoteBrowserEditActions(leaf, binding);
 
     const back = this.getEmbedStack(embed, "mwvBack").length > 0;
     const forward = this.getEmbedStack(embed, "mwvForward").length > 0;
-    const setActionState = (action: HTMLElement | undefined, enabled: boolean) => {
-      if (!action) return;
-      action.toggleClass("is-disabled", !enabled);
-      action.setAttribute("aria-disabled", String(!enabled));
-      if (enabled) action.removeAttribute("disabled");
-      else action.setAttribute("disabled", "true");
+    const setNavState = (entry: NoteBrowserNativeBinding["navButtons"][number] | undefined, enabled: boolean) => {
+      if (!entry) return;
+      entry.element.toggleClass("is-disabled", !enabled);
+      entry.element.setAttribute("aria-disabled", String(!enabled));
+      (entry.element as HTMLButtonElement).disabled = !enabled;
     };
-    setActionState(binding.actions[0], back);
-    setActionState(binding.actions[1], forward);
+    setNavState(binding.navButtons.find((entry) => entry.direction === "back"), back);
+    setNavState(binding.navButtons.find((entry) => entry.direction === "forward"), forward);
+    if (binding.modeAction) {
+      const mode = embed.dataset.mwvBrowserMode === "web" ? "web" : "note";
+      setIcon(binding.modeAction, mode === "web" ? "globe-2" : "file-text");
+      const label = mode === "web" ? this.tr("note") : this.tr("web");
+      binding.modeAction.setAttribute("aria-label", label);
+      binding.modeAction.setAttribute("title", label);
+    }
+  }
+
+  hideNoteBrowserEditActions(leaf: WorkspaceLeaf, binding: NoteBrowserNativeBinding): void {
+    const root = leaf.view?.containerEl?.closest<HTMLElement>(".workspace-leaf") ?? leaf.view?.containerEl;
+    const actions = root?.querySelector<HTMLElement>(".view-actions");
+    if (!actions) return;
+    const candidates = Array.from(actions.querySelectorAll<HTMLElement>(".view-action, button, [role='button']"));
+    for (const button of candidates) {
+      if (button === binding.modeAction || binding.hiddenEditButtons.includes(button)) continue;
+      const marker = `${button.getAttribute("aria-label") ?? ""} ${button.getAttribute("title") ?? ""} ${button.dataset.tooltip ?? ""}`.toLowerCase();
+      const isToggle = button.hasClass("mod-toggle-edit") || /edit this file|toggle reading view|编辑(?:当前)?文件|切换阅读视图|阅读视图|编辑视图/.test(marker);
+      if (!isToggle) continue;
+      button.addClass("mwv-note-browser-replaced-edit-action");
+      binding.hiddenEditButtons.push(button);
+    }
+  }
+
+  bindNoteBrowserNativeNav(leaf: WorkspaceLeaf, binding: NoteBrowserNativeBinding, embed: HTMLElement): void {
+    const navContainer = (leaf.view.containerEl?.closest<HTMLElement>(".workspace-leaf") ?? leaf.view.containerEl)
+      ?.querySelector<HTMLElement>(":scope > .view-header .view-header-nav-buttons, .view-header-nav-buttons");
+    if (!navContainer) return;
+    const nativeButtons = Array.from(navContainer.querySelectorAll<HTMLElement>(".nav-action-button, button"))
+      .filter((button) => button.isConnected)
+      .slice(0, 2);
+    const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
+    (["back", "forward"] as const).forEach((direction, index) => {
+      const element = nativeButtons[index];
+      if (!element || binding.navButtons.some((entry) => entry.element === element)) return;
+      const handler = (event: Event) => {
+        const current = findEmbed();
+        if (!current) return;
+        const key = direction === "back" ? "mwvBack" : "mwvForward";
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        if (!this.getEmbedStack(current, key).length) return;
+        if (direction === "back") void this.navigateEmbedBack(current);
+        else void this.navigateEmbedForward(current);
+      };
+      element.addEventListener("click", handler, true);
+      element.addClass("mwv-note-browser-native-nav");
+      binding.navButtons.push({ element, direction, handler, originalDisabled: (element as HTMLButtonElement).disabled === true });
+    });
   }
 
   setNoteBrowserEmbedMode(embed: HTMLElement, mode: "note" | "web" | "split"): void {

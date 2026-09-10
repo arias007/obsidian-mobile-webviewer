@@ -1550,9 +1550,13 @@
   white-space: nowrap;
 }
 
-.mwv-note-browser-native-action.is-disabled {
+.mwv-note-browser-native-nav.is-disabled {
   opacity: 0.35;
   pointer-events: none;
+}
+
+.mwv-note-browser-replaced-edit-action {
+  display: none !important;
 }
 
 .mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-embed-layer,
