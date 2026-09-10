@@ -14,7 +14,8 @@ import {
   WorkspaceLeaf,
   normalizePath,
   setIcon,
-  type SettingDefinitionItem
+  type SettingDefinitionItem,
+  type IconName
 } from "obsidian";
 import * as qrcodeFactory from "qrcode-generator";
 
@@ -5435,6 +5436,14 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawLegacyMigrationTimer = 0;
   noteDrawLegacyMigrationPromise: Promise<boolean> | null = null;
   noteDrawLegacyMigrationRetry = 0;
+  noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, {
+    view: {
+      addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
+      onPaneMenu?: (menu: Menu, source: string) => any;
+    };
+    actions: HTMLElement[];
+    originalPaneMenu?: (menu: Menu, source: string) => any;
+  }>();
   private apiListeners = new Set<MobileWebviewerApiListener>();
   readonly api: MobileWebviewerApi = {
     apiVersion: MOBILE_WEBVIEWER_API_VERSION,
@@ -7396,6 +7405,96 @@ export default class MobileWebviewerPlugin extends Plugin {
       title.setAttribute("title", url);
       title.addClass("mwv-note-browser-native-title");
     }
+    this.syncNoteBrowserNativeActions(leaf, embed);
+  }
+
+  getNoteBrowserEmbed(leaf: WorkspaceLeaf): HTMLElement | null {
+    const root = leaf.view?.containerEl;
+    if (!root) return null;
+    return root.querySelector<HTMLElement>(
+      ".mwv-note-browser-document .mwv-embed.mwv-bing-home, .mwv-note-browser-document .mwv-embed.mwv-note-embed, .mwv-note-browser-document .mwv-embed.mwv-utility-embed"
+    );
+  }
+
+  syncNoteBrowserNativeActions(leaf: WorkspaceLeaf, embed: HTMLElement): void {
+    const view = leaf.view as unknown as {
+      addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
+      onPaneMenu?: (menu: Menu, source: string) => any;
+    };
+    if (!view || typeof view.addAction !== "function") return;
+
+    let binding = this.noteBrowserNativeBindings.get(leaf);
+    if (!binding) {
+      const originalPaneMenu = view.onPaneMenu;
+      const actions: HTMLElement[] = [];
+      binding = { view, actions, originalPaneMenu };
+      this.noteBrowserNativeBindings.set(leaf, binding);
+      const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
+      const addMenuItem = (menu: Menu, title: string, icon: IconName, callback: () => void, checked?: boolean) => {
+        menu.addItem((item) => {
+          item.setTitle(title).setIcon(icon).onClick(() => callback());
+          if (checked !== undefined) item.setChecked(checked);
+        });
+      };
+      view.onPaneMenu = (menu: Menu, source: string) => {
+        originalPaneMenu?.call(view, menu, source);
+        const current = findEmbed();
+        if (!current) return;
+        menu.addSeparator();
+        const mode = current.dataset.mwvBrowserMode || "note";
+        addMenuItem(menu, this.tr("note"), "file-text", () => this.setNoteBrowserEmbedMode(current, "note"), mode === "note");
+        addMenuItem(menu, this.tr("web"), "globe-2", () => this.setNoteBrowserEmbedMode(current, "web"), mode === "web");
+        addMenuItem(menu, "Split", "columns-2", () => this.setNoteBrowserEmbedMode(current, "split"), mode === "split");
+        addMenuItem(menu, this.tr("reload"), "rotate-cw", () => void this.refreshEmbed(current));
+        addMenuItem(menu, this.tr("home"), "home", () => void this.openUrlInEmbed(current, this.settings.homeUrl));
+        addMenuItem(menu, this.tr("saveMd"), "file-down", () => void this.exportEmbedWebNote(current));
+        addMenuItem(menu, this.tr("more"), "more-horizontal", () => {
+          const chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+          if (chrome) this.toggleMorePanel(current, chrome, current.dataset.url || this.settings.homeUrl, current.dataset.mwvCurrentTitle || "");
+        });
+      };
+      const addNativeAction = (icon: IconName, title: string, callback: () => void): HTMLElement => {
+        const action = view.addAction!(icon, title, () => callback());
+        action.addClass("mwv-note-browser-native-action");
+        return action;
+      };
+      actions.push(
+        addNativeAction("arrow-left", this.tr("back"), () => {
+          const current = findEmbed();
+          if (current && this.getEmbedStack(current, "mwvBack").length) void this.navigateEmbedBack(current);
+        }),
+        addNativeAction("arrow-right", this.tr("forward"), () => {
+          const current = findEmbed();
+          if (current && this.getEmbedStack(current, "mwvForward").length) void this.navigateEmbedForward(current);
+        })
+      );
+    }
+
+    const back = this.getEmbedStack(embed, "mwvBack").length > 0;
+    const forward = this.getEmbedStack(embed, "mwvForward").length > 0;
+    const setActionState = (action: HTMLElement | undefined, enabled: boolean) => {
+      if (!action) return;
+      action.toggleClass("is-disabled", !enabled);
+      action.setAttribute("aria-disabled", String(!enabled));
+      if (enabled) action.removeAttribute("disabled");
+      else action.setAttribute("disabled", "true");
+    };
+    setActionState(binding.actions[0], back);
+    setActionState(binding.actions[1], forward);
+  }
+
+  setNoteBrowserEmbedMode(embed: HTMLElement, mode: "note" | "web" | "split"): void {
+    embed.dataset.mwvBrowserMode = mode;
+    embed.toggleClass("is-web-front", mode === "web");
+    embed.toggleClass("is-split-front", mode === "split");
+    embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
+      button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
+    });
+    if ((mode === "web" || mode === "split") && !embed.querySelector(":scope > .mwv-live-browser")) {
+      const liveUrl = embed.dataset.url || this.settings.homeUrl;
+      if (/^https?:\/\//i.test(liveUrl)) this.renderLiveBrowserSurface(embed, liveUrl);
+    }
+    this.syncNoteBrowserNativeIdentity(embed, embed.dataset.url || this.settings.homeUrl);
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -7494,7 +7593,6 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const shell = resultHost.createDiv({ cls: "mwv-bing-serp" });
     const main = shell.createDiv({ cls: "mwv-bing-main" });
-    const side = shell.createDiv({ cls: "mwv-bing-side" });
 
     for (const result of results) {
       this.renderSearchResult(main, result);
@@ -7526,17 +7624,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       });
     }
 
-    side.createEl("h3", { text: `深入了解 ${query}` });
-    for (const item of relatedSearches(query)) {
-      const url = DEFAULT_SEARCH.replace("{{query}}", encodeURIComponent(item));
-      const pill = side.createEl("button", {
-        cls: "mwv-related-pill",
-        attr: { type: "button", "data-mwv-open-url": url, title: url }
-      });
-      const icon = pill.createSpan({ cls: "mwv-related-icon" });
-      setIcon(icon, "search");
-      pill.createSpan({ text: item });
-    }
   }
 
   renderSearchResult(parent: HTMLElement, result: SearchResult): void {
@@ -8703,6 +8790,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       : "note";
     setMode(initialMode || "note");
     this.watchEmbedChrome(embed);
+    this.syncNoteBrowserNativeIdentity(embed, url);
   }
 
   watchEmbedChrome(embed: HTMLElement): void {

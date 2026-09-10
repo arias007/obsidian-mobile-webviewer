@@ -1445,6 +1445,7 @@
 .markdown-rendered.mwv-note-browser-document {
   padding-right: 8px;
   padding-left: 8px;
+  padding-top: 0;
 }
 
 .mwv-note-browser-document .mwv-embed,
@@ -1466,6 +1467,68 @@
   display: none;
 }
 
+/* The Markdown Note is the primary NoteWeb surface. Its controls are hosted
+   by Obsidian's native view actions and pane menu, so the embedded duplicate
+   chrome should not consume vertical space or draw a second frame. */
+.mwv-note-browser-document .mwv-browser-chrome {
+  display: none !important;
+}
+
+.mwv-note-browser-document .mwv-bing-home,
+.mwv-note-browser-document .mwv-note-embed,
+.mwv-note-browser-document .mwv-utility-embed {
+  margin-top: 0;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.mwv-note-browser-document .mwv-bing-home-empty {
+  min-height: calc(100dvh - 92px);
+  padding-top: 0;
+}
+
+.mwv-note-browser-document .mwv-reader-panel {
+  padding-top: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-results {
+  margin-top: 12px;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-serp {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mwv-note-browser-document .mwv-bing-side {
+  display: none;
+}
+
+/* Keep the live page a real, usable surface when Web mode is selected. */
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser {
+  display: block;
+  visibility: visible;
+  height: max(480px, 68vh);
+  min-height: max(480px, 68vh);
+  overflow: auto;
+  border-bottom: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  display: block;
+  height: 100%;
+  min-height: 480px;
+  max-height: none;
+}
+
 .mwv-note-browser-redundant-title {
   display: none;
 }
@@ -1485,6 +1548,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mwv-note-browser-native-action.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 .mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-embed-layer,
@@ -1813,7 +1881,7 @@
 
 .mwv-bing-serp {
   display: grid;
-  grid-template-columns: minmax(0, 680px) minmax(240px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 34px;
   align-items: start;
 }
