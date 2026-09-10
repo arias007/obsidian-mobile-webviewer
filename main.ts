@@ -2460,6 +2460,16 @@ interface MobileWebviewerSyntheticEvent extends Event {
   _mwvSyntheticWebNoteSave?: boolean;
 }
 
+interface NoteBrowserNativeBinding {
+  leaf: WorkspaceLeaf;
+  view: {
+    addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
+    onPaneMenu?: (menu: Menu, source: string) => any;
+  };
+  actions: HTMLElement[];
+  originalPaneMenu?: (menu: Menu, source: string) => any;
+}
+
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   homeUrl: DEFAULT_HOME,
   searchUrl: DEFAULT_SEARCH,
@@ -5436,14 +5446,8 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawLegacyMigrationTimer = 0;
   noteDrawLegacyMigrationPromise: Promise<boolean> | null = null;
   noteDrawLegacyMigrationRetry = 0;
-  noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, {
-    view: {
-      addAction?: (icon: IconName, title: string, callback: (evt: MouseEvent) => any) => HTMLElement;
-      onPaneMenu?: (menu: Menu, source: string) => any;
-    };
-    actions: HTMLElement[];
-    originalPaneMenu?: (menu: Menu, source: string) => any;
-  }>();
+  noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, NoteBrowserNativeBinding>();
+  noteBrowserNativeBindingRecords = new Set<NoteBrowserNativeBinding>();
   private apiListeners = new Set<MobileWebviewerApiListener>();
   readonly api: MobileWebviewerApi = {
     apiVersion: MOBILE_WEBVIEWER_API_VERSION,
@@ -5597,6 +5601,15 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   onunload(): void {
     if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
+    for (const binding of this.noteBrowserNativeBindingRecords) {
+      binding.actions.forEach((action) => action.remove());
+      if (binding.originalPaneMenu) {
+        binding.view.onPaneMenu = binding.originalPaneMenu;
+      } else {
+        delete binding.view.onPaneMenu;
+      }
+    }
+    this.noteBrowserNativeBindingRecords.clear();
     // Preserve user-arranged leaves when the plugin unloads.
   }
 
@@ -7427,8 +7440,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!binding) {
       const originalPaneMenu = view.onPaneMenu;
       const actions: HTMLElement[] = [];
-      binding = { view, actions, originalPaneMenu };
+      binding = { leaf, view, actions, originalPaneMenu };
       this.noteBrowserNativeBindings.set(leaf, binding);
+      this.noteBrowserNativeBindingRecords.add(binding);
       const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
       const addMenuItem = (menu: Menu, title: string, icon: IconName, callback: () => void, checked?: boolean) => {
         menu.addItem((item) => {
