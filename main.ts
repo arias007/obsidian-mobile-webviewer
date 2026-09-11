@@ -4832,11 +4832,13 @@ class MobileWebviewerView extends ItemView {
     wrap?.toggleClass("is-split-front", enabled && this.frontendMode === "split");
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
     root?.toggleClass("is-raw-web", enabled && this.frontendMode === "web");
+    root?.toggleAttribute("data-notedraw-ignore", enabled && this.frontendMode === "web");
     this.homeEl.toggleClass("is-visible", !enabled || this.frontendMode !== "web");
     if (enabled) {
       this.surfaceEl.removeClass("is-hidden");
     } else {
       root?.removeClass("is-raw-web");
+      root?.removeAttribute("data-notedraw-ignore");
       this.plugin.setBrowserSurfaceUrl(this.surfaceEl, "about:blank");
       this.surfaceEl.addClass("is-hidden");
       this.homeEl.removeClass("mwv-reader-strip");
@@ -4851,6 +4853,7 @@ class MobileWebviewerView extends ItemView {
     if (!wrap) return;
     const root = this.containerEl.children[1] as HTMLElement | undefined;
     root?.toggleClass("is-raw-web", wrap.hasClass("is-live-page") && mode === "web");
+    root?.toggleAttribute("data-notedraw-ignore", wrap.hasClass("is-live-page") && mode === "web");
     wrap.toggleClass("is-note-front", mode === "note");
     wrap.toggleClass("is-web-front", mode === "web");
     wrap.toggleClass("is-split-front", mode === "split");
@@ -5055,6 +5058,7 @@ class MobileWebviewerView extends ItemView {
     // Opening the Markdown NoteWeb from a standalone browser leaf used to
     // leave the old WebView/NoteDraw header proxy behind in the workspace.
     // Sweep that plugin-owned residue before the new note leaf is rendered.
+    this.plugin.disposeAllRawNoteDrawControllers();
     this.plugin.cleanupStaleNoteDrawButtonResidue(this.containerEl.closest<HTMLElement>(".workspace-leaf-content") ?? this.containerEl);
     await this.plugin.openNoteBrowser(this.currentUrl || this.plugin.settings.homeUrl);
   }
@@ -5489,6 +5493,17 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawLegacyMigrationTimer = 0;
   noteDrawLegacyMigrationPromise: Promise<boolean> | null = null;
   noteDrawLegacyMigrationRetry = 0;
+  /**
+   * NoteDraw has a global MutationObserver which scans every webview-like
+   * surface.  Raw browser surfaces must be excluded before that scan mounts a
+   * controller; hiding/removing the resulting toolbar afterwards is too late
+   * and can already have changed the guest page's host layout.
+   */
+  noteDrawRawSurfaceGuardPlugin: NoteDrawPluginLike | null = null;
+  noteDrawRawSurfaceGuardOriginal: (() => void) | null = null;
+  noteDrawRawSurfaceGuardWrapper: (() => void) | null = null;
+  noteDrawRawSurfaceGuardRetryTimers: number[] = [];
+  noteDrawRawSurfaceGuardRunning = false;
   noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, NoteBrowserNativeBinding>();
   noteBrowserNativeBindingRecords = new Set<NoteBrowserNativeBinding>();
   private apiListeners = new Set<MobileWebviewerApiListener>();
@@ -5566,8 +5581,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(appDocument(), "click", (event) => {
       this.handleNoteDrawWebNoteEditEvent(event);
     }, { capture: true });
+    this.installNoteDrawRawSurfaceGuard();
     this.installNoteDrawDedupeObserver();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
+      this.installNoteDrawRawSurfaceGuard();
       this.enforceNoteBrowserReadingMode();
       this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
@@ -5664,6 +5681,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.restoreNoteDrawRawSurfaceGuard();
     if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
     for (const binding of this.noteBrowserNativeBindingRecords) {
       binding.modeAction?.remove();
@@ -6908,6 +6926,162 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.noteDrawDrawingSaveTimers.set(controller, timer);
   }
 
+  isRawNoteDrawExcludedSurface(element?: Element | null): boolean {
+    if (!element) return false;
+    const selector = ".mwv-root.is-raw-web, .mwv-root[data-notedraw-ignore], .mwv-embed.is-web-front, .mwv-embed[data-notedraw-ignore], .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front";
+    try {
+      return Boolean(
+        element.matches(selector) ||
+        element.closest(selector) ||
+        element.querySelector(selector)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  installNoteDrawRawSurfaceGuard(): void {
+    const attempt = () => {
+      if (this.noteDrawRawSurfaceGuardWrapper) return;
+      const plugin = this.getNoteDrawPlugin();
+      const original = plugin?.syncWebviewControllers;
+      if (!plugin || typeof original !== "function") return;
+
+      const guarded = original.bind(plugin);
+      const wrapper = () => {
+        // NoteDraw's own observer calls this method asynchronously. During the
+        // scan, filter only raw Mobile Webviewer candidates at the DOM query
+        // boundary. This prevents PreviewDrawingController.mount() from ever
+        // touching the real page; post-mount hiding cannot prevent layout
+        // changes that have already happened.
+        const documentEl = appDocument();
+        const nativeQuerySelectorAll = documentEl.querySelectorAll.bind(documentEl);
+        const ownDescriptor = Object.getOwnPropertyDescriptor(documentEl, "querySelectorAll");
+        const guardedQuerySelectorAll = (selectors: string): NodeListOf<Element> => {
+          const result = nativeQuerySelectorAll(selectors);
+          if (!this.noteDrawRawSurfaceGuardRunning || typeof selectors !== "string") return result;
+          if (!/(mwv-embed|webview|iframe|view-content|browser)/i.test(selectors)) return result;
+          const filtered = Array.from(result).filter((candidate) => !this.isRawNoteDrawExcludedSurface(candidate as Element));
+          return filtered as unknown as NodeListOf<Element>;
+        };
+
+        if (this.noteDrawRawSurfaceGuardRunning) {
+          guarded();
+          return;
+        }
+        this.noteDrawRawSurfaceGuardRunning = true;
+        try {
+          try {
+            Object.defineProperty(documentEl, "querySelectorAll", {
+              configurable: true,
+              value: guardedQuerySelectorAll
+            });
+          } catch {
+            // A host document may be non-extensible. The controller sweep in
+            // finally still handles controllers mounted by older versions.
+          }
+          guarded();
+        } finally {
+          if (ownDescriptor) {
+            try { Object.defineProperty(documentEl, "querySelectorAll", ownDescriptor); } catch { /* noop */ }
+          } else {
+            try { Reflect.deleteProperty(documentEl, "querySelectorAll"); } catch { /* noop */ }
+          }
+          this.noteDrawRawSurfaceGuardRunning = false;
+          this.disposeAllRawNoteDrawControllers();
+        }
+      };
+
+      this.noteDrawRawSurfaceGuardPlugin = plugin;
+      this.noteDrawRawSurfaceGuardOriginal = original;
+      this.noteDrawRawSurfaceGuardWrapper = wrapper;
+      plugin.syncWebviewControllers = wrapper;
+      this.disposeAllRawNoteDrawControllers();
+    };
+
+    attempt();
+    if (this.noteDrawRawSurfaceGuardWrapper) return;
+    for (const delay of [150, 600, 1800, 4000]) {
+      const timer = window.setTimeout(() => {
+        this.noteDrawRawSurfaceGuardRetryTimers = this.noteDrawRawSurfaceGuardRetryTimers.filter((entry) => entry !== timer);
+        attempt();
+      }, delay);
+      this.noteDrawRawSurfaceGuardRetryTimers.push(timer);
+    }
+  }
+
+  restoreNoteDrawRawSurfaceGuard(): void {
+    for (const timer of this.noteDrawRawSurfaceGuardRetryTimers) window.clearTimeout(timer);
+    this.noteDrawRawSurfaceGuardRetryTimers = [];
+    const plugin = this.noteDrawRawSurfaceGuardPlugin;
+    if (plugin && this.noteDrawRawSurfaceGuardWrapper && plugin.syncWebviewControllers === this.noteDrawRawSurfaceGuardWrapper) {
+      if (this.noteDrawRawSurfaceGuardOriginal) plugin.syncWebviewControllers = this.noteDrawRawSurfaceGuardOriginal;
+    }
+    this.noteDrawRawSurfaceGuardPlugin = null;
+    this.noteDrawRawSurfaceGuardOriginal = null;
+    this.noteDrawRawSurfaceGuardWrapper = null;
+  }
+
+  collectRawNoteDrawControllers(root: HTMLElement): NoteDrawControllerLike[] {
+    const controllers = new Set<NoteDrawControllerLike>();
+    const add = (controller?: NoteDrawControllerLike | null) => {
+      if (controller) controllers.add(controller);
+    };
+    add((root as NoteDrawSurfaceElement)._noteDrawController);
+    root.querySelectorAll<HTMLElement>("*").forEach((element) => {
+      add((element as NoteDrawSurfaceElement)._noteDrawController);
+    });
+    root.ownerDocument?.body?.querySelectorAll<HTMLElement>(
+      ".notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-file-input, .notedraw-body-control"
+    ).forEach((element) => {
+      const controller = (element as NoteDrawSurfaceElement)._noteDrawController;
+      if (controller?.previewEl === root || Boolean(controller?.previewEl && root.contains(controller.previewEl))) add(controller);
+    });
+    const plugin = this.getNoteDrawPlugin();
+    plugin?.webviewControllers?.forEach((controller, surface) => {
+      if (surface === root || root.contains(surface) || controller?.previewEl === root || Boolean(controller?.previewEl && root.contains(controller.previewEl))) add(controller);
+    });
+    return [...controllers];
+  }
+
+  disposeNoteDrawControllersForRawSurface(root?: HTMLElement | null): void {
+    if (!root?.isConnected) return;
+    const plugin = this.getNoteDrawPlugin();
+    const controllers = this.collectRawNoteDrawControllers(root);
+    plugin?.webviewControllers?.forEach((controller, surface) => {
+      if (controllers.includes(controller) || surface === root || root.contains(surface)) plugin.webviewControllers?.delete(surface);
+    });
+    const documentEl = root.ownerDocument ?? appDocument();
+    const ownedElements = new Set<HTMLElement>();
+    const collectElement = (value: unknown) => {
+      if (value instanceof HTMLElement && value.isConnected) ownedElements.add(value);
+    };
+    for (const controller of controllers) {
+      void this.flushNoteDrawDrawingNow(controller);
+      for (const key of ["button", "toolbar", "formatToolbar", "palettePanel", "brushPanel", "textPanel", "selectionMenu", "canvas", "staticCanvas", "embedLayer", "underlayEmbedLayer", "underlayCanvas", "fileInput"]) {
+        collectElement((controller as NoteDrawControllerLike & Record<string, unknown>)[key]);
+      }
+      try { controller.destroy?.(); } catch (error) { console.warn("[mobile-webviewer] raw NoteDraw dispose skipped", error); }
+    }
+    const selector = ".notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-file-input, .notedraw-body-control, .notedraw-canvas, .notedraw-static-canvas, .notedraw-embed-layer, .notedraw-underlay-embed-layer, .notedraw-underlay-canvas";
+    root.querySelectorAll<HTMLElement>(selector).forEach((element) => {
+      const controller = (element as NoteDrawSurfaceElement)._noteDrawController;
+      if (controller && controllers.includes(controller)) ownedElements.add(element);
+    });
+    documentEl.body?.querySelectorAll<HTMLElement>(selector).forEach((element) => {
+      const controller = (element as NoteDrawSurfaceElement)._noteDrawController;
+      if (controller && controllers.includes(controller)) ownedElements.add(element);
+    });
+    ownedElements.forEach((element) => element.remove());
+    (root as NoteDrawSurfaceElement)._noteDrawController = undefined;
+  }
+
+  disposeAllRawNoteDrawControllers(): void {
+    const documentEl = appDocument();
+    documentEl.querySelectorAll<HTMLElement>(".mwv-root.is-raw-web, .mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")
+      .forEach((root) => this.disposeNoteDrawControllersForRawSurface(root));
+  }
+
   getNoteDrawPlugin(): NoteDrawPluginLike | null {
     const pluginRegistry = (this.app as AppWithRuntimePlugins).plugins;
     const plugin = pluginRegistry?.plugins?.notedraw;
@@ -7007,6 +7181,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
     const noteDrawPlugin = this.getNoteDrawPlugin();
     const controllers = new Set<NoteDrawControllerLike>();
+    const detachedControls = new Set<HTMLElement>();
     for (const controller of this.collectNoteDrawControllers(root)) {
       if (controller.surfaceType === "webview" && this.isMobileWebviewerSurface(controller.previewEl)) {
         controllers.add(controller);
@@ -7030,6 +7205,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
 
     for (const controller of controllers) {
+      for (const key of ["button", "toolbar", "formatToolbar", "palettePanel", "brushPanel", "textPanel", "selectionMenu", "canvas", "staticCanvas", "embedLayer", "underlayEmbedLayer", "underlayCanvas", "fileInput"]) {
+        const element = (controller as NoteDrawControllerLike & Record<string, unknown>)[key];
+        if (element instanceof HTMLElement && element.isConnected) detachedControls.add(element);
+      }
       await this.flushNoteDrawDrawingNow(controller);
       try {
         controller.destroy?.();
@@ -7039,6 +7218,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     root.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR).forEach((button) => button.remove());
     root.querySelectorAll<HTMLElement>(".notedraw-toolbar, .notedraw-palette-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-embed-layer, .notedraw-file-input, .notedraw-canvas").forEach((element) => element.remove());
+    detachedControls.forEach((element) => element.remove());
     (root as NoteDrawSurfaceElement)._noteDrawController = undefined;
   }
 
@@ -7835,11 +8015,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (mode === "web") {
       // Web mode owns the viewport and must not leave an active NoteDraw
       // shell, header proxy, or stale toolbar mounted over the guest page.
-      for (const controller of this.collectNoteDrawControllers(embed)) {
-        if (this.isNoteDrawControllerActive(controller)) {
-          this.deactivateNoteDrawControllerFromHeader(controller, embed);
-        }
-      }
+      this.disposeNoteDrawControllersForRawSurface(embed);
+      this.disposeAllRawNoteDrawControllers();
       this.cleanupStaleNoteDrawButtonResidue(leafContent);
       this.hideNoteDrawHeaderButtonsForWebviewerLeaf(embed);
     } else {
