@@ -5898,6 +5898,17 @@ export default class MobileWebviewerPlugin extends Plugin {
           }
           if (hasMobileWebviewerMarker || isDisconnectedWebviewController) button.remove();
         });
+        const noteDrawPlugin = this.getNoteDrawPlugin();
+        noteDrawPlugin?.webviewControllers?.forEach((controller, surface) => {
+          if (controller?.surfaceType !== "webview") return;
+          const preview = controller.previewEl;
+          if (!preview?.isConnected || this.findWorkspaceLeafForElement(preview) !== workspaceLeaf) return;
+          const isNoteWebSurface = Boolean(
+            preview.matches?.(".mwv-root, .mwv-embed[data-url], .mwv-note-embed[data-url], .mwv-bing-home[data-url]") ||
+            surface.matches?.(".mwv-root, .mwv-embed[data-url], .mwv-note-embed[data-url], .mwv-bing-home[data-url]")
+          );
+          if (isNoteWebSurface) staleWebviewControllers.add(controller);
+        });
         for (const controller of staleWebviewControllers) {
           try { controller.destroy?.(); } catch (error) { console.warn("[mobile-webviewer] stale NoteWeb controller cleanup skipped", error); }
         }
@@ -7046,7 +7057,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (viewType !== "markdown") return leaves;
       return leaves.filter((leaf) => !this.isRawNoteWebLeaf(leaf));
     };
-    workspace.getLeavesOfType = guardedGetLeavesOfType;
+    try {
+      workspace.getLeavesOfType = guardedGetLeavesOfType;
+    } catch {
+      return task();
+    }
     try {
       return task();
     } finally {
