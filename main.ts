@@ -3799,6 +3799,10 @@ class MobileWebviewerView extends ItemView {
       onFail: (message, url) => {
         this.subtitleEl.setText(message);
         void this.plugin.addConsole("warn", `Page load issue: ${message}`, url ?? this.currentUrl);
+        // Raw Web mode must remain the original page. A transient main-frame
+        // error should be reported, but must not asynchronously replace the
+        // live WebView with the reader and create the delayed layout jump.
+        if (this.frontendMode === "web" && this.plugin.isRawRealBrowserSurface(this.surfaceEl)) return;
         void this.showReaderFallbackForCurrentPage(url ?? this.currentUrl, message);
       },
       onConsole: (level, message, url) => this.plugin.addConsole(level, message, url ?? this.currentUrl),
@@ -5048,6 +5052,10 @@ class MobileWebviewerView extends ItemView {
   async openCurrentInNoteBrowser(): Promise<void> {
     const status = this.homeEl?.querySelector<HTMLElement>(".mwv-webnote-status") ?? undefined;
     await this.saveCurrentWebNote(false, status);
+    // Opening the Markdown NoteWeb from a standalone browser leaf used to
+    // leave the old WebView/NoteDraw header proxy behind in the workspace.
+    // Sweep that plugin-owned residue before the new note leaf is rendered.
+    this.plugin.cleanupStaleNoteDrawButtonResidue(this.containerEl.closest<HTMLElement>(".workspace-leaf-content") ?? this.containerEl);
     await this.plugin.openNoteBrowser(this.currentUrl || this.plugin.settings.homeUrl);
   }
 
@@ -5842,18 +5850,25 @@ export default class MobileWebviewerPlugin extends Plugin {
         leaf.hasClass("mwv-notedraw-surface-leaf") ||
         leaf.querySelector(".mwv-notedraw-anchor, [class*='mwv-notedraw-']")
       );
+      const standaloneWebviewerRoot = leaf.querySelector<HTMLElement>(".mwv-root");
+      const isStandaloneWebviewerLeaf = Boolean(standaloneWebviewerRoot);
       // Ordinary notes are never normal cleanup targets. The only exception
       // is removing marker classes/anchors that this plugin itself left there
       // before leaf ownership was enforced; native NoteDraw state is retained.
       if (!noteWebLeaf && !hasMwvResidue) continue;
       const hasMobileWebviewerSurface = Array.from(leaf.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))
-        .some((surface) => surface.isConnected && this.isMobileWebviewerSurface(surface));
+        .some((surface) => surface.isConnected && !surface.matches(".mwv-root") && this.isMobileWebviewerSurface(surface));
+      const hasMobileWebviewerWebMode = Array.from(leaf.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))
+        .some((surface) => surface.isConnected && !surface.matches(".mwv-root") && this.isMobileWebviewerSurface(surface) && this.isNoteBrowserWebMode(surface));
 
       leaf.querySelectorAll<NoteDrawButtonElement>(".view-actions .notedraw-header-button").forEach((button) => {
         const hadHeaderProxy = button.hasClass("mwv-notedraw-header-proxy");
         const staleWebviewController = button._noteDrawController?.surfaceType === "webview" &&
-          (noteWebLeaf || button.hasClass("mwv-notedraw-header-proxy") || button.hasClass("mwv-notedraw-webviewer-header-hidden"));
-        if (hasMobileWebviewerSurface && button.hasClass("mwv-notedraw-webviewer-header-hidden")) {
+          (hasMobileWebviewerWebMode || hadHeaderProxy || (!hasMobileWebviewerSurface && button.hasClass("mwv-notedraw-webviewer-header-hidden")));
+        // The hidden marker belongs only to Web mode. When switching back to
+        // Note mode, let this pass restore the native NoteDraw button instead
+        // of leaving the old Web-mode toolbar state behind.
+        if (hasMobileWebviewerWebMode && button.hasClass("mwv-notedraw-webviewer-header-hidden")) {
           return;
         }
         const hadMobileWebviewerState =
@@ -5880,6 +5895,30 @@ export default class MobileWebviewerPlugin extends Plugin {
           }
         }
       });
+
+      if (isStandaloneWebviewerLeaf) {
+        // The standalone Mobile Webviewer never owns a NoteDraw surface. Any
+        // old toolbar/canvas left there by a previous plugin version is stale
+        // and must not follow the user into the Markdown NoteWeb leaf.
+        leaf.querySelectorAll<HTMLElement>(
+          ".mwv-root .notedraw-toolbar, .mwv-root .notedraw-palette-panel, .mwv-root .notedraw-brush-panel, .mwv-root .notedraw-text-panel, .mwv-root .notedraw-selection-menu, .mwv-root .notedraw-format-toolbar, .mwv-root .notedraw-canvas, .mwv-root .notedraw-static-canvas, .mwv-root .notedraw-embed-layer"
+        ).forEach((element) => element.remove());
+        leaf.querySelectorAll<NoteDrawButtonElement>(NOTEDRAW_BUTTON_SELECTOR).forEach((button) => {
+          const controller = button._noteDrawController;
+          const pluginOwned = Boolean(
+            controller?.surfaceType === "webview" ||
+            button.hasClass("mwv-notedraw-source-button") ||
+            button.hasClass("mwv-notedraw-top-button") ||
+            button.hasClass("mwv-notedraw-header-proxy") ||
+            button.hasClass("mwv-notedraw-activation-proxy") ||
+            button.hasClass("mwv-notedraw-webviewer-header-hidden")
+          );
+          if (!pluginOwned) return;
+          button.remove();
+        });
+        leaf.removeClass("mwv-notedraw-surface-leaf");
+        leaf.querySelectorAll<HTMLElement>(".view-actions > .mwv-notedraw-anchor").forEach((anchor) => anchor.remove());
+      }
 
       if (hasMobileWebviewerSurface) continue;
       leaf.removeClass("mwv-notedraw-surface-leaf");
@@ -7792,6 +7831,27 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.toggleClass("is-web-front", mode === "web");
     embed.toggleClass("is-split-front", mode === "split");
     this.applyNoteBrowserWebIsolation(embed, mode === "web");
+    const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content") ?? embed;
+    if (mode === "web") {
+      // Web mode owns the viewport and must not leave an active NoteDraw
+      // shell, header proxy, or stale toolbar mounted over the guest page.
+      for (const controller of this.collectNoteDrawControllers(embed)) {
+        if (this.isNoteDrawControllerActive(controller)) {
+          this.deactivateNoteDrawControllerFromHeader(controller, embed);
+        }
+      }
+      this.cleanupStaleNoteDrawButtonResidue(leafContent);
+      this.hideNoteDrawHeaderButtonsForWebviewerLeaf(embed);
+    } else {
+      // Reconcile immediately when returning to Note/Split mode so buttons
+      // hidden for Web mode are restored and the current controller is the
+      // only toolbar that survives the mode switch.
+      this.cleanupStaleNoteDrawButtonResidue(leafContent);
+      this.prepareWebviewerDocumentLayout(embed);
+      this.refreshNoteDrawWorkspaceBinding(embed, true, false);
+      this.queueNoteDrawButtonDedupe(embed);
+      this.queueNoteDrawControllerSync(embed, true);
+    }
     embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
       button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
     });
@@ -8529,6 +8589,11 @@ export default class MobileWebviewerPlugin extends Plugin {
         const currentUrl = failedUrl ?? embed.dataset.url ?? url;
         this.updateEmbedStatus(embed, currentUrl, hostName(currentUrl));
         void this.addConsole("warn", `Note Browser load issue: ${message}`, currentUrl);
+        // In Web mode the guest page is the primary surface. Do not let a
+        // transient top-level load error replace it with reader HTML after
+        // the first paint; that replacement is the source of the delayed
+        // "good for a moment, then broken" layout.
+        if (embed.hasClass("is-web-front")) return;
         void this.renderEmbedReaderFallback(embed, currentUrl, message);
         this.notifyNoteDrawWebviewChanged(embed);
       },
@@ -11106,8 +11171,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     }) as EventListener);
     listen("did-fail-load", ((event: Event) => {
       if (!this.isBrowserSurfaceReady(webview)) return;
-      const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
+      const detail = event as Event & {
+        errorDescription?: string;
+        validatedURL?: string;
+        errorCode?: number;
+        isMainFrame?: boolean;
+      };
       if (detail.errorCode === -3) return;
+      // A real page routinely contains third-party frames that fail or are
+      // blocked independently of the top-level document. Treating those
+      // failures as a page failure replaces the already-rendered raw page
+      // with the reader fallback a moment after first paint.
+      if (detail.isMainFrame === false) return;
       webview.addClass("has-load-error");
       void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || this.safeWebviewUrl(webview));
     }) as EventListener);
