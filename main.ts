@@ -2464,6 +2464,10 @@ interface NoteDrawWindowApi {
 
 interface NoteDrawPluginLike {
   syncWebviewControllers?: () => void;
+  syncRenderedMarkdownAnnotations?: () => void;
+  syncSourceControllers?: () => void;
+  syncMarkdownControllerModes?: () => void;
+  syncEmbeddedMarkdownControllers?: () => void;
   webviewControllers?: Map<HTMLElement, NoteDrawControllerLike>;
   drawingPathForFile?: (file?: NoteDrawFileLike) => string;
   writeDrawings?: (file?: NoteDrawFileLike, data?: unknown) => Promise<void>;
@@ -2495,6 +2499,7 @@ interface NoteBrowserNativeBinding {
     originalDisabled: boolean;
   }>;
   originalPaneMenu?: (menu: Menu, source: string) => any;
+  guardedPaneMenu?: (menu: Menu, source: string) => any;
   originalSetState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
   guardedSetState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
 }
@@ -4833,6 +4838,7 @@ class MobileWebviewerView extends ItemView {
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
     root?.toggleClass("is-raw-web", enabled && this.frontendMode === "web");
     root?.toggleAttribute("data-notedraw-ignore", enabled && this.frontendMode === "web");
+    if (root) this.plugin.applyBrowserRuntimeClasses(root);
     this.homeEl.toggleClass("is-visible", !enabled || this.frontendMode !== "web");
     if (enabled) {
       this.surfaceEl.removeClass("is-hidden");
@@ -4854,6 +4860,7 @@ class MobileWebviewerView extends ItemView {
     const root = this.containerEl.children[1] as HTMLElement | undefined;
     root?.toggleClass("is-raw-web", wrap.hasClass("is-live-page") && mode === "web");
     root?.toggleAttribute("data-notedraw-ignore", wrap.hasClass("is-live-page") && mode === "web");
+    if (root) this.plugin.applyBrowserRuntimeClasses(root);
     wrap.toggleClass("is-note-front", mode === "note");
     wrap.toggleClass("is-web-front", mode === "web");
     wrap.toggleClass("is-split-front", mode === "split");
@@ -5502,6 +5509,12 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawRawSurfaceGuardPlugin: NoteDrawPluginLike | null = null;
   noteDrawRawSurfaceGuardOriginal: (() => void) | null = null;
   noteDrawRawSurfaceGuardWrapper: (() => void) | null = null;
+  noteDrawRawSurfaceGuardMethodPatches: Array<{
+    plugin: NoteDrawPluginLike;
+    key: "syncRenderedMarkdownAnnotations" | "syncSourceControllers" | "syncMarkdownControllerModes" | "syncEmbeddedMarkdownControllers";
+    original: (...args: unknown[]) => unknown;
+    wrapper: (...args: unknown[]) => unknown;
+  }> = [];
   noteDrawRawSurfaceGuardRetryTimers: number[] = [];
   noteDrawRawSurfaceGuardRunning = false;
   noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, NoteBrowserNativeBinding>();
@@ -5585,6 +5598,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.installNoteDrawDedupeObserver();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.installNoteDrawRawSurfaceGuard();
+      this.disposeAllRawNoteDrawControllers();
       this.enforceNoteBrowserReadingMode();
       this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
@@ -5604,6 +5618,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       // Sweep every leaf because the previous NoteWeb leaf is not included in
       // the active-leaf event payload and can otherwise retain its z-index or
       // hidden-toolbar classes when the user opens a normal Markdown note.
+      this.disposeAllRawNoteDrawControllers();
+      void this.disposeInactiveNoteWebControllers(leaf);
       this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
     }));
@@ -5683,26 +5699,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   onunload(): void {
     this.restoreNoteDrawRawSurfaceGuard();
     if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
-    for (const binding of this.noteBrowserNativeBindingRecords) {
-      binding.modeAction?.remove();
-      binding.hiddenEditButtons.forEach((button) => button.removeClass("mwv-note-browser-replaced-edit-action"));
-      binding.navButtons.forEach((entry) => {
-        entry.element.removeEventListener("click", entry.handler, true);
-        entry.element.removeClass("mwv-note-browser-native-nav");
-        entry.element.removeClass("is-disabled");
-        entry.element.removeAttribute("aria-disabled");
-        (entry.element as HTMLButtonElement).disabled = entry.originalDisabled;
-      });
-      if (binding.originalPaneMenu) {
-        binding.view.onPaneMenu = binding.originalPaneMenu;
-      } else {
-        delete binding.view.onPaneMenu;
-      }
-      if (binding.originalSetState && binding.view.setState === binding.guardedSetState) {
-        binding.view.setState = binding.originalSetState;
-      }
-    }
-    this.noteBrowserNativeBindingRecords.clear();
+    for (const binding of [...this.noteBrowserNativeBindingRecords]) this.restoreNoteBrowserNativeBinding(binding);
     // Preserve user-arranged leaves when the plugin unloads.
   }
 
@@ -5858,6 +5855,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   cleanupStaleNoteDrawButtonResidue(scope: HTMLElement = this.app.workspace.containerEl): void {
+    this.restoreStaleNoteBrowserNativeBindings();
     const leaves = scope.matches(".workspace-leaf-content")
       ? [scope]
       : Array.from(scope.querySelectorAll<HTMLElement>(".workspace-leaf-content"));
@@ -5870,6 +5868,40 @@ export default class MobileWebviewerPlugin extends Plugin {
       );
       const standaloneWebviewerRoot = leaf.querySelector<HTMLElement>(".mwv-root");
       const isStandaloneWebviewerLeaf = Boolean(standaloneWebviewerRoot);
+      if (!noteWebLeaf) {
+        // A MarkdownView can be reused for a different file before Obsidian
+        // rebuilds its header DOM. Remove only the classes/elements owned by
+        // NoteWeb so the ordinary note's native toolbar remains authoritative.
+        leaf.querySelectorAll<HTMLElement>(
+          ".mwv-note-browser-mode-action, .mwv-note-browser-native-nav, .mwv-note-browser-replaced-edit-action, .mwv-note-browser-native-title"
+        ).forEach((element) => {
+          element.removeClass("mwv-note-browser-mode-action");
+          element.removeClass("mwv-note-browser-native-nav");
+          element.removeClass("mwv-note-browser-replaced-edit-action");
+          element.removeClass("mwv-note-browser-native-title");
+          element.removeAttribute("aria-disabled");
+          if (element instanceof HTMLButtonElement && element.disabled) element.disabled = false;
+        });
+        const staleWebviewControllers = new Set<NoteDrawControllerLike>();
+        leaf.querySelectorAll<NoteDrawButtonElement>(".view-actions .notedraw-header-button, .notedraw-webview-button").forEach((button) => {
+          const controller = button._noteDrawController;
+          const hasMobileWebviewerMarker = [
+            "mwv-notedraw-source-button",
+            "mwv-notedraw-top-button",
+            "mwv-notedraw-header-proxy",
+            "mwv-notedraw-activation-proxy",
+            "mwv-notedraw-webviewer-header-hidden"
+          ].some((className) => button.hasClass(className));
+          const isDisconnectedWebviewController = controller?.surfaceType === "webview" && !controller.previewEl?.isConnected;
+          if (controller?.surfaceType === "webview" && (hasMobileWebviewerMarker || isDisconnectedWebviewController)) {
+            staleWebviewControllers.add(controller);
+          }
+          if (hasMobileWebviewerMarker || isDisconnectedWebviewController) button.remove();
+        });
+        for (const controller of staleWebviewControllers) {
+          try { controller.destroy?.(); } catch (error) { console.warn("[mobile-webviewer] stale NoteWeb controller cleanup skipped", error); }
+        }
+      }
       // Ordinary notes are never normal cleanup targets. The only exception
       // is removing marker classes/anchors that this plugin itself left there
       // before leaf ownership was enforced; native NoteDraw state is retained.
@@ -6242,6 +6274,52 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     } catch (error) {
       console.warn("[mobile-webviewer] NoteDraw webview tool switch skipped", error);
+    }
+  }
+
+  restoreNoteBrowserNativeBinding(binding: NoteBrowserNativeBinding): void {
+    const { leaf, view } = binding;
+    binding.modeAction?.remove();
+    binding.hiddenEditButtons.forEach((button) => {
+      if (!button.isConnected) return;
+      button.removeClass("mwv-note-browser-replaced-edit-action");
+    });
+    binding.navButtons.forEach((entry) => {
+      entry.element.removeEventListener("click", entry.handler, true);
+      entry.element.removeClass("mwv-note-browser-native-nav");
+      entry.element.removeClass("is-disabled");
+      entry.element.removeAttribute("aria-disabled");
+      if (entry.element instanceof HTMLButtonElement) entry.element.disabled = entry.originalDisabled;
+    });
+    binding.navButtons = [];
+    if (view.onPaneMenu === binding.guardedPaneMenu) {
+      if (binding.originalPaneMenu) view.onPaneMenu = binding.originalPaneMenu;
+      else delete view.onPaneMenu;
+    }
+    if (binding.originalSetState && view.setState === binding.guardedSetState) view.setState = binding.originalSetState;
+    const container = leaf.view?.containerEl;
+    const file = (leaf.view as { file?: unknown } | undefined)?.file;
+    const fallbackTitle = file instanceof TFile ? file.basename : leaf.view?.getDisplayText?.();
+    const leafEl = container?.closest<HTMLElement>(".workspace-leaf") ?? container;
+    const tabTitle = (leaf as WorkspaceLeaf & { tabHeaderInnerTitleEl?: HTMLElement }).tabHeaderInnerTitleEl;
+    const titles = [
+      ...(leafEl ? Array.from(leafEl.querySelectorAll<HTMLElement>(".view-header-title")) : []),
+      ...(tabTitle ? [tabTitle] : [])
+    ];
+    titles.forEach((title) => {
+      title.removeClass("mwv-note-browser-native-title");
+      if (fallbackTitle) {
+        title.setText(fallbackTitle);
+        title.setAttribute("title", fallbackTitle);
+      }
+    });
+    this.noteBrowserNativeBindings.delete(leaf);
+    this.noteBrowserNativeBindingRecords.delete(binding);
+  }
+
+  restoreStaleNoteBrowserNativeBindings(): void {
+    for (const binding of [...this.noteBrowserNativeBindingRecords]) {
+      if (!this.isNoteBrowserLeaf(binding.leaf)) this.restoreNoteBrowserNativeBinding(binding);
     }
   }
 
@@ -6940,12 +7018,75 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  getNoteDrawDocuments(): Document[] {
+    const activeWindow = (window as Window & { activeWindow?: Window }).activeWindow;
+    return [...new Set([
+      appDocument(),
+      window.document,
+      activeWindow?.document
+    ].filter((documentEl): documentEl is Document => Boolean(documentEl)))];
+  }
+
+  isRawNoteWebLeaf(leaf?: WorkspaceLeaf | null): boolean {
+    if (!this.isNoteBrowserLeaf(leaf)) return false;
+    const container = leaf?.view?.containerEl;
+    return Boolean(container?.querySelector?.(
+      ".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front"
+    ));
+  }
+
+  runNoteDrawWithoutRawNoteWebLeaves<T>(task: () => T): T {
+    const workspace = this.app.workspace as typeof this.app.workspace & {
+      getLeavesOfType?: (viewType?: string) => WorkspaceLeaf[];
+    };
+    const nativeGetLeavesOfType = workspace.getLeavesOfType;
+    if (typeof nativeGetLeavesOfType !== "function") return task();
+    const guardedGetLeavesOfType = (viewType?: string): WorkspaceLeaf[] => {
+      const leaves = (nativeGetLeavesOfType.call(workspace, viewType) ?? []) as WorkspaceLeaf[];
+      if (viewType !== "markdown") return leaves;
+      return leaves.filter((leaf) => !this.isRawNoteWebLeaf(leaf));
+    };
+    workspace.getLeavesOfType = guardedGetLeavesOfType;
+    try {
+      return task();
+    } finally {
+      if (workspace.getLeavesOfType === guardedGetLeavesOfType) {
+        workspace.getLeavesOfType = nativeGetLeavesOfType;
+      }
+    }
+  }
+
+  installNoteDrawMarkdownSyncGuards(plugin: NoteDrawPluginLike): void {
+    const keys: Array<"syncRenderedMarkdownAnnotations" | "syncSourceControllers" | "syncMarkdownControllerModes" | "syncEmbeddedMarkdownControllers"> = [
+      "syncRenderedMarkdownAnnotations",
+      "syncSourceControllers",
+      "syncMarkdownControllerModes",
+      "syncEmbeddedMarkdownControllers"
+    ];
+    for (const key of keys) {
+      const original = plugin[key];
+      if (typeof original !== "function") continue;
+      if (this.noteDrawRawSurfaceGuardMethodPatches.some((patch) => patch.plugin === plugin && patch.key === key)) continue;
+      const wrapper = (...args: unknown[]) => this.runNoteDrawWithoutRawNoteWebLeaves(() => original.apply(plugin, args));
+      plugin[key] = wrapper as never;
+      this.noteDrawRawSurfaceGuardMethodPatches.push({ plugin, key, original, wrapper });
+    }
+  }
+
   installNoteDrawRawSurfaceGuard(): void {
     const attempt = () => {
-      if (this.noteDrawRawSurfaceGuardWrapper) return;
       const plugin = this.getNoteDrawPlugin();
+      if (!plugin) return;
+      if (
+        this.noteDrawRawSurfaceGuardWrapper &&
+        this.noteDrawRawSurfaceGuardPlugin === plugin &&
+        plugin.syncWebviewControllers === this.noteDrawRawSurfaceGuardWrapper
+      ) return;
+      // NoteDraw can be reloaded independently while Mobile Webviewer stays
+      // enabled. Rebind every guard to the replacement plugin instance.
+      if (this.noteDrawRawSurfaceGuardWrapper) this.restoreNoteDrawRawSurfaceGuard();
       const original = plugin?.syncWebviewControllers;
-      if (!plugin || typeof original !== "function") return;
+      if (typeof original !== "function") return;
 
       const guarded = original.bind(plugin);
       const wrapper = () => {
@@ -6954,15 +7095,28 @@ export default class MobileWebviewerPlugin extends Plugin {
         // boundary. This prevents PreviewDrawingController.mount() from ever
         // touching the real page; post-mount hiding cannot prevent layout
         // changes that have already happened.
-        const documentEl = appDocument();
-        const nativeQuerySelectorAll = documentEl.querySelectorAll.bind(documentEl);
-        const ownDescriptor = Object.getOwnPropertyDescriptor(documentEl, "querySelectorAll");
-        const guardedQuerySelectorAll = (selectors: string): NodeListOf<Element> => {
-          const result = nativeQuerySelectorAll(selectors);
-          if (!this.noteDrawRawSurfaceGuardRunning || typeof selectors !== "string") return result;
-          if (!/(mwv-embed|webview|iframe|view-content|browser)/i.test(selectors)) return result;
-          const filtered = Array.from(result).filter((candidate) => !this.isRawNoteDrawExcludedSurface(candidate as Element));
-          return filtered as unknown as NodeListOf<Element>;
+        const documents = this.getNoteDrawDocuments();
+        const patches: Array<{ documentEl: Document; descriptor?: PropertyDescriptor }> = [];
+        const patchDocument = (documentEl: Document) => {
+          const nativeQuerySelectorAll = documentEl.querySelectorAll.bind(documentEl);
+          const ownDescriptor = Object.getOwnPropertyDescriptor(documentEl, "querySelectorAll");
+          const guardedQuerySelectorAll = (selectors: string): NodeListOf<Element> => {
+            const result = nativeQuerySelectorAll(selectors);
+            if (!this.noteDrawRawSurfaceGuardRunning || typeof selectors !== "string") return result;
+            if (!/(mwv-embed|webview|iframe|view-content|browser)/i.test(selectors)) return result;
+            const filtered = Array.from(result).filter((candidate) => !this.isRawNoteDrawExcludedSurface(candidate as Element));
+            return filtered as unknown as NodeListOf<Element>;
+          };
+          try {
+            Object.defineProperty(documentEl, "querySelectorAll", {
+              configurable: true,
+              value: guardedQuerySelectorAll
+            });
+            patches.push({ documentEl, descriptor: ownDescriptor });
+          } catch {
+            // A host document may be non-extensible; other documents can still
+            // be guarded and the controller sweep below remains as a fallback.
+          }
         };
 
         if (this.noteDrawRawSurfaceGuardRunning) {
@@ -6971,21 +7125,15 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
         this.noteDrawRawSurfaceGuardRunning = true;
         try {
-          try {
-            Object.defineProperty(documentEl, "querySelectorAll", {
-              configurable: true,
-              value: guardedQuerySelectorAll
-            });
-          } catch {
-            // A host document may be non-extensible. The controller sweep in
-            // finally still handles controllers mounted by older versions.
-          }
+          documents.forEach((documentEl) => patchDocument(documentEl));
           guarded();
         } finally {
-          if (ownDescriptor) {
-            try { Object.defineProperty(documentEl, "querySelectorAll", ownDescriptor); } catch { /* noop */ }
-          } else {
-            try { Reflect.deleteProperty(documentEl, "querySelectorAll"); } catch { /* noop */ }
+          for (const { documentEl, descriptor } of patches) {
+            if (descriptor) {
+              try { Object.defineProperty(documentEl, "querySelectorAll", descriptor); } catch { /* noop */ }
+            } else {
+              try { Reflect.deleteProperty(documentEl, "querySelectorAll"); } catch { /* noop */ }
+            }
           }
           this.noteDrawRawSurfaceGuardRunning = false;
           this.disposeAllRawNoteDrawControllers();
@@ -6995,6 +7143,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.noteDrawRawSurfaceGuardPlugin = plugin;
       this.noteDrawRawSurfaceGuardOriginal = original;
       this.noteDrawRawSurfaceGuardWrapper = wrapper;
+      this.installNoteDrawMarkdownSyncGuards(plugin);
       plugin.syncWebviewControllers = wrapper;
       this.disposeAllRawNoteDrawControllers();
     };
@@ -7017,6 +7166,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (plugin && this.noteDrawRawSurfaceGuardWrapper && plugin.syncWebviewControllers === this.noteDrawRawSurfaceGuardWrapper) {
       if (this.noteDrawRawSurfaceGuardOriginal) plugin.syncWebviewControllers = this.noteDrawRawSurfaceGuardOriginal;
     }
+    for (const patch of this.noteDrawRawSurfaceGuardMethodPatches) {
+      if (patch.plugin[patch.key] === patch.wrapper) {
+        patch.plugin[patch.key] = patch.original as never;
+      }
+    }
+    this.noteDrawRawSurfaceGuardMethodPatches = [];
     this.noteDrawRawSurfaceGuardPlugin = null;
     this.noteDrawRawSurfaceGuardOriginal = null;
     this.noteDrawRawSurfaceGuardWrapper = null;
@@ -7077,9 +7232,31 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   disposeAllRawNoteDrawControllers(): void {
-    const documentEl = appDocument();
-    documentEl.querySelectorAll<HTMLElement>(".mwv-root.is-raw-web, .mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")
-      .forEach((root) => this.disposeNoteDrawControllersForRawSurface(root));
+    const roots = new Set<HTMLElement>();
+    for (const documentEl of this.getNoteDrawDocuments()) {
+      documentEl.querySelectorAll<HTMLElement>(".mwv-root.is-raw-web, .mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")
+        .forEach((root) => roots.add(root));
+    }
+    roots.forEach((root) => this.disposeNoteDrawControllersForRawSurface(root));
+    const plugin = this.getNoteDrawPlugin();
+    const detached = new Set<NoteDrawControllerLike>();
+    plugin?.webviewControllers?.forEach((controller, surface) => {
+      const preview = controller?.previewEl;
+      const isRaw = this.isRawNoteDrawExcludedSurface(surface) || this.isRawNoteDrawExcludedSurface(preview);
+      if (isRaw) detached.add(controller);
+    });
+    for (const controller of detached) {
+      plugin?.webviewControllers?.forEach((candidate, surface) => {
+        if (candidate === controller) plugin.webviewControllers?.delete(surface);
+      });
+      const controls = ["button", "toolbar", "formatToolbar", "palettePanel", "brushPanel", "textPanel", "selectionMenu", "canvas", "staticCanvas", "embedLayer", "underlayEmbedLayer", "underlayCanvas", "fileInput"];
+      for (const key of controls) {
+        const element = (controller as NoteDrawControllerLike & Record<string, unknown>)[key];
+        if (element instanceof HTMLElement && element.isConnected) element.remove();
+      }
+      void this.flushNoteDrawDrawingNow(controller);
+      try { controller.destroy?.(); } catch (error) { console.warn("[mobile-webviewer] detached raw NoteDraw dispose skipped", error); }
+    }
   }
 
   getNoteDrawPlugin(): NoteDrawPluginLike | null {
@@ -7209,17 +7386,31 @@ export default class MobileWebviewerPlugin extends Plugin {
         const element = (controller as NoteDrawControllerLike & Record<string, unknown>)[key];
         if (element instanceof HTMLElement && element.isConnected) detachedControls.add(element);
       }
-      await this.flushNoteDrawDrawingNow(controller);
+      const flush = this.flushNoteDrawDrawingNow(controller);
       try {
         controller.destroy?.();
       } catch (error) {
         console.warn("[mobile-webviewer] NoteDraw controller reset skipped", error);
       }
+      await flush;
     }
     root.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR).forEach((button) => button.remove());
     root.querySelectorAll<HTMLElement>(".notedraw-toolbar, .notedraw-palette-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-embed-layer, .notedraw-file-input, .notedraw-canvas").forEach((element) => element.remove());
     detachedControls.forEach((element) => element.remove());
     (root as NoteDrawSurfaceElement)._noteDrawController = undefined;
+  }
+
+  async disposeInactiveNoteWebControllers(activeLeaf?: WorkspaceLeaf | null): Promise<void> {
+    const roots: HTMLElement[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf === activeLeaf || !this.isNoteBrowserLeaf(leaf)) return;
+      const container = leaf.view?.containerEl;
+      if (!container?.isConnected) return;
+      container.querySelectorAll<HTMLElement>(".mwv-embed[data-url]").forEach((root) => roots.push(root));
+    });
+    for (const root of roots) {
+      if (root.isConnected) await this.resetNoteDrawWebviewControllers(root);
+    }
   }
 
   ensureNoteDrawControllerButtonAnchored(controller?: NoteDrawControllerLike | null): void {
@@ -7884,7 +8075,7 @@ export default class MobileWebviewerPlugin extends Plugin {
           if (checked !== undefined) item.setChecked(checked);
         });
       };
-      view.onPaneMenu = (menu: Menu, source: string) => {
+      const guardedPaneMenu = (menu: Menu, source: string) => {
         originalPaneMenu?.call(view, menu, source);
         const current = findEmbed();
         if (!current) return;
@@ -7901,6 +8092,8 @@ export default class MobileWebviewerPlugin extends Plugin {
           if (chrome) this.toggleMorePanel(current, chrome, current.dataset.url || this.settings.homeUrl, current.dataset.mwvCurrentTitle || "");
         });
       };
+      binding.guardedPaneMenu = guardedPaneMenu;
+      view.onPaneMenu = guardedPaneMenu;
       if (typeof view.addAction === "function") {
         const modeAction = view.addAction("file-text", this.tr("note"), () => undefined);
         modeAction.addClass("mwv-note-browser-mode-action");
@@ -8010,6 +8203,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     void this.saveSettings();
     embed.toggleClass("is-web-front", mode === "web");
     embed.toggleClass("is-split-front", mode === "split");
+    this.applyBrowserRuntimeClasses(embed);
     this.applyNoteBrowserWebIsolation(embed, mode === "web");
     const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content") ?? embed;
     if (mode === "web") {
@@ -12344,6 +12538,28 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   applyBrowserRuntimeClasses(root: HTMLElement): void {
+    const rawSurface = root.matches(
+      ".mwv-root.is-raw-web, .mwv-root[data-notedraw-ignore], .mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front"
+    );
+    if (rawSurface) {
+      // A raw page is rendered by the site itself. Remove every host-side
+      // presentation class before/after the live WebView is attached so a
+      // delayed settings/layout pass cannot apply night mode, rotation,
+      // image hiding, RTL, or reader scaling to the original page surface.
+      root.removeClass("mwv-night-mode");
+      root.removeClass("mwv-no-images");
+      root.removeClass("mwv-eye-protection");
+      root.removeClass("mwv-adblock-on");
+      root.removeClass("mwv-mark-ads");
+      root.removeClass("mwv-incognito");
+      root.removeClass("mwv-fullscreen");
+      root.removeClass("mwv-rotated");
+      root.removeAttribute("dir");
+      root.removeAttribute("lang");
+      root.style.removeProperty("--mwv-reader-font-scale");
+      root.style.removeProperty("--mwv-page-zoom");
+      return;
+    }
     root.toggleClass("mwv-night-mode", this.settings.nightMode);
     root.toggleClass("mwv-no-images", this.settings.noImageMode);
     root.toggleClass("mwv-eye-protection", this.settings.eyeProtectionMode);
@@ -12443,9 +12659,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         // The webview may not be ready yet; dom-ready reapplies zoom.
       }
     } else {
-      frame.setCssStyles({ zoom: `${zoom}%` });
+      frame.setCssStyles({ zoom: rawWebview ? "1" : `${zoom}%` });
     }
-    frame.toggleClass("mwv-desktop-frame", this.settings.desktopMode);
+    frame.toggleClass("mwv-desktop-frame", !rawWebview && this.settings.desktopMode);
   }
 
   applyFramePreferencesIn(root: HTMLElement): void {
