@@ -2324,6 +2324,9 @@ interface BrowserConsoleEntry {
 }
 
 interface ElectronWebviewElement extends HTMLElement {
+  _mwvReady?: boolean;
+  _mwvDestroyed?: boolean;
+  _mwvDispose?: () => void;
   src: string;
   loadURL?: (url: string) => void;
   reload?: () => void;
@@ -2346,6 +2349,8 @@ interface ElectronWebviewElement extends HTMLElement {
 type BrowserSurfaceElement = HTMLIFrameElement | ElectronWebviewElement;
 
 interface BrowserSurfaceCallbacks {
+  /** Keep the guest page completely untouched: no bridge, filters, CSS, or zoom. */
+  raw?: boolean;
   onReady?: () => void | Promise<void>;
   onNavigate?: (url: string) => void | Promise<void>;
   onTitle?: (title: string) => void | Promise<void>;
@@ -3694,8 +3699,6 @@ class MobileWebviewerView extends ItemView {
   currentWebNote?: WebNoteEntry;
   webNoteSaveTimer?: number;
   webNoteDoodleSaveTimer?: number;
-  noteDrawPageRefreshTimer?: number;
-  noteDrawPageRefreshForceEdit = false;
   activeDoodlePath?: SVGPathElement;
   activeDoodlePointerId?: number;
   activeDoodleSvg?: SVGSVGElement;
@@ -3732,10 +3735,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    if (this.noteDrawPageRefreshTimer) {
-      window.clearTimeout(this.noteDrawPageRefreshTimer);
-      this.noteDrawPageRefreshTimer = undefined;
-    }
+    this.plugin.disposeBrowserSurface(this.surfaceEl);
     await this.saveCurrentWebNoteNow();
   }
 
@@ -3792,6 +3792,7 @@ class MobileWebviewerView extends ItemView {
     this.buildHome();
 
     this.surfaceEl = this.plugin.createBrowserSurface(frameWrap, "", "mwv-frame", this.plugin.tr("noteBrowser"), {
+      raw: true,
       onReady: () => this.handleSurfaceReady(),
       onNavigate: (url) => this.handleSurfaceNavigate(url),
       onTitle: (title) => this.handleSurfaceTitle(title),
@@ -3925,15 +3926,12 @@ class MobileWebviewerView extends ItemView {
   }
 
   queueNoteDrawPageRefresh(forceEditMode = false): void {
-    this.noteDrawPageRefreshForceEdit ||= forceEditMode;
-    if (this.noteDrawPageRefreshTimer) window.clearTimeout(this.noteDrawPageRefreshTimer);
-    this.noteDrawPageRefreshTimer = window.setTimeout(() => {
-      this.noteDrawPageRefreshTimer = undefined;
-      const root = this.containerEl.children[1] as HTMLElement | undefined;
-      const shouldForceEdit = this.noteDrawPageRefreshForceEdit;
-      this.noteDrawPageRefreshForceEdit = false;
-      if (root?.isConnected) this.plugin.notifyNoteDrawWebviewChanged(root, shouldForceEdit);
-    }, 60);
+    // The standalone browser view is intentionally independent from NoteDraw.
+    // A delayed controller refresh used to mount a second canvas over a page
+    // shortly after first paint, which made the raw WebView jump or collapse.
+    // NoteDraw remains available to ordinary Markdown notes and is handled by
+    // the Markdown embed path only.
+    void forceEditMode;
   }
 
   handleSurfaceReady(): void {
@@ -4413,7 +4411,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   goBack(): void {
-    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoBack?.()) {
+    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoBack?.()) {
       this.surfaceNavMode = "back";
       this.surfaceEl.goBack?.();
       return;
@@ -4428,7 +4426,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   goForward(): void {
-    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoForward?.()) {
+    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoForward?.()) {
       this.surfaceNavMode = "forward";
       this.surfaceEl.goForward?.();
       return;
@@ -4493,7 +4491,7 @@ class MobileWebviewerView extends ItemView {
       }
       return;
     }
-    if (this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.reload) {
+    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.reload) {
       this.surfaceNavMode = "reload";
       this.surfaceEl.reload();
       return;
@@ -4823,15 +4821,18 @@ class MobileWebviewerView extends ItemView {
 
   setLiveFrameMode(enabled: boolean): void {
     const wrap = this.surfaceEl.parentElement;
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
     wrap?.toggleClass("is-live-page", enabled);
     wrap?.toggleClass("is-note-front", enabled && this.frontendMode === "note");
     wrap?.toggleClass("is-web-front", enabled && this.frontendMode === "web");
     wrap?.toggleClass("is-split-front", enabled && this.frontendMode === "split");
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
-    this.homeEl.addClass("is-visible");
+    root?.toggleClass("is-raw-web", enabled && this.frontendMode === "web");
+    this.homeEl.toggleClass("is-visible", !enabled || this.frontendMode !== "web");
     if (enabled) {
       this.surfaceEl.removeClass("is-hidden");
     } else {
+      root?.removeClass("is-raw-web");
       this.plugin.setBrowserSurfaceUrl(this.surfaceEl, "about:blank");
       this.surfaceEl.addClass("is-hidden");
       this.homeEl.removeClass("mwv-reader-strip");
@@ -4844,6 +4845,8 @@ class MobileWebviewerView extends ItemView {
     void this.plugin.saveSettings();
     const wrap = this.surfaceEl?.parentElement;
     if (!wrap) return;
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
+    root?.toggleClass("is-raw-web", wrap.hasClass("is-live-page") && mode === "web");
     wrap.toggleClass("is-note-front", mode === "note");
     wrap.toggleClass("is-web-front", mode === "web");
     wrap.toggleClass("is-split-front", mode === "split");
@@ -5075,12 +5078,6 @@ class MobileWebviewerView extends ItemView {
     if (this.webNoteDoodleSaveTimer) {
       window.clearTimeout(this.webNoteDoodleSaveTimer);
       this.webNoteDoodleSaveTimer = undefined;
-    }
-    const root = this.containerEl.children[1] as HTMLElement | undefined;
-    if (root) {
-      for (const controller of this.plugin.collectNoteDrawControllers(root)) {
-        if (controller.surfaceType === "webview") void this.plugin.flushNoteDrawDrawingNow(controller);
-      }
     }
     void this.saveCurrentWebNoteNow(status);
   }
@@ -5564,6 +5561,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.installNoteDrawDedupeObserver();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.enforceNoteBrowserReadingMode();
+      this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
       this.app.workspace.containerEl
         .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
@@ -5572,7 +5570,17 @@ export default class MobileWebviewerPlugin extends Plugin {
         });
       this.app.workspace.containerEl
         .querySelectorAll<HTMLElement>(".mwv-note-browser-document")
-        .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
+      .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
+    }));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      // A MarkdownView instance can be reused for another file. Clear the
+      // NoteWeb-only marker/classes before delayed NoteWeb timers get a chance
+      // to style an ordinary note or move its native NoteDraw toolbar.
+      // Sweep every leaf because the previous NoteWeb leaf is not included in
+      // the active-leaf event payload and can otherwise retain its z-index or
+      // hidden-toolbar classes when the user opens a normal Markdown note.
+      this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
+      this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
     }));
 
     this.addRibbonIcon("notebook-tabs", "Note browser", () => {
@@ -5695,6 +5703,12 @@ export default class MobileWebviewerPlugin extends Plugin {
   installNoteDrawDedupeObserver(): void {
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        const mutationTarget = isHtmlElement(mutation.target) ? mutation.target : null;
+        const mutationRoot = mutationTarget?.closest<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR) ??
+          mutationTarget?.closest<HTMLElement>(".mwv-note-browser-document")?.querySelector<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
+        if (mutationRoot && this.isNoteWebOwnedElement(mutationRoot) && this.isNoteBrowserWebMode(mutationRoot)) {
+          this.applyNoteBrowserWebIsolation(mutationRoot, true);
+        }
         for (const node of Array.from(mutation.addedNodes)) {
           if (!isHtmlElement(node)) continue;
           if (!node.matches(NOTEDRAW_BUTTON_SELECTOR) && !node.querySelector(NOTEDRAW_BUTTON_SELECTOR)) continue;
@@ -5753,6 +5767,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       : Array.from(root.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR));
     for (const surface of new Set(baseSurfaces)) {
       if (!this.isMobileWebviewerSurface(surface)) continue;
+      if (this.isNoteBrowserWebMode(surface)) {
+        this.hideNoteDrawHeaderButtonsForWebviewerLeaf(surface);
+        continue;
+      }
       this.prepareWebviewerDocumentLayout(surface);
       const hideSourceButton = (button: HTMLElement) => {
         button.addClass("mwv-notedraw-source-button");
@@ -6550,13 +6568,18 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   queueNoteDrawControllerSync(root?: HTMLElement, forceEditMode = false): void {
     if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (this.isNoteBrowserWebMode(root)) return;
     for (const delay of [0, 80, 220, 520]) {
-      window.setTimeout(() => this.syncNoteDrawControllers(root, forceEditMode), delay);
+      window.setTimeout(() => {
+        if (!root.isConnected || this.isNoteBrowserWebMode(root)) return;
+        this.syncNoteDrawControllers(root, forceEditMode);
+      }, delay);
     }
   }
 
   syncNoteDrawControllers(root?: HTMLElement, forceEditMode = false): void {
     if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (this.isNoteBrowserWebMode(root)) return;
     for (const controller of this.collectNoteDrawControllers(root)) {
       if (!controller.previewEl?.isConnected || controller.surfaceType !== "webview") continue;
       if (!this.isMobileWebviewerSurface(controller.previewEl)) continue;
@@ -6614,6 +6637,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       null;
     if (!documentEl) return;
     if (!this.isNoteWebOwnedElement(documentEl)) return;
+    if (this.isNoteBrowserWebMode(documentEl)) return;
     if (this.settings.noteDrawLegacyWebviewerMigrationVersion >= NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION) {
       documentEl.addClass("mwv-notedraw-legacy-migrated");
       return;
@@ -6648,6 +6672,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async migrateLegacyNoteDrawWebviewer(documentEl: HTMLElement): Promise<boolean> {
     if (!documentEl.isConnected || !this.isNoteWebOwnedElement(documentEl)) return false;
+    if (this.isNoteBrowserWebMode(documentEl)) return false;
     const noteDrawPlugin = this.getNoteDrawPlugin();
     const noteDrawApi = noteDrawPlugin?.api;
     if (typeof noteDrawApi?.readDrawings !== "function" || typeof noteDrawApi.writeDrawings !== "function") return false;
@@ -6908,6 +6933,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   refreshNoteDrawWorkspaceBinding(root?: HTMLElement, forceEditMode = false, emitWorkspaceEvents = true): void {
     if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (this.isNoteBrowserWebMode(root)) return;
 
     // Do not synthesize workspace layout/leaf/file events here. NoteDraw
     // handles those events globally and would rescan ordinary Markdown
@@ -6924,7 +6950,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     // The real web page owns the viewport in Web mode. NoteDraw's Markdown
     // virtual-height pass is for the note view and can otherwise feed the
     // live page's measured height back into the parent layout.
-    if (root.matches(".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")) return;
+    if (this.isNoteBrowserWebMode(root)) {
+      const embed = root.matches(MWV_DEDUPE_ROOT_SELECTOR) ? root : root.querySelector<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR);
+      if (embed) this.applyNoteBrowserWebIsolation(embed, true);
+      return;
+    }
     const delays = [0, 80, 180, 420, 900, 1600];
     delays.forEach((delay, index) => {
       window.setTimeout(() => {
@@ -7379,7 +7409,12 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   setNoteBrowserReadingMode(leaf: WorkspaceLeaf): void {
     const view = leaf.view as { setState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>; getState?: () => Record<string, unknown> };
+    const isStillNoteBrowser = () => {
+      const file = (leaf.view as { file?: unknown } | undefined)?.file;
+      return leaf.view === view && file instanceof TFile && file.path === WEBVIEW_NOTE_PATH;
+    };
     const applyReadingMode = () => {
+      if (!isStillNoteBrowser()) return;
       try {
         const state = view.getState?.() ?? {};
         if (state.mode === "preview" && state.source === false) return;
@@ -7391,8 +7426,24 @@ export default class MobileWebviewerPlugin extends Plugin {
     applyReadingMode();
     for (const delay of [80, 240, 600]) {
       window.setTimeout(() => {
-        if (leaf.view === view) applyReadingMode();
+        if (isStillNoteBrowser()) applyReadingMode();
       }, delay);
+    }
+  }
+
+  cleanupNoteBrowserDocumentResidue(scope: HTMLElement = this.app.workspace.containerEl): void {
+    const documents = scope.matches(".mwv-note-browser-document")
+      ? [scope]
+      : Array.from(scope.querySelectorAll<HTMLElement>(".mwv-note-browser-document"));
+    for (const documentEl of documents) {
+      const leaf = this.findWorkspaceLeafForElement(documentEl);
+      const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+      if (file instanceof TFile && file.path === WEBVIEW_NOTE_PATH) continue;
+      documentEl.removeClass("mwv-note-browser-document");
+      documentEl.removeClass("mwv-notedraw-legacy-migrated");
+      documentEl.querySelectorAll<HTMLElement>(".mwv-note-browser-redundant-title").forEach((title) => {
+        title.removeClass("mwv-note-browser-redundant-title");
+      });
     }
   }
 
@@ -7458,7 +7509,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvRendering = this.processorSessionId;
       embed.dataset.mwvBack = JSON.stringify(this.settings.noteBrowserBack ?? []);
       embed.dataset.mwvForward = JSON.stringify(this.settings.noteBrowserForward ?? []);
-      embed.dataset.mwvBrowserMode = "note";
+      embed.dataset.mwvBrowserMode = this.settings.browserFrontendMode === "web" ? "web" : "note";
       const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
       embed.dataset.mwvActiveTabId = tab.id;
       const url = this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl;
@@ -7523,7 +7574,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvRecovered = "true";
       const url = this.settings.noteBrowserUrl || this.settings.homeUrl;
       embed.dataset.url = url;
-      embed.dataset.mwvBrowserMode = "note";
+      embed.dataset.mwvBrowserMode = this.settings.browserFrontendMode === "web" ? "web" : "note";
       embed.setAttribute("data-url", url);
     }
   }
@@ -7736,8 +7787,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       ":scope > .mwv-live-browser > .mwv-live-frame"
     );
     embed.dataset.mwvBrowserMode = mode;
+    this.settings.browserFrontendMode = mode === "web" ? "web" : "note";
+    void this.saveSettings();
     embed.toggleClass("is-web-front", mode === "web");
     embed.toggleClass("is-split-front", mode === "split");
+    this.applyNoteBrowserWebIsolation(embed, mode === "web");
     embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
       button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
     });
@@ -7760,6 +7814,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const surface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
     if (this.isElectronWebview(surface)) {
       try {
+        if (!this.isBrowserSurfaceReady(surface)) return false;
         if (direction === "back" && surface.canGoBack?.()) return true;
         if (direction === "forward" && surface.canGoForward?.()) return true;
       } catch {
@@ -8079,7 +8134,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async navigateEmbedBack(embed: HTMLElement): Promise<void> {
     await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-    if (this.isElectronWebview(surface) && surface.canGoBack?.()) {
+    if (this.isBrowserSurfaceReady(surface) && this.isElectronWebview(surface) && surface.canGoBack?.()) {
       embed.dataset.mwvNativeNavigation = "back";
       surface.goBack?.();
       return;
@@ -8107,7 +8162,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async navigateEmbedForward(embed: HTMLElement): Promise<void> {
     await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-    if (this.isElectronWebview(surface) && surface.canGoForward?.()) {
+    if (this.isBrowserSurfaceReady(surface) && this.isElectronWebview(surface) && surface.canGoForward?.()) {
       embed.dataset.mwvNativeNavigation = "forward";
       surface.goForward?.();
       return;
@@ -8130,7 +8185,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async refreshEmbed(embed: HTMLElement): Promise<void> {
     await this.flushEmbedReaderNow(embed);
     const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
-    if (this.isElectronWebview(surface) && surface.reload) {
+    if (this.isBrowserSurfaceReady(surface) && this.isElectronWebview(surface) && surface.reload) {
       surface.reload();
       return;
     }
@@ -8368,6 +8423,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   async prepareEmbedForRerender(embed: HTMLElement): Promise<void> {
     await this.flushEmbedReaderNow(embed);
     await this.resetNoteDrawWebviewControllers(embed);
+    this.disposeBrowserSurfacesIn(embed);
   }
 
   async renderEmbed(embed: HTMLElement, url: string): Promise<void> {
@@ -8453,7 +8509,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       .filter((child): child is HTMLElement => child instanceof HTMLElement && child.hasClass("mwv-live-browser"));
     const surface = existing[0] ?? embed.createDiv({ cls: "mwv-live-browser" });
     for (const duplicate of existing.slice(1)) {
-      duplicate.querySelectorAll<HTMLElement>(".mwv-real-webview").forEach((webview) => webview.remove());
+      this.disposeBrowserSurfacesIn(duplicate);
       duplicate.remove();
     }
     if (surface.querySelector(":scope > .mwv-live-frame")) {
@@ -8462,6 +8518,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     surface.addClass("mwv-live-browser");
     const frame = this.createBrowserSurface(surface, url, "mwv-live-frame", hostName(url), {
+      raw: true,
       onReady: () => {
         void this.applyAccessibleFrameFilters(frame, embed.dataset.url || url);
         this.notifyNoteDrawWebviewChanged(embed);
@@ -10743,6 +10800,76 @@ export default class MobileWebviewerPlugin extends Plugin {
     return Boolean(element && element.tagName.toLowerCase() === "webview");
   }
 
+  isBrowserSurfaceReady(element: Element | null | undefined): boolean {
+    if (!element || !element.isConnected) return false;
+    if (!this.isElectronWebview(element)) return true;
+    return element._mwvReady === true && element._mwvDestroyed !== true;
+  }
+
+  disposeBrowserSurface(element: BrowserSurfaceElement | null | undefined): void {
+    if (!this.isElectronWebview(element)) return;
+    element._mwvDestroyed = true;
+    element._mwvReady = false;
+    element._mwvDispose?.();
+    element._mwvDispose = undefined;
+  }
+
+  disposeBrowserSurfacesIn(root: ParentNode | null | undefined): void {
+    if (!root) return;
+    root.querySelectorAll<BrowserSurfaceElement>(".mwv-real-webview, .mwv-live-frame").forEach((surface) => {
+      this.disposeBrowserSurface(surface);
+    });
+  }
+
+  isRawRealWebview(element: Element | null | undefined): boolean {
+    return this.isElectronWebview(element) && Boolean(
+      element.classList.contains("mwv-raw-surface") ||
+      element.closest(".mwv-live-browser, .mwv-frame-wrap.is-live-page")
+    );
+  }
+
+  isRawRealBrowserSurface(element: Element | null | undefined): boolean {
+    return Boolean(
+      element &&
+      (this.isRawRealWebview(element) ||
+        (element.classList.contains("mwv-raw-surface") ||
+          (element.tagName.toLowerCase() === "iframe" && element.closest(".mwv-live-browser, .mwv-frame-wrap.is-live-page"))))
+    );
+  }
+
+  isNoteBrowserWebMode(root: Element | null | undefined): boolean {
+    if (!root) return false;
+    if (root.matches(".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")) return true;
+    return Boolean(root.querySelector?.(".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front"));
+  }
+
+  applyNoteBrowserWebIsolation(embed: HTMLElement, enabled = true): void {
+    if (!embed.isConnected || !this.isNoteWebOwnedElement(embed)) return;
+    const documentEl = embed.closest<HTMLElement>(".mwv-note-browser-document") ?? embed;
+    const selector = ".notedraw-underlay-embed-layer, .notedraw-embed-layer, .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas, .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel, .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar, .notedraw-file-input";
+    const elements = new Set<HTMLElement>(Array.from(documentEl.querySelectorAll<HTMLElement>(selector)));
+    for (const controller of this.collectNoteDrawControllers(embed)) {
+      const candidate = controller as NoteDrawControllerLike & Record<string, unknown>;
+      for (const key of ["canvas", "staticCanvas", "embedLayer", "toolbar", "palettePanel", "brushPanel", "textPanel", "selectionMenu", "formatToolbar"]) {
+        const element = candidate[key];
+        if (element instanceof HTMLElement) elements.add(element);
+      }
+    }
+    for (const element of elements) {
+      if (enabled) {
+        if (!element.dataset.mwvRawWebHiddenStyle) element.dataset.mwvRawWebHiddenStyle = element.getAttribute("style") ?? "";
+        element.style.setProperty("display", "none", "important");
+        element.style.setProperty("visibility", "hidden", "important");
+        element.style.setProperty("pointer-events", "none", "important");
+      } else if (element.dataset.mwvRawWebHiddenStyle !== undefined) {
+        const previous = element.dataset.mwvRawWebHiddenStyle;
+        delete element.dataset.mwvRawWebHiddenStyle;
+        if (previous) element.setAttribute("style", previous);
+        else element.removeAttribute("style");
+      }
+    }
+  }
+
   supportsElectronWebview(): boolean {
     const platform = (window as BrowserWindowWithProcess).process?.versions;
     if (!platform?.electron) return false;
@@ -10772,6 +10899,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const webview = parent.ownerDocument.createElement("webview") as ElectronWebviewElement;
       webview.addClass(className);
       webview.addClass("mwv-real-webview");
+      if (callbacks.raw) webview.addClass("mwv-raw-surface");
       webview.setAttribute("title", title);
       webview.setAttribute("allowpopups", "true");
       webview.setAttribute("partition", this.settings.incognitoMode ? `temp:mwv-${Date.now()}` : "persist:mobile-webviewer");
@@ -10788,7 +10916,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     const frame = parent.createEl("iframe", {
-      cls: className,
+      cls: callbacks.raw ? `${className} mwv-raw-surface` : className,
       attr: {
         title,
         sandbox: this.buildFrameSandbox(className.includes("mwv-live-frame")),
@@ -10849,6 +10977,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   safeWebviewUrl(webview: ElectronWebviewElement): string {
+    if (webview._mwvReady !== true || webview._mwvDestroyed === true) {
+      return webview.dataset.mwvPendingUrl || webview.src || "";
+    }
     try {
       return webview.getURL?.() || webview.src || "";
     } catch {
@@ -10857,6 +10988,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   safeWebviewTitle(webview: ElectronWebviewElement): string {
+    if (webview._mwvReady !== true || webview._mwvDestroyed === true) return "";
     try {
       return webview.getTitle?.() || "";
     } catch {
@@ -10865,8 +10997,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   bindRealBrowserSurface(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
+    webview._mwvReady = false;
+    webview._mwvDestroyed = false;
     const emitNavigate = (event: Event) => {
-      if (!webview.isConnected) return;
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { url?: string };
       const url = detail.url || this.safeWebviewUrl(webview);
       const downloadUrl = this.extractInternalDownloadUrl(url);
@@ -10878,22 +11012,42 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (url) void callbacks.onNavigate?.(url);
     };
     const emitTitle = (event: Event) => {
-      if (!webview.isConnected) return;
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { title?: string };
       const title = detail.title || this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
     };
 
-    webview.addEventListener("dom-ready", () => {
-      if (!webview.isConnected) return;
-      void this.applyWebviewRuntime(webview);
-      this.installWebviewBrowserBridge(webview, callbacks);
+    const keepGuestUntouched = callbacks.raw === true;
+    const listeners: Array<[string, EventListener]> = [];
+    const listen = (type: string, handler: EventListener) => {
+      webview.addEventListener(type, handler);
+      listeners.push([type, handler]);
+    };
+    const onDomReady: EventListener = () => {
+      if (!webview.isConnected || webview._mwvDestroyed) return;
+      webview._mwvReady = true;
+      const pendingUrl = webview.dataset.mwvPendingUrl;
+      delete webview.dataset.mwvPendingUrl;
+      if (pendingUrl && pendingUrl !== "about:blank" && webview.src !== pendingUrl) {
+        try {
+          if (webview.loadURL) webview.loadURL(pendingUrl);
+          else webview.src = pendingUrl;
+        } catch {
+          // A WebContents destroyed during startup must not bubble an error.
+        }
+      }
+      if (!keepGuestUntouched) {
+        void this.applyWebviewRuntime(webview);
+        this.installWebviewBrowserBridge(webview, callbacks);
+      }
       void callbacks.onReady?.();
       const title = this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
-    });
-    webview.addEventListener("did-start-navigation", (event) => {
-      if (!webview.isConnected) return;
+    };
+    listen("dom-ready", onDomReady);
+    listen("did-start-navigation", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { url?: string; isMainFrame?: boolean; preventDefault?: () => void };
       const url = detail.url || "";
       const downloadUrl = this.extractInternalDownloadUrl(url);
@@ -10908,9 +11062,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         webview.stop?.();
         void callbacks.onDownloadCandidate?.(url);
       }
-    });
-    webview.addEventListener("will-navigate", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("will-navigate", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { url?: string; preventDefault?: () => void };
       const url = detail.url || "";
       const downloadUrl = this.extractInternalDownloadUrl(url);
@@ -10923,42 +11077,42 @@ export default class MobileWebviewerPlugin extends Plugin {
         detail.preventDefault?.();
         void callbacks.onDownloadCandidate?.(url);
       }
-    });
-    webview.addEventListener("did-start-loading", () => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("did-start-loading", (() => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       webview.removeClass("has-load-error");
       void callbacks.onLoading?.(true, this.safeWebviewUrl(webview));
-    });
-    webview.addEventListener("did-stop-loading", () => {
-        if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("did-stop-loading", (() => {
+        if (!this.isBrowserSurfaceReady(webview)) return;
         void callbacks.onLoading?.(false, this.safeWebviewUrl(webview));
-    });
-    webview.addEventListener("did-navigate", emitNavigate);
-    webview.addEventListener("did-navigate-in-page", emitNavigate);
-    webview.addEventListener("page-title-updated", emitTitle);
-    webview.addEventListener("page-favicon-updated", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("did-navigate", emitNavigate as EventListener);
+    listen("did-navigate-in-page", emitNavigate as EventListener);
+    listen("page-title-updated", emitTitle as EventListener);
+    listen("page-favicon-updated", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { favicons?: string[] };
       const favicon = detail.favicons?.find(Boolean);
       if (favicon) void callbacks.onFavicon?.(favicon);
-    });
-    webview.addEventListener("did-finish-load", () => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("did-finish-load", (() => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       webview.removeClass("has-load-error");
       const url = this.safeWebviewUrl(webview);
       if (url) void callbacks.onNavigate?.(url);
       const title = this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
-    });
-    webview.addEventListener("did-fail-load", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("did-fail-load", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { errorDescription?: string; validatedURL?: string; errorCode?: number };
       if (detail.errorCode === -3) return;
       webview.addClass("has-load-error");
       void callbacks.onFail?.(detail.errorDescription || "Load failed", detail.validatedURL || this.safeWebviewUrl(webview));
-    });
-    webview.addEventListener("console-message", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("console-message", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { message?: string; level?: number };
       const bridgePrefix = "__MWV_BRIDGE__";
       if (typeof detail.message === "string" && detail.message.startsWith(bridgePrefix)) {
@@ -10986,16 +11140,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       const level = detail.level === 2 ? "error" : detail.level === 1 ? "warn" : "info";
       if (detail.message) void callbacks.onConsole?.(level, detail.message, this.safeWebviewUrl(webview));
-    });
-    webview.addEventListener("new-window", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("new-window", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { url?: string; preventDefault?: () => void };
       if (!detail.url) return;
       detail.preventDefault?.();
       void callbacks.onNewWindow?.(detail.url);
-    });
-    webview.addEventListener("ipc-message", (event) => {
-      if (!webview.isConnected) return;
+    }) as EventListener);
+    listen("ipc-message", ((event: Event) => {
+      if (!this.isBrowserSurfaceReady(webview)) return;
       const detail = event as Event & { channel?: string; args?: unknown[] };
       if (detail.channel !== "mwv-browser-bridge") return;
       const [kind, url, title] = detail.args ?? [];
@@ -11018,7 +11172,16 @@ export default class MobileWebviewerPlugin extends Plugin {
           pageEdited: detail.args?.[8] === true
         });
       }
-    });
+    }) as EventListener);
+    listen("destroyed", (() => {
+      webview._mwvDestroyed = true;
+      webview._mwvReady = false;
+      webview._mwvDispose?.();
+    }) as EventListener);
+    webview._mwvDispose = () => {
+      for (const [type, handler] of listeners) webview.removeEventListener(type, handler);
+      listeners.length = 0;
+    };
   }
 
   installWebviewBrowserBridge(webview: ElectronWebviewElement, callbacks: BrowserSurfaceCallbacks): void {
@@ -11356,6 +11519,21 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
     if (this.isElectronWebview(surface)) {
+      if (surface._mwvDestroyed === true || !surface.isConnected) return;
+      if (!this.isBrowserSurfaceReady(surface)) {
+        surface.dataset.mwvPendingUrl = url;
+        // Setting the declarative src is safe before dom-ready and lets the
+        // guest perform its first navigation. Do not call loadURL until the
+        // element has announced that its WebContents is ready.
+        try {
+          surface.src = url;
+        } catch {
+          // The element may already be tearing down; the disposed guard below
+          // prevents a later callback from touching it.
+        }
+        return;
+      }
+      delete surface.dataset.mwvPendingUrl;
       if (surface.loadURL) {
         surface.loadURL(url);
       } else {
@@ -11368,6 +11546,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   getBrowserSurfaceTitle(surface: BrowserSurfaceElement): string {
     if (this.isElectronWebview(surface)) {
+      if (!this.isBrowserSurfaceReady(surface)) return "";
       return surface.getTitle?.() || "";
     }
     try {
@@ -11388,9 +11567,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       `内核: ${isWebview ? "Electron Chromium webview" : surface ? "iframe fallback" : "未找到页面层"}`,
       `当前地址: ${currentUrl}`,
       `标题: ${surface ? this.getBrowserSurfaceTitle(surface) || hostName(currentUrl) : hostName(currentUrl)}`,
-      `加载中: ${isWebview && surface.isLoading?.() ? "是" : "否"}`,
-      `可后退: ${isWebview && surface.canGoBack?.() ? "是" : "否"}`,
-      `可前进: ${isWebview && surface.canGoForward?.() ? "是" : "否"}`,
+      `加载中: ${isWebview && this.isBrowserSurfaceReady(surface) && surface.isLoading?.() ? "是" : "否"}`,
+      `可后退: ${isWebview && this.isBrowserSurfaceReady(surface) && surface.canGoBack?.() ? "是" : "否"}`,
+      `可前进: ${isWebview && this.isBrowserSurfaceReady(surface) && surface.canGoForward?.() ? "是" : "否"}`,
       `缩放: ${this.settings.pageZoom}%`,
       `页面模式: ${this.settings.userAgentMode} / ${this.settings.desktopMode ? "desktop width" : "mobile width"}`,
       `下载目录: ${this.normalizeDownloadFolder()}`
@@ -11399,7 +11578,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async openBrowserDevTools(surface?: BrowserSurfaceElement): Promise<boolean> {
-    if (!this.isElectronWebview(surface) || typeof surface.openDevTools !== "function") {
+    if (!this.isBrowserSurfaceReady(surface) || !this.isElectronWebview(surface) || typeof surface.openDevTools !== "function") {
       await this.addConsole("warn", "DevTools unavailable on current browser surface");
       return false;
     }
@@ -11498,7 +11677,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   private async selectionFromSurface(surface?: BrowserSurfaceElement | null): Promise<string> {
     if (!surface) return "";
-    if (this.isElectronWebview(surface) && surface.executeJavaScript) {
+    if (this.isBrowserSurfaceReady(surface) && this.isElectronWebview(surface) && surface.executeJavaScript) {
       try {
         const selected = await surface.executeJavaScript("window.getSelection ? String(window.getSelection() || '') : ''", false);
         return typeof selected === "string" ? selected.trim() : "";
@@ -11826,6 +12005,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async applyWebviewRuntime(webview: ElectronWebviewElement): Promise<void> {
+    // Keep a real webpage exactly as delivered by its site. Delayed CSS,
+    // ad-observer mutations, and page zoom changes otherwise alter the page
+    // after first paint and make its layout appear to jump or collapse.
+    if (this.isRawRealWebview(webview)) return;
+    if (!this.isBrowserSurfaceReady(webview)) return;
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200) / 100;
     try {
       webview.setZoomFactor?.(zoom);
@@ -11939,6 +12123,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async applyAccessibleFrameFilters(frame: BrowserSurfaceElement, url: string): Promise<void> {
+    if (this.isRawRealBrowserSurface(frame)) return;
     if (this.isElectronWebview(frame)) {
       await this.applyWebviewRuntime(frame);
       return;
@@ -11994,12 +12179,14 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   applyFrameViewPreferences(frame: BrowserSurfaceElement): void {
-    const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200);
+    const rawWebview = this.isRawRealBrowserSurface(frame);
+    const zoom = rawWebview ? 100 : clampNumber(this.settings.pageZoom || 100, 50, 200);
     frame.setCssProps({ "--mwv-page-zoom": String(zoom / 100) });
     if (this.isElectronWebview(frame)) {
       frame.setCssStyles({ zoom: "1" });
+      if (!this.isBrowserSurfaceReady(frame)) return;
       try {
-        frame.setZoomFactor?.(zoom / 100);
+        frame.setZoomFactor?.(rawWebview ? 1 : zoom / 100);
       } catch {
         // The webview may not be ready yet; dom-ready reapplies zoom.
       }
@@ -12096,6 +12283,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     let frameHit = 0;
     if (frame) {
       if (this.isElectronWebview(frame)) {
+        if (!this.isBrowserSurfaceReady(frame)) return 0;
         try {
           frame.stopFindInPage?.("clearSelection");
           const requestId = frame.findInPage?.(clean, {

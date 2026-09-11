@@ -555,6 +555,69 @@
   background: var(--background-primary);
 }
 
+/* Raw Web mode is a single guest surface. Keep the original site out of the
+   browser's grid/containment rules and never let the note pane reserve a row
+   or leave a second canvas above the page. This is scoped to the standalone
+   Mobile Webviewer root; ordinary Markdown notes do not match it. */
+.mwv-root.is-raw-web {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mwv-root.is-raw-web .mwv-frame-wrap {
+  position: relative;
+  display: block;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  contain: none;
+  background: transparent;
+}
+
+.mwv-root.is-raw-web .mwv-home,
+.mwv-root.is-raw-web .mwv-drawer,
+.mwv-root.is-raw-web .notedraw-header-button,
+.mwv-root.is-raw-web .notedraw-webview-button,
+.mwv-root.is-raw-web .notedraw-fallback-button,
+.mwv-root.is-raw-web .notedraw-webview-inline-button,
+.mwv-root.is-raw-web .mwv-notedraw-anchor,
+.mwv-root.is-raw-web .notedraw-underlay-embed-layer,
+.mwv-root.is-raw-web .notedraw-embed-layer,
+.mwv-root.is-raw-web .notedraw-underlay-canvas,
+.mwv-root.is-raw-web .notedraw-static-canvas,
+.mwv-root.is-raw-web .notedraw-canvas,
+.mwv-root.is-raw-web .notedraw-toolbar,
+.mwv-root.is-raw-web .notedraw-palette-panel,
+.mwv-root.is-raw-web .notedraw-brush-panel,
+.mwv-root.is-raw-web .notedraw-text-panel,
+.mwv-root.is-raw-web .notedraw-selection-menu,
+.mwv-root.is-raw-web .notedraw-format-toolbar,
+.mwv-root.is-raw-web .notedraw-file-input {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-root.is-raw-web .mwv-real-webview,
+.mwv-root.is-raw-web .mwv-frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  border: 0;
+  transform: none !important;
+  filter: none !important;
+  zoom: 1 !important;
+  background: transparent;
+}
+
 .mwv-find-panel {
   position: sticky;
   top: 0;
@@ -1582,6 +1645,51 @@
   height: 100%;
   min-height: 0;
   max-height: none;
+}
+
+/* The Web presentation is a raw site surface. Host-side accessibility modes
+   must not filter, rotate, or otherwise transform the site's own rendering. */
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  filter: none !important;
+  min-width: 0 !important;
+  transform: none !important;
+}
+
+/* NoteDraw keeps its saved canvases mounted while Note/Web share one page.
+   They belong to Note mode only: never paint old strokes, text, or embedded
+   drawing layers over the site's raw Web presentation. */
+.mwv-note-browser-document .mwv-embed.is-web-front >
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas,
+      .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel,
+      .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* NoteDraw may retain its canvas/layers at the preview root instead of under
+   the embed. Web mode is an isolated raw browser surface, so no retained
+   NoteDraw artifact may paint over it, regardless of which host node owns it. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas,
+      .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel,
+      .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar,
+      .notedraw-file-input) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
+  .mwv-notedraw-anchor,
+.workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
+  .view-actions .notedraw-webview-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 .mwv-note-browser-redundant-title {
