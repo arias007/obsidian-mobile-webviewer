@@ -1516,14 +1516,59 @@
   display: none;
 }
 
+/* Web mode owns the NoteWeb viewport. Remove Obsidian's reading-view tail
+   spacer and let every ancestor down to the Electron webview share the same
+   available height instead of stopping at a fixed vh value. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front) {
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front) > .markdown-preview-sizer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  /* NoteDraw may leave a stale inline virtual height behind when the live
+     webview becomes visible. Web mode owns this viewport, so the stale value
+     must never be allowed to expand the Markdown document. */
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  > .markdown-preview-sizer > .el-div:has(> .mwv-embed.is-web-front) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-home.is-web-front,
+.mwv-note-browser-document .mwv-note-embed.is-web-front {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
 /* Keep the live page a real, usable surface when Web mode is selected. */
 .mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser {
-  display: block;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  box-sizing: border-box;
   visibility: visible;
-  height: max(480px, 68vh);
-  min-height: max(480px, 68vh);
-  overflow: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   border-bottom: 0;
 }
 
@@ -1531,44 +1576,12 @@
 .mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
-  display: block;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
   height: 100%;
-  min-height: 480px;
+  min-height: 0;
   max-height: none;
-}
-
-/* NoteDraw's mobile webview controls are fixed above the page. Reserve a
-   matching top-safe area only while drawing is active, so the real page does
-   not slide underneath the T/A/pen toolbar. */
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) {
-  --mwv-web-safe-top: clamp(68px, 8vh, 96px);
-}
-
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser,
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser {
-  box-sizing: border-box;
-  padding-top: var(--mwv-web-safe-top);
-}
-
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-live-frame,
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
-.mwv-note-browser-document:has(.notedraw-shell.is-drawing-active) .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
-  height: calc(100% - var(--mwv-web-safe-top));
-  min-height: 0;
-}
-
-.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) {
-  --mwv-web-safe-top: clamp(68px, 8vh, 96px);
-  box-sizing: border-box;
-  padding-top: var(--mwv-web-safe-top);
-}
-
-.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-frame,
-.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-real-webview,
-.mwv-frame-wrap.is-web-front:has(.notedraw-shell.is-drawing-active) > .mwv-live-frame {
-  height: calc(100% - var(--mwv-web-safe-top));
-  min-height: 0;
 }
 
 .mwv-note-browser-redundant-title {
@@ -3194,8 +3207,11 @@
 
 .mwv-live-browser {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   min-height: 68vh;
-  overflow: auto;
+  overflow: hidden;
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
 }
@@ -3225,10 +3241,12 @@
 
 .mwv-live-frame,
 .mwv-live-browser .mwv-real-webview {
-  display: block;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   height: 68vh;
-  min-height: 68vh;
+  min-height: 0;
   border: 0;
   background: var(--background-primary);
 }

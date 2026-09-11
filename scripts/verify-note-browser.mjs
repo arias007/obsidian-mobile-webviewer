@@ -14,6 +14,24 @@ const doubleActivationEnd = source.indexOf("\n  installNoteDrawDedupeObserver(",
 const doubleActivationMethod = doubleActivationStart >= 0 && doubleActivationEnd > doubleActivationStart
   ? source.slice(doubleActivationStart, doubleActivationEnd)
   : "";
+const modeStart = source.indexOf("\n  setNoteBrowserEmbedMode(");
+const modeEnd = source.indexOf("\n  canNavigateEmbed(", modeStart);
+const modeMethod = modeStart >= 0 && modeEnd > modeStart ? source.slice(modeStart, modeEnd) : "";
+const bridgeStart = source.indexOf("\n  installWebviewBrowserBridge(");
+const bridgeEnd = source.indexOf("\n  extractInternalDownloadUrl(", bridgeStart);
+const bridgeMethod = bridgeStart >= 0 && bridgeEnd > bridgeStart ? source.slice(bridgeStart, bridgeEnd) : "";
+const ownershipStart = source.indexOf("\n  isNoteBrowserLeaf(");
+const ownershipEnd = source.indexOf("\n  findWorkspaceLeafForElement(", ownershipStart);
+const ownershipMethods = ownershipStart >= 0 && ownershipEnd > ownershipStart ? source.slice(ownershipStart, ownershipEnd) : "";
+const cleanupStart = source.indexOf("\n  cleanupStaleNoteDrawButtonResidue(");
+const cleanupEnd = source.indexOf("\n  ensureNoteDrawStableAnchor(", cleanupStart);
+const cleanupMethod = cleanupStart >= 0 && cleanupEnd > cleanupStart ? source.slice(cleanupStart, cleanupEnd) : "";
+const observerStart = source.indexOf("\n  installNoteDrawDedupeObserver(");
+const observerEnd = source.indexOf("\n  queueNoteDrawButtonDedupe(", observerStart);
+const observerMethod = observerStart >= 0 && observerEnd > observerStart ? source.slice(observerStart, observerEnd) : "";
+const bindingStart = source.indexOf("\n  refreshNoteDrawWorkspaceBinding(");
+const bindingEnd = source.indexOf("\n  notifyNoteDrawWebviewChanged(", bindingStart);
+const bindingMethod = bindingStart >= 0 && bindingEnd > bindingStart ? source.slice(bindingStart, bindingEnd) : "";
 
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
@@ -37,21 +55,35 @@ const checks = [
   ["NoteWeb removes its internal tab strip and status row", !chromeMethod.includes('createDiv({ cls: "mwv-tab-strip mwv-embed-tab-strip"') && !chromeMethod.includes('createDiv({ cls: "mwv-browser-status"')],
   ["NoteWeb keeps its own more menu and current page identity", chromeMethod.includes('mwv-browser-more') && chromeMethod.includes("this.toggleMorePanel(embed, chrome, liveUrl, liveTitle)") && source.includes('more.dataset.mwvUrl = url')],
   ["NoteWeb uses Obsidian tabs for explicit new-window navigation", source.includes('event.type === "auxclick"') && source.includes('await this.openNoteBrowser(url, true)') && source.includes('onNewWindow: (nextUrl) => this.openNoteBrowser(nextUrl, true)') && source.includes("boundToLeaf") && source.includes("requestedUrl")],
+  ["NoteWeb navigation normalizes equivalent trailing-slash URLs", source.includes("equivalentEmbedUrl") && source.includes("while (previous && equivalentEmbedUrl(previous, current))") && source.includes("while (next && equivalentEmbedUrl(next, current))")],
   ["NoteWeb keeps ordinary links in the current note", source.includes('await this.openUrlInEmbed(embed, url)')],
   ["NoteWeb toolbar has stable two-row layout", styles.includes('"controls actions"') && styles.includes('"address address"') && styles.includes("grid-area: address") && styles.includes(".mwv-bing-home .mwv-bing-note-content button") && !styles.includes(".mwv-bing-home button,")],
   ["NoteWeb hides the duplicate in-content URL row", styles.includes(".mwv-note-browser-document .mwv-browser-address") && styles.includes("display: none") && styles.includes('grid-template-areas: "controls actions"')],
   ["NoteWeb result tabs and media stay borderless", styles.includes(".mwv-note-browser-document .mwv-bing-home .mwv-bing-tab") && styles.includes("border: 0 !important") && styles.includes(".mwv-note-browser-document .mwv-page-media img")],
-  ["NoteWeb real-web mode renders the original page including the home URL", source.includes('mode === "web" && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-bing-home.is-web-front > .mwv-bing-note-content")],
-  ["NoteWeb keeps the real page below active NoteDraw controls", styles.includes("--mwv-web-safe-top") && styles.includes("notedraw-shell.is-drawing-active") && styles.includes("calc(100% - var(--mwv-web-safe-top))")],
+  ["NoteWeb real-web mode renders the original page including the home URL", source.includes('(mode === "web" || mode === "split") && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-bing-home.is-web-front > .mwv-bing-note-content")],
+  ["NoteWeb creates at most one direct live browser surface", source.includes("Array.from(embed.children)") && source.includes("existing.slice(1)") && source.includes("querySelector(\":scope > .mwv-live-frame\")")],
+  ["Note/Web switching retains one live page without navigation or URL assignment", modeMethod.includes("retainedSurface") && modeMethod.includes("currentSurface !== retainedSurface") && !modeMethod.includes("openUrlInEmbed") && !modeMethod.includes("renderEmbed(") && !modeMethod.includes("loadURL") && !modeMethod.includes(".src =")],
+  ["NoteWeb keeps the real page usable with active NoteDraw controls", styles.includes("display: flex") && styles.includes("flex: 1 1 auto") && !styles.includes("--mwv-web-safe-top")],
   ["NoteWeb hides duplicate chrome after a Markdown preview rebuild", styles.includes(":has(.mwv-embed[data-url]) .mwv-browser-chrome") && source.includes("markdown-preview-sizer")],
   ["NoteWeb double-clicks cannot switch Obsidian into edit mode", source.includes('["mousedown", "click", "dblclick"]') && doubleActivationMethod.includes("event.detail < 2") && doubleActivationMethod.includes("event.stopImmediatePropagation()") && doubleActivationMethod.includes("file.path !== WEBVIEW_NOTE_PATH")],
   ["NoteWeb double-click containment preserves native text selection", !doubleActivationMethod.includes("event.preventDefault")],
+  ["NoteWeb ownership is resolved from the exact Mobile Webviewer leaf", ownershipMethods.includes("isNoteBrowserLeaf") && ownershipMethods.includes("file.path === WEBVIEW_NOTE_PATH") && ownershipMethods.includes("findWorkspaceLeafForElement(element)")],
+  ["ordinary Markdown leaves are skipped before any NoteDraw residue cleanup", cleanupMethod.includes("const noteWebLeaf = this.isNoteBrowserLeaf(workspaceLeaf);") && cleanupMethod.includes("const hasMwvResidue =") && cleanupMethod.includes("if (!noteWebLeaf && !hasMwvResidue) continue;") && cleanupMethod.indexOf("if (!noteWebLeaf && !hasMwvResidue) continue;") < cleanupMethod.indexOf("button.removeClass(\"notedraw-webview-button\")") && cleanupMethod.indexOf("if (!noteWebLeaf && !hasMwvResidue) continue;") < cleanupMethod.indexOf("leaf.removeClass(\"mwv-notedraw-surface-leaf\")")],
+  ["global NoteDraw observer ignores mutations outside the NoteWeb leaf", observerMethod.includes("if (!this.isNoteWebOwnedElement(root)) continue;") && !observerMethod.includes("cleanupStaleNoteDrawButtonResidue")],
+  ["NoteWeb refresh never triggers global ordinary-note NoteDraw source/header passes", bindingMethod.includes("if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;") && !source.includes("syncSourceControllers") && !source.includes("syncMobileWebviewerHeaderButtons") && !bindingMethod.includes('workspace.trigger?.("layout-change")')],
+  ["NoteDraw controller discovery cannot fall back to another leaf", source.includes("if (!this.noteDrawControllerBelongsToRoot(controller, root)) return;") && source.includes("if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return [];")],
   ["NoteWeb blocks source mode at the view-state boundary", source.includes("guardedSetState") && source.includes('state.mode === "source" || state.source === true') && source.includes('file.path === WEBVIEW_NOTE_PATH') && source.includes('binding.view.setState === binding.guardedSetState')],
   ["NoteWeb also recovers from unexpected source mode", source.includes("this.enforceNoteBrowserReadingMode();") && source.includes("enforceNoteBrowserReadingMode(): void") && source.includes('state.mode !== "preview" || state.source !== false') && source.includes("applyReadingMode();")],
-  ["NoteWeb Markdown controls are fused into Obsidian native actions and pane menu", source.includes("syncNoteBrowserNativeActions") && source.includes("view.addAction") && source.includes("view.onPaneMenu") && source.includes("view-header-nav-buttons") && source.includes("mwv-note-browser-native-nav") && styles.includes(".mwv-note-browser-document .mwv-browser-chrome") && styles.includes("display: none !important")],
+  ["NoteWeb Markdown controls are fused into Obsidian native actions and pane menu", source.includes("syncNoteBrowserNativeActions") && source.includes("view.addAction") && source.includes("view.onPaneMenu") && source.includes("view-header-nav-buttons") && source.includes("mwv-note-browser-native-nav") && source.includes("event.stopPropagation()") && styles.includes(".mwv-note-browser-document .mwv-browser-chrome") && styles.includes("display: none !important")],
   ["NoteWeb replaces the Obsidian edit toggle with Note/Web mode", source.includes("mwv-note-browser-mode-action") && source.includes("mwv-note-browser-replaced-edit-action") && styles.includes(".mwv-note-browser-replaced-edit-action") && !source.includes('addNativeAction("arrow-left"') && !source.includes('addNativeAction("arrow-right"')],
+  ["NoteWeb wand opens NoteDraw in element selection mode", source.includes("setNoteDrawWebviewTool(controller, \"select\")") && source.includes("setToolFromApi") && source.includes("controller.toolMode === \"edit-md\"")],
   ["NoteWeb search results omit the recommendation column", !source.includes('side.createEl("h3"') && !source.includes('cls: "mwv-related-pill"') && styles.includes(".mwv-bing-serp") && styles.includes("grid-template-columns: minmax(0, 1fr)")],
-  ["NoteWeb Web mode keeps a usable live surface height", styles.includes(".mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser") && styles.includes("height: max(480px, 68vh)") && styles.includes("min-height: 480px")],
+  ["NoteWeb Web mode fills the actual Markdown viewport", styles.includes(":has(.mwv-embed.is-web-front) > .markdown-preview-sizer") && styles.includes("min-height: 0 !important") && styles.includes("padding-bottom: 0 !important") && styles.includes(".el-div:has(> .mwv-embed.is-web-front)") && styles.includes("height: 100%") && !styles.includes("height: max(480px, 68vh)")],
+  ["NoteWeb deepest live webview remains unscaled and fills its flex surface", styles.includes(".mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview") && styles.includes("display: flex") && styles.includes("flex: 1 1 auto") && styles.includes("min-height: 0") && source.includes('frame.setCssStyles({ zoom: "1" })')],
+  ["NoteWeb never installs the legacy T A pen layer into the real page", bridgeMethod.includes("cleanupLegacyWebNoteOverlay") && bridgeMethod.includes('doc.getElementById("mwv-page-note-root")?.remove()') && !bridgeMethod.includes("installWebNoteOverlay();")],
+  ["NoteWeb never replaces a live page with cached page HTML", !source.includes("doc.body.innerHTML = payload.pageHtml") && !source.includes("this.hydrateWebviewPageNote(")],
+  ["NoteWeb does not let NoteDraw virtual height resize the real web page", source.includes('root.matches(".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")')],
+  ["NoteWeb ad filtering avoids broad selectors that hide normal page headers", source.includes("[id='ad' i]") && source.includes("[class~='ad' i]") && !source.includes("[id*='ad' i]") && !source.includes("[class*='ad-' i]") && !source.includes("[class*='ads' i]")],
   ["NoteWeb Markdown embeds lose their surrounding frame", styles.includes(".mwv-note-browser-document .mwv-bing-home") && styles.includes("border: 0") && styles.includes("border-radius: 0")],
   ["hidden browser tabs cannot leave visible NoteDraw wands", source.includes("if (!this.isVisibleNoteDrawSurface(surface))") && source.includes('button.setAttribute("aria-hidden", "true")')],
   ["stale NoteDraw controllers are rebuilt through NoteDraw itself", source.includes("repairStaleNoteDrawController") && source.includes("noteDrawPlugin?.syncWebviewControllers?.()")],
