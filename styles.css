@@ -1656,6 +1656,31 @@
   pointer-events: none !important;
 }
 
+/* Explicit raw-page editing is the only Web-mode exception. Reveal the
+   primary toolbar, but leave secondary panels to NoteDraw's own open-state
+   classes. The guest page remains the visual source until a drawing tool is
+   selected. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-toolbar) {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front[data-mwv-noteweb-element-selector="true"]
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* Keep Electron's webview in the flex sizing chain from its first layout.
    A block-positioned webview falls back to a 150px guest viewport even when
    its host rect is taller, which stretches the original page at the top. */
@@ -1719,6 +1744,119 @@
       .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel,
       .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar,
       .notedraw-file-input) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Raw-page NoteDraw is stateful. Keep every secondary panel hidden until its
+   corresponding NoteDraw state class says it is open, and let the active
+   canvas take pointer ownership only after the guest selector is disabled.
+   These rules are deliberately after the legacy Web isolation rules above so
+   they win without changing the site's own DOM or layout. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-palette-panel, .notedraw-brush-panel, .notedraw-text-panel,
+      .notedraw-selection-menu, .notedraw-format-toolbar) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-palette-panel.is-palette-open.is-notedraw-controls-visible,
+      .notedraw-brush-panel.is-brush-panel-open.is-notedraw-controls-visible,
+      .notedraw-text-panel.is-text-panel-open.is-notedraw-controls-visible) {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-brush-panel.is-brush-panel-open.is-notedraw-controls-visible {
+  display: inline-flex !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-selection-menu.is-visible.is-notedraw-controls-visible,
+      .notedraw-format-toolbar.is-visible.is-notedraw-controls-visible) {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-format-toolbar.is-visible.is-notedraw-controls-visible {
+  display: inline-flex !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-toolbar {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Guest element selection: the real WebView receives clicks and NoteDraw's
+   canvas is completely passive. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"][data-mwv-noteweb-element-selector="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"][data-mwv-noteweb-element-selector="true"])
+  .mwv-live-browser > :is(.mwv-live-frame, .mwv-real-webview) {
+  pointer-events: auto !important;
+}
+
+/* Drawing/text mode: NoteDraw's canvas is the only pointer target. The page
+   itself is still rendered by the untouched guest WebView underneath it. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  :is(.notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: block !important;
+  visibility: visible !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  :is(.notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-embed-layer,
+      .notedraw-underlay-embed-layer) {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  .notedraw-canvas {
+  pointer-events: auto !important;
+  cursor: crosshair;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  .mwv-live-browser > :is(.mwv-live-frame, .mwv-real-webview) {
+  pointer-events: none !important;
+}
+
+/* Closing the raw NoteDraw wand is a visibility toggle, not a drawing
+   reset. Keep the saved/static artwork (including embedded drawing layers)
+   painted over the untouched guest page while the interactive canvas and all
+   toolbar controls stay passive/hidden. The high-specificity :has selector
+   intentionally wins over the generic raw-isolation marker added by delayed
+   NoteDraw reconciliation. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas) {
+  display: block !important;
+  visibility: visible !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer) * {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  .notedraw-canvas {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -3718,6 +3856,74 @@
 .mwv-notedraw-web-wand.is-active .mwv-web-wand-spark {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
+}
+
+/* The raw website lives in an Electron guest document, so NoteDraw's host
+   canvas cannot select its text. This small NoteDraw-shaped adapter stays in
+   the owning NoteWeb leaf and delegates element selection to the guest only
+   after the user explicitly opens it with the wand. */
+.workspace-leaf-content .mwv-noteweb-element-toolbar {
+  position: absolute;
+  z-index: 2147483000;
+  top: calc(var(--header-height, 40px) + 5px);
+  right: 8px;
+  left: auto;
+  display: inline-flex !important;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.12);
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button {
+  display: inline-flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button.is-active {
+  color: var(--interactive-accent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.workspace-leaf-content .mwv-noteweb-element-hint {
+  padding: 0 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .workspace-leaf-content .mwv-noteweb-element-hint {
+    display: none;
+  }
 }
 
 .mwv-root .mwv-notedraw-activation-proxy,
