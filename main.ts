@@ -2341,6 +2341,7 @@ interface ElectronWebviewElement extends HTMLElement {
   stopFindInPage?: (action: "clearSelection" | "keepSelection" | "activateSelection") => void;
   executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
   setZoomFactor?: (factor: number) => void;
+  setUserAgent?: (userAgent: string) => void;
   openDevTools?: () => void;
   getWebContentsId?: () => number;
   isLoading?: () => boolean;
@@ -2624,6 +2625,7 @@ function internalUtilityContextUrl(url: string | undefined): string {
 
 interface RuntimeProcessLike {
   versions?: {
+    chrome?: string;
     electron?: string;
   };
 }
@@ -11385,14 +11387,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       webview.setAttribute("allowpopups", "true");
       webview.setAttribute("partition", this.settings.incognitoMode ? `temp:mwv-${Date.now()}` : "persist:mobile-webviewer");
       webview.setAttribute("webpreferences", this.buildWebviewPreferences());
-      if (this.settings.userAgentMode === "desktop" || this.settings.desktopMode) {
-        webview.setAttribute("useragent", this.getUserAgentHeader());
-      } else {
-        webview.setAttribute("useragent", this.getUserAgentHeader());
-      }
+      this.applyBrowserSurfaceUserAgent(webview, url);
+      // Cached pages can emit dom-ready immediately after insertion. Attach
+      // every lifecycle listener before src/append so readiness is never lost.
+      this.bindRealBrowserSurface(webview, callbacks);
       if (url) webview.src = url;
       parent.appendChild(webview);
-      this.bindRealBrowserSurface(webview, callbacks);
       return webview;
     }
 
@@ -12011,6 +12011,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
     if (this.isElectronWebview(surface)) {
       if (surface._mwvDestroyed === true || !surface.isConnected) return;
+      // The UA must be selected before the main document request. Bing's
+      // legacy mobile variant otherwise returns a malformed homepage even
+      // though all of its stylesheets load successfully.
+      this.applyBrowserSurfaceUserAgent(surface, url);
       if (!this.isBrowserSurfaceReady(surface)) {
         surface.dataset.mwvPendingUrl = url;
         // Setting the declarative src is safe before dom-ready and lets the
@@ -12565,11 +12569,27 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  getUserAgentHeader(): string {
+  getUserAgentHeader(url = ""): string {
+    if (url && this.isBingHome(url)) {
+      const chromeVersion = (window as BrowserWindowWithProcess).process?.versions?.chrome ?? "";
+      const chromeMajor = chromeVersion.match(/^\d+/)?.[0] ?? "125";
+      return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+    }
     if (this.settings.userAgentMode === "desktop" || this.settings.desktopMode) {
       return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
     }
     return "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36";
+  }
+
+  applyBrowserSurfaceUserAgent(webview: ElectronWebviewElement, url: string): void {
+    const userAgent = this.getUserAgentHeader(url);
+    webview.setAttribute("useragent", userAgent);
+    if (!this.isBrowserSurfaceReady(webview)) return;
+    try {
+      webview.setUserAgent?.(userAgent);
+    } catch {
+      // A surface can be destroyed while a navigation is being prepared.
+    }
   }
 
   requestHeaders(accept: string): Record<string, string> {
@@ -12627,7 +12647,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     root.querySelectorAll<BrowserSurfaceElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
       if (this.isElectronWebview(frame)) {
         frame.setAttribute("webpreferences", this.buildWebviewPreferences());
-        frame.setAttribute("useragent", this.getUserAgentHeader());
+        this.applyBrowserSurfaceUserAgent(frame, this.safeWebviewUrl(frame));
         void this.applyWebviewRuntime(frame);
       } else {
         frame.setAttribute("sandbox", this.buildFrameSandbox(frame.hasClass("mwv-live-frame")));
