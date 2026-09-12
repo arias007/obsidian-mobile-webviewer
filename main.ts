@@ -5565,6 +5565,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.processWebviewerEmbeds(el);
     });
     this.registerDomEvent(appDocument(), "click", (event) => {
+      this.handleExternalLinkClick(event);
+    }, { capture: true });
+    this.registerDomEvent(appDocument(), "auxclick", (event) => {
+      this.handleExternalLinkClick(event);
+    }, { capture: true });
+    this.registerDomEvent(appDocument(), "click", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
     this.registerDomEvent(appDocument(), "auxclick", (event) => {
@@ -8268,6 +8274,30 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     }
     return this.getEmbedStack(embed, direction === "back" ? "mwvBack" : "mwvForward").length > 0;
+  }
+
+  handleExternalLinkClick(event: MouseEvent): void {
+    if (event.defaultPrevented) return;
+    if (event.type === "click" && event.button !== 0) return;
+    if (event.type === "auxclick" && event.button !== 1) return;
+
+    const anchor = event.composedPath().find(isAnchorElement);
+    if (!anchor || anchor.hasAttribute("download")) return;
+    const url = anchor.href.trim();
+    if (!/^https?:\/\//i.test(url)) return;
+
+    // NoteWeb and the standalone browser own their navigation. This hook is
+    // only for external links rendered by ordinary Markdown notes.
+    if (anchor.closest(".mwv-root, .mwv-embed, .mwv-note-browser-document")) return;
+    const leaf = this.findWorkspaceLeafForElement(anchor);
+    const view = leaf?.view as { file?: unknown; getViewType?: () => string } | undefined;
+    const file = view?.file;
+    if (!leaf || view?.getViewType?.() !== "markdown" || !(file instanceof TFile) || file.extension !== "md" || file.path === WEBVIEW_NOTE_PATH) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    runAsync(() => this.openNoteBrowser(url, true));
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {

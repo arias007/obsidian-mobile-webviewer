@@ -1611,6 +1611,7 @@
 
 .mwv-note-browser-document .mwv-bing-home.is-web-front,
 .mwv-note-browser-document .mwv-note-embed.is-web-front {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -1618,11 +1619,25 @@
   height: 100%;
   min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 
-/* Keep the live page a real, usable surface when Web mode is selected. */
+/* Web is a presentation of the live guest, not another rendered Note page.
+   Legacy NoteWeb documents can still contain unwrapped search/reader nodes;
+   remove every host child except the live surface from layout so those nodes
+   can never squeeze the Electron guest to a zero-height viewport. */
+.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Keep Electron's webview in the flex sizing chain from its first layout.
+   A block-positioned webview falls back to a 150px guest viewport even when
+   its host rect is taller, which stretches the original page at the top. */
 .mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -1639,10 +1654,12 @@
 .mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
 .mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  position: static;
   display: flex;
   flex: 1 1 auto;
   width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   max-height: none;
 }

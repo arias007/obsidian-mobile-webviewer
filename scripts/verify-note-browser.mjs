@@ -32,6 +32,13 @@ const observerMethod = observerStart >= 0 && observerEnd > observerStart ? sourc
 const bindingStart = source.indexOf("\n  refreshNoteDrawWorkspaceBinding(");
 const bindingEnd = source.indexOf("\n  notifyNoteDrawWebviewChanged(", bindingStart);
 const bindingMethod = bindingStart >= 0 && bindingEnd > bindingStart ? source.slice(bindingStart, bindingEnd) : "";
+const externalLinkStart = source.indexOf("\n  handleExternalLinkClick(");
+const externalLinkEnd = source.indexOf("\n  async handleGlobalBingEvent(", externalLinkStart);
+const externalLinkMethod = externalLinkStart >= 0 && externalLinkEnd > externalLinkStart
+  ? source.slice(externalLinkStart, externalLinkEnd)
+  : "";
+const externalLinkRegistration = source.indexOf("this.handleExternalLinkClick(event);");
+const noteWebLinkRegistration = source.indexOf("void this.handleGlobalBingEvent(event);");
 
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
@@ -57,13 +64,17 @@ const checks = [
   ["NoteWeb uses Obsidian tabs for explicit new-window navigation", source.includes('event.type === "auxclick"') && source.includes('await this.openNoteBrowser(url, true)') && source.includes('onNewWindow: (nextUrl) => this.openNoteBrowser(nextUrl, true)') && source.includes("boundToLeaf") && source.includes("requestedUrl")],
   ["NoteWeb navigation normalizes equivalent trailing-slash URLs", source.includes("equivalentEmbedUrl") && source.includes("while (previous && equivalentEmbedUrl(previous, current))") && source.includes("while (next && equivalentEmbedUrl(next, current))")],
   ["NoteWeb keeps ordinary links in the current note", source.includes('await this.openUrlInEmbed(embed, url)')],
+  ["ordinary Markdown external links open in a new NoteWeb tab", externalLinkMethod.includes('view?.getViewType?.() !== "markdown"') && externalLinkMethod.includes('file.extension !== "md"') && externalLinkMethod.includes("this.openNoteBrowser(url, true)")],
+  ["internal, attachment, and download links keep Obsidian behavior", externalLinkMethod.includes('!/^https?:\\/\\//i.test(url)') && externalLinkMethod.includes('anchor.hasAttribute("download")')],
+  ["external-link capture cannot intercept NoteWeb navigation", externalLinkMethod.includes('anchor.closest(".mwv-root, .mwv-embed, .mwv-note-browser-document")') && externalLinkMethod.includes("file.path === WEBVIEW_NOTE_PATH") && externalLinkRegistration >= 0 && externalLinkRegistration < noteWebLinkRegistration],
+  ["captured external links cannot escape to the system browser", externalLinkMethod.includes("event.preventDefault()") && externalLinkMethod.includes("event.stopImmediatePropagation()")],
   ["NoteWeb toolbar has stable two-row layout", styles.includes('"controls actions"') && styles.includes('"address address"') && styles.includes("grid-area: address") && styles.includes(".mwv-bing-home .mwv-bing-note-content button") && !styles.includes(".mwv-bing-home button,")],
   ["NoteWeb hides the duplicate in-content URL row", styles.includes(".mwv-note-browser-document .mwv-browser-address") && styles.includes("display: none") && styles.includes('grid-template-areas: "controls actions"')],
   ["NoteWeb result tabs and media stay borderless", styles.includes(".mwv-note-browser-document .mwv-bing-home .mwv-bing-tab") && styles.includes("border: 0 !important") && styles.includes(".mwv-note-browser-document .mwv-page-media img")],
-  ["NoteWeb real-web mode renders the original page including the home URL", source.includes('(mode === "web" || mode === "split") && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-bing-home.is-web-front > .mwv-bing-note-content")],
+  ["NoteWeb real-web mode renders the original page including the home URL", source.includes('(mode === "web" || mode === "split") && !embed.querySelector(":scope > .mwv-live-browser")') && source.includes("this.renderLiveBrowserSurface(embed, liveUrl)") && source.includes('cls: "mwv-bing-note-content"') && styles.includes(".mwv-embed.is-web-front > :not(.mwv-live-browser)")],
   ["NoteWeb creates at most one direct live browser surface", source.includes("Array.from(embed.children)") && source.includes("existing.slice(1)") && source.includes("querySelector(\":scope > .mwv-live-frame\")")],
   ["Note/Web switching retains one live page without navigation or URL assignment", modeMethod.includes("retainedSurface") && modeMethod.includes("currentSurface !== retainedSurface") && !modeMethod.includes("openUrlInEmbed") && !modeMethod.includes("renderEmbed(") && !modeMethod.includes("loadURL") && !modeMethod.includes(".src =")],
-  ["NoteWeb keeps the real page usable with active NoteDraw controls", styles.includes("display: flex") && styles.includes("flex: 1 1 auto") && !styles.includes("--mwv-web-safe-top")],
+  ["NoteWeb Web mode gives the raw guest exclusive ownership of the viewport", styles.includes(".mwv-embed.is-web-front > :not(.mwv-live-browser)") && styles.includes("pointer-events: none !important") && !styles.includes("--mwv-web-safe-top")],
   ["NoteWeb hides duplicate chrome after a Markdown preview rebuild", styles.includes(":has(.mwv-embed[data-url]) .mwv-browser-chrome") && source.includes("markdown-preview-sizer")],
   ["NoteWeb double-clicks cannot switch Obsidian into edit mode", source.includes('["mousedown", "click", "dblclick"]') && doubleActivationMethod.includes("event.detail < 2") && doubleActivationMethod.includes("event.stopImmediatePropagation()") && doubleActivationMethod.includes("file.path !== WEBVIEW_NOTE_PATH")],
   ["NoteWeb double-click containment preserves native text selection", !doubleActivationMethod.includes("event.preventDefault")],
@@ -79,7 +90,7 @@ const checks = [
   ["NoteWeb wand opens NoteDraw in element selection mode", source.includes("setNoteDrawWebviewTool(controller, \"select\")") && source.includes("setToolFromApi") && source.includes("controller.toolMode === \"edit-md\"")],
   ["NoteWeb search results omit the recommendation column", !source.includes('side.createEl("h3"') && !source.includes('cls: "mwv-related-pill"') && styles.includes(".mwv-bing-serp") && styles.includes("grid-template-columns: minmax(0, 1fr)")],
   ["NoteWeb Web mode fills the actual Markdown viewport", styles.includes(":has(.mwv-embed.is-web-front) > .markdown-preview-sizer") && styles.includes("min-height: 0 !important") && styles.includes("padding-bottom: 0 !important") && styles.includes(".el-div:has(> .mwv-embed.is-web-front)") && styles.includes("height: 100%") && !styles.includes("height: max(480px, 68vh)")],
-  ["NoteWeb deepest live webview remains unscaled and fills its flex surface", styles.includes(".mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview") && styles.includes("display: flex") && styles.includes("flex: 1 1 auto") && styles.includes("min-height: 0") && source.includes('frame.setCssStyles({ zoom: "1" })')],
+  ["NoteWeb deepest live webview remains unscaled and fills its flex-sized raw surface", styles.includes(".mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview") && styles.includes("display: flex") && styles.includes("flex: 1 1 auto") && styles.includes("min-height: 0") && source.includes('frame.setCssStyles({ zoom: "1" })')],
   ["real webpages stay raw after delayed WebView callbacks", source.includes("isRawRealWebview") && source.includes("isRawRealBrowserSurface") && source.includes("if (this.isRawRealWebview(webview)) return;") && source.includes("if (this.isRawRealBrowserSurface(frame)) return;") && source.includes("const rawWebview = this.isRawRealBrowserSurface(frame)") && source.includes("frame.setZoomFactor?.(rawWebview ? 1 : zoom / 100)") && styles.includes("filter: none !important") && styles.includes("transform: none !important")],
   ["raw WebView surfaces opt out of every guest-page injection path", source.includes("raw?: boolean") && source.includes("raw: true") && source.includes("const keepGuestUntouched = callbacks.raw === true") && source.includes("if (!keepGuestUntouched)") && source.includes("mwv-raw-surface")],
   ["WebView navigation APIs wait for dom-ready", source.includes("isBrowserSurfaceReady") && source.includes("_mwvReady") && source.includes("setBrowserSurfaceUrl") && source.includes("navigateEmbedBack") && source.includes("navigateEmbedForward")],
