@@ -1530,6 +1530,15 @@
   display: none;
 }
 
+/* Host-side NoteDraw layers are hidden only while the NoteWeb document is
+   showing its raw Web presentation. The marker is class-based so existing
+   inline styles on ordinary notes and plugin-owned elements are preserved. */
+.mwv-note-browser-document .mwv-noteweb-raw-hidden {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* The Markdown Note is the primary NoteWeb surface. Its controls are hosted
    by Obsidian's native view actions and pane menu, so the embedded duplicate
    chrome should not consume vertical space or draw a second frame. */
@@ -1716,9 +1725,14 @@
 }
 
 .workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
-  .mwv-notedraw-anchor,
+  .mwv-notedraw-anchor {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
 .workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
-  .view-actions .notedraw-webview-button {
+  .view-actions .notedraw-webview-button:not(.mwv-notedraw-web-wand) {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -3615,6 +3629,17 @@
 
 .mwv-notedraw-anchor .notedraw-webview-button {
   pointer-events: auto;
+}
+
+.mwv-notedraw-anchor .mwv-notedraw-web-wand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-4-4, 32px);
+  height: var(--size-4-4, 32px);
+  padding: 0;
+  pointer-events: auto;
+  cursor: var(--cursor, pointer);
 }
 
 .mwv-embed.notedraw-shell > .notedraw-toolbar {

@@ -1,6 +1,8 @@
 import {
   App,
+  Component,
   ItemView,
+  MarkdownRenderer,
   Menu,
   Notice,
   Platform,
@@ -2453,6 +2455,19 @@ interface NoteDrawButtonElement extends HTMLElement {
   _mwvNoteDrawBoundController?: NoteDrawControllerLike;
   _mwvNoteDrawBound?: boolean;
   _mwvNoteDrawLastTouchMs?: number;
+  _mwvNoteWebWandProxy?: boolean;
+  _mwvNoteWebWandBound?: boolean;
+}
+
+interface ObsidianOpenLink {
+  vault: string;
+  file: string;
+  heading: string;
+  block: string;
+}
+
+interface LocalNoteEmbedElement extends HTMLElement {
+  _mwvMarkdownComponent?: Component;
 }
 
 interface NoteDrawSurfaceElement extends HTMLElement {
@@ -2576,6 +2591,37 @@ function normalizeInput(input: string, searchUrl: string): string {
   return searchUrl.includes("{{query}}")
     ? searchUrl.replace("{{query}}", encoded)
     : `${searchUrl}${encoded}`;
+}
+
+function parseObsidianOpenLink(input: string | undefined): ObsidianOpenLink | null {
+  const value = input?.trim() ?? "";
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol.toLowerCase() !== "obsidian:" || parsed.hostname.toLowerCase() !== "open") return null;
+    const file = parsed.searchParams.get("file")?.trim() ?? "";
+    if (!file) return null;
+    return {
+      vault: parsed.searchParams.get("vault")?.trim() ?? "",
+      file,
+      heading: parsed.searchParams.get("heading")?.trim() ?? "",
+      block: parsed.searchParams.get("block")?.trim() ?? ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLegacyObsidianFileUrl(input: string | undefined): boolean {
+  const value = input?.trim() ?? "";
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol.toLowerCase() !== "http:" || parsed.hostname.toLowerCase() !== "localhost") return false;
+    return /\.(?:md|markdown|pdf|docx?|xlsx?|pptx?|csv|txt|png|jpe?g|gif|webp|svg|mp4|mp3)(?:$|[?#])/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function equivalentEmbedUrl(left: string | undefined, right: string | undefined): boolean {
@@ -3375,10 +3421,7 @@ function createBuiltInUserScriptRules(): UserScriptRule[] {
         "container.querySelectorAll('img').forEach((img) => {",
         "  img.loading = 'lazy';",
         "  img.decoding = 'async';",
-        "  img.addEventListener('click', () => {",
-        "    const src = img.currentSrc || img.src;",
-        "    if (src) window.open(src, '_blank');",
-        "  });",
+        "  // Images stay inside NoteWeb; external navigation is handled by the host.",
         "});"
       ].join("\n"),
       runAt: "reader",
@@ -5301,7 +5344,7 @@ class MobileWebviewerView extends ItemView {
     }));
 
     addAction(pageActions, "external-link", this.plugin.tr("openInBrowser"), () => {
-      window.open(url, "_blank");
+      void this.plugin.openNoteBrowser(url, true);
     });
     addAction(pageActions, "copy", this.plugin.tr("copyLink"), () => runAsync(async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
@@ -5491,12 +5534,17 @@ class MobileWebviewerView extends ItemView {
 }
 
 export default class MobileWebviewerPlugin extends Plugin {
+  disposed = false;
   settings: MobileWebviewerSettings = DEFAULT_SETTINGS;
   processorSeq = 0;
   processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  embedRenderTokens = new WeakMap<HTMLElement, number>();
+  embedRenderSeq = 0;
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
   noteDrawControllerRepairs = new WeakSet<HTMLElement>();
+  noteDrawControllerRestoreTokens = new WeakMap<HTMLElement, number>();
+  noteDrawControllerRestoreSeq = 0;
   noteDrawHeaderActivationTokens = new WeakMap<HTMLElement, number>();
   noteDrawHeaderActivationSeq = 0;
   noteDrawLegacyMigrationTimer = 0;
@@ -5521,6 +5569,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawRawSurfaceGuardRunning = false;
   noteBrowserNativeBindings = new WeakMap<WorkspaceLeaf, NoteBrowserNativeBinding>();
   noteBrowserNativeBindingRecords = new Set<NoteBrowserNativeBinding>();
+  // A NoteWeb open schedules several delayed DOM reconciliation passes. Keep
+  // a token per leaf so an older open cannot overwrite a newer URL after the
+  // new page has already painted.
+  noteBrowserOpenTokens = new WeakMap<WorkspaceLeaf, number>();
+  noteBrowserOpenSeq = 0;
   private apiListeners = new Set<MobileWebviewerApiListener>();
   readonly api: MobileWebviewerApi = {
     apiVersion: MOBILE_WEBVIEWER_API_VERSION,
@@ -5705,6 +5758,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.disposed = true;
     this.restoreNoteDrawRawSurfaceGuard();
     if (this.noteDrawLegacyMigrationTimer) window.clearTimeout(this.noteDrawLegacyMigrationTimer);
     for (const binding of [...this.noteBrowserNativeBindingRecords]) this.restoreNoteBrowserNativeBinding(binding);
@@ -5799,6 +5853,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     for (const surface of new Set(baseSurfaces)) {
       if (!this.isMobileWebviewerSurface(surface)) continue;
       if (this.isNoteBrowserWebMode(surface)) {
+        const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
+        leaf?.addClass("mwv-notedraw-surface-leaf");
+        const controller = this.findWebviewNoteDrawController(surface, true);
+        const retainedButton = controller ? this.retainNoteDrawWebviewButton(controller, surface) : null;
+        if (retainedButton) {
+          this.removeNoteWebWandProxy(surface);
+        } else {
+          this.ensureNoteWebWandProxy(surface);
+        }
         this.hideNoteDrawHeaderButtonsForWebviewerLeaf(surface);
         continue;
       }
@@ -5811,7 +5874,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
       leaf?.addClass("mwv-notedraw-surface-leaf");
       const anchor = this.ensureNoteDrawStableAnchor(surface);
-      this.ensureNoteDrawControllerButtonAnchored(this.findWebviewNoteDrawController(surface, true));
+      const controller = this.findWebviewNoteDrawController(surface, true);
+      this.ensureNoteDrawControllerButtonAnchored(controller);
+      const sourceButton = this.findNoteDrawWebviewSourceButton(surface);
+      if (sourceButton) this.removeNoteWebWandProxy(surface);
+      else this.ensureNoteWebWandProxy(surface, true);
       this.hideNoteDrawHeaderButtonsForWebviewerLeaf(surface);
       const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter((button) =>
         !button.hasClass("mwv-notedraw-launcher") &&
@@ -6004,6 +6071,75 @@ export default class MobileWebviewerPlugin extends Plugin {
     anchor.setAttribute("aria-label", "Notedraw web page tools");
     host.insertBefore(anchor, host.firstChild);
     return anchor;
+  }
+
+  retainNoteDrawWebviewButton(controller: NoteDrawControllerLike, surface: HTMLElement): NoteDrawButtonElement | null {
+    const previewEl = controller.previewEl ?? surface;
+    const button = controller.button as NoteDrawButtonElement | undefined;
+    if (!previewEl?.isConnected || !button?.isConnected) return null;
+    if (!this.isNoteWebOwnedElement(previewEl) || !this.isNoteWebOwnedElement(button)) return null;
+    if (!this.isMobileWebviewerSurface(previewEl) || !this.isNoteBrowserWebMode(previewEl)) return null;
+    const anchor = this.ensureNoteDrawStableAnchor(previewEl);
+    if (button.parentElement !== anchor) anchor.appendChild(button);
+    button.addClass("mwv-notedraw-top-button");
+    button.removeClass("mwv-notedraw-source-button");
+    button.removeClass("mwv-notedraw-webviewer-header-hidden");
+    button.removeAttribute("aria-hidden");
+    button.tabIndex = 0;
+    this.decorateNoteDrawWebWandButton(button);
+    this.bindNoteDrawWebviewButton(button, controller);
+    return button;
+  }
+
+  removeNoteWebWandProxy(surface: HTMLElement): void {
+    const anchor = this.noteDrawStableAnchorHost(surface).querySelector<HTMLElement>(":scope > .mwv-notedraw-anchor");
+    anchor?.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
+  }
+
+  ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
+    if (!surface.isConnected || !this.isNoteWebOwnedElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
+    const anchor = this.ensureNoteDrawStableAnchor(surface);
+    let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
+    if (!button) {
+      button = anchor.createEl("button", {
+        cls: "mwv-notedraw-web-wand mwv-notedraw-host-proxy clickable-icon",
+        attr: {
+          type: "button",
+          "data-mwv-noteweb-wand": "true",
+          "aria-label": "Web notedraw",
+          title: "Web notedraw"
+        }
+      }) as NoteDrawButtonElement;
+      button._mwvNoteWebWandProxy = true;
+    }
+    button.addClass("mwv-notedraw-top-button");
+    button.removeAttribute("aria-hidden");
+    button.tabIndex = 0;
+    this.decorateNoteDrawWebWandButton(button);
+    if (!button._mwvNoteWebWandBound) {
+      button._mwvNoteWebWandBound = true;
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        const current = button?.closest<HTMLElement>(".mwv-embed[data-url], .mwv-note-embed[data-url], .mwv-bing-home[data-url]");
+        if (!current?.isConnected || !this.isNoteWebOwnedElement(current)) return;
+        const controller = this.findWebviewNoteDrawController(current, true);
+        if (controller && this.activateNoteDrawWebviewController(controller, current)) return;
+        // No controller is mounted in raw Web mode by design. Switch the
+        // presentation only when the user explicitly asks for NoteDraw, then
+        // let the normal Note-mode controller lifecycle activate it.
+        this.setNoteBrowserEmbedMode(current, "note");
+        this.queueNoteDrawControllerRestore(current);
+        window.setTimeout(() => {
+          if (!current.isConnected || this.isNoteBrowserWebMode(current)) return;
+          const restored = this.findWebviewNoteDrawController(current, true);
+          if (restored) this.activateNoteDrawWebviewController(restored, current);
+          else this.triggerNoteDraw(current);
+        }, 180);
+      }, true);
+    }
+    return button;
   }
 
   noteDrawStableAnchorHost(surface: HTMLElement): HTMLElement {
@@ -6727,6 +6863,33 @@ export default class MobileWebviewerPlugin extends Plugin {
       window.setTimeout(() => {
         if (!root.isConnected || this.isNoteBrowserWebMode(root)) return;
         this.syncNoteDrawControllers(root, forceEditMode);
+      }, delay);
+    }
+  }
+
+  queueNoteDrawControllerRestore(root?: HTMLElement): void {
+    if (!root?.isConnected || !this.isNoteWebOwnedElement(root) || this.isNoteBrowserWebMode(root)) return;
+    const noteDrawPlugin = this.getNoteDrawPlugin();
+    if (typeof noteDrawPlugin?.syncWebviewControllers !== "function") return;
+    const token = ++this.noteDrawControllerRestoreSeq;
+    this.noteDrawControllerRestoreTokens.set(root, token);
+    // Web mode intentionally destroys the raw-page controller. Recreate it
+    // only after the Note presentation is active, and retry across NoteDraw's
+    // own async mount/layout passes so the wand cannot disappear on return.
+    for (const delay of [0, 80, 220, 520, 1000, 1800]) {
+      window.setTimeout(() => {
+        if (
+          !root.isConnected ||
+          this.noteDrawControllerRestoreTokens.get(root) !== token ||
+          this.isNoteBrowserWebMode(root)
+        ) return;
+        try {
+          noteDrawPlugin.syncWebviewControllers?.();
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw webview restore skipped", error);
+        }
+        this.queueNoteDrawButtonDedupe(root);
+        this.queueNoteDrawControllerSync(root, true);
       }, delay);
     }
   }
@@ -7803,10 +7966,22 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async openNoteBrowser(input?: string, newTab = false): Promise<void> {
+    const requestToken = ++this.noteBrowserOpenSeq;
+    const rememberedUrl = this.settings.noteBrowserUrl || this.settings.homeUrl;
+    // `obsidian://open` is a one-shot deep link. If it was left in persisted
+    // state, the toolbar/ribbon button would reopen that Markdown file instead
+    // of opening a normal web page. Explicit input still routes through
+    // NoteWeb; only an implicit restore falls back to the home page.
+    const staleInternalTarget = !input && (
+      isLegacyObsidianFileUrl(rememberedUrl) ||
+      Boolean(parseObsidianOpenLink(rememberedUrl))
+    );
     const requestedUrl = input
       ? normalizeInput(input, this.settings.searchUrl)
-      : this.settings.noteBrowserUrl || this.settings.homeUrl;
-    if (input) {
+      : staleInternalTarget
+        ? this.settings.homeUrl
+        : rememberedUrl;
+    if (input || staleInternalTarget) {
       this.settings.noteBrowserUrl = requestedUrl;
       this.settings.noteBrowserBack = [];
       this.settings.noteBrowserForward = [];
@@ -7819,21 +7994,30 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.saveSettings();
     }
     const file = await this.ensureWebviewerNote();
+    const isLatestRequest = () => newTab || requestToken === this.noteBrowserOpenSeq;
+    if (this.disposed || !isLatestRequest()) return;
     const leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
+    this.noteBrowserOpenTokens.set(leaf, requestToken);
+    const isCurrentOpen = () => !this.disposed && isLatestRequest() && this.noteBrowserOpenTokens.get(leaf) === requestToken;
+    if (!isCurrentOpen()) return;
     await leaf.openFile(file);
+    if (!isCurrentOpen()) return;
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.setNoteBrowserReadingMode(leaf);
     let boundToLeaf = false;
     for (const delay of [0, 80, 240, 600, 1200]) {
       window.setTimeout(() => {
+        if (!isCurrentOpen()) return;
         if (boundToLeaf || !leaf.view?.containerEl?.isConnected) return;
         this.processWebviewerEmbeds(leaf.view.containerEl);
+        if (!isCurrentOpen()) return;
         const embeds = Array.from(leaf.view.containerEl.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"));
         const embed = embeds.find((candidate) => this.isVisibleNoteDrawSurface(candidate)) ?? embeds[0];
         if (!embed) return;
         boundToLeaf = true;
+        if (!isCurrentOpen()) return;
         this.syncNoteBrowserNativeIdentity(embed, requestedUrl);
-        if (embed.dataset.url !== requestedUrl) {
+        if (isCurrentOpen() && embed.dataset.url !== requestedUrl) {
           void this.openUrlInEmbed(embed, requestedUrl, false);
         }
       }, delay);
@@ -7906,6 +8090,78 @@ export default class MobileWebviewerPlugin extends Plugin {
       return existing;
     }
     return await this.app.vault.create(WEBVIEW_NOTE_PATH, content);
+  }
+
+  resolveObsidianOpenFile(link: ObsidianOpenLink): TFile | null {
+    const currentVault = this.app.vault.getName().trim();
+    if (link.vault && currentVault && link.vault.localeCompare(currentVault, undefined, { sensitivity: "accent" }) !== 0) return null;
+    let path = normalizePath(link.file.replace(/^\/+/, "").trim());
+    if (!path || path.includes("\0") || path.split("/").some((segment) => segment === "..")) return null;
+    const candidates = path.toLowerCase().endsWith(".md") ? [path] : [path, `${path}.md`];
+    for (const candidate of candidates) {
+      const file = this.app.vault.getAbstractFileByPath(candidate);
+      if (file instanceof TFile) return file;
+    }
+    return null;
+  }
+
+  async renderObsidianNoteEmbed(embed: HTMLElement, link: ObsidianOpenLink, url: string): Promise<void> {
+    const renderToken = ++this.embedRenderSeq;
+    this.embedRenderTokens.set(embed, renderToken);
+    if (this.disposed || !embed.isConnected) return;
+    this.disposeBrowserSurfacesIn(embed);
+    const localEmbed = embed as LocalNoteEmbedElement;
+    localEmbed._mwvMarkdownComponent?.unload();
+    localEmbed._mwvMarkdownComponent = undefined;
+    embed.empty();
+    embed.addClass("mwv-embed");
+    embed.addClass("mwv-note-embed");
+    embed.removeClass("mwv-bing-home");
+    embed.removeClass("mwv-utility-embed");
+    embed.removeClass("is-web-front");
+    embed.removeClass("is-split-front");
+    embed.addClass("is-note-front");
+    embed.dataset.mwvBrowserMode = "note";
+    this.applyNoteBrowserWebIsolation(embed, false);
+    embed.dataset.url = url;
+    embed.setAttribute("data-url", url);
+
+    const file = this.resolveObsidianOpenFile(link);
+    const title = file?.basename || link.file.split("/").pop() || "Obsidian note";
+    this.renderBrowserChrome(embed, url, title);
+    const article = embed.createEl("article", { cls: "mwv-note-surface mwv-local-note-surface" });
+    article.dataset.url = url;
+    article.createEl("h1", { cls: "mwv-page-title", text: title });
+    const content = article.createDiv({ cls: "mwv-local-note-content" });
+    if (!file) {
+      content.createDiv({ cls: "mwv-empty", text: `Note not found: ${link.file}` });
+      this.notifyNoteDrawWebviewChanged(embed);
+      return;
+    }
+
+    try {
+      const markdown = await this.app.vault.read(file);
+      if (this.disposed || !embed.isConnected || embed.dataset.url !== url || this.embedRenderTokens.get(embed) !== renderToken) return;
+      const component = new Component();
+      component.load();
+      localEmbed._mwvMarkdownComponent = component;
+      await MarkdownRenderer.renderMarkdown(markdown, content, file.path, component);
+      const target = link.heading || link.block;
+      if (target) {
+        window.setTimeout(() => {
+          if (!content.isConnected) return;
+          const normalizedTarget = target.replace(/^#+\s*/, "").trim().toLowerCase();
+          const heading = Array.from(content.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"))
+            .find((candidate) => candidate.textContent?.trim().toLowerCase() === normalizedTarget);
+          heading?.scrollIntoView({ block: "start" });
+        }, 0);
+      }
+    } catch (error) {
+      if (this.disposed || !embed.isConnected || embed.dataset.url !== url || this.embedRenderTokens.get(embed) !== renderToken) return;
+      console.error("[mobile-webviewer] Obsidian note render failed", error);
+      content.createDiv({ cls: "mwv-empty", text: error instanceof Error ? error.message : "Unable to render note" });
+    }
+    this.notifyNoteDrawWebviewChanged(embed);
   }
 
   escapeAttr(value: string): string {
@@ -8221,6 +8477,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     const retainedSurface = embed.querySelector<BrowserSurfaceElement>(
       ":scope > .mwv-live-browser > .mwv-live-frame"
     );
+    // Invalidate any delayed NoteDraw remounts from the previous transition.
+    this.noteDrawControllerRestoreTokens.set(embed, ++this.noteDrawControllerRestoreSeq);
     embed.dataset.mwvBrowserMode = mode;
     this.settings.browserFrontendMode = mode === "web" ? "web" : "note";
     void this.saveSettings();
@@ -8236,15 +8494,18 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.disposeAllRawNoteDrawControllers();
       this.cleanupStaleNoteDrawButtonResidue(leafContent);
       this.hideNoteDrawHeaderButtonsForWebviewerLeaf(embed);
+      this.ensureNoteWebWandProxy(embed);
     } else {
       // Reconcile immediately when returning to Note/Split mode so buttons
       // hidden for Web mode are restored and the current controller is the
       // only toolbar that survives the mode switch.
+      this.removeNoteWebWandProxy(embed);
       this.cleanupStaleNoteDrawButtonResidue(leafContent);
       this.prepareWebviewerDocumentLayout(embed);
       this.refreshNoteDrawWorkspaceBinding(embed, true, false);
       this.queueNoteDrawButtonDedupe(embed);
       this.queueNoteDrawControllerSync(embed, true);
+      this.queueNoteDrawControllerRestore(embed);
     }
     embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
       button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
@@ -8285,6 +8546,31 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const anchor = event.composedPath().find(isAnchorElement);
     if (!anchor || anchor.hasAttribute("download")) return;
+    const rawHref = anchor.getAttribute("href")?.trim() ?? "";
+
+    // Explicit Obsidian open links are routed through NoteWeb, but links
+    // already rendered inside NoteWeb remain owned by its local navigation.
+    if (parseObsidianOpenLink(rawHref)) {
+      if (anchor.closest(".mwv-root, .mwv-embed, .mwv-note-browser-document")) return;
+      const leaf = this.findWorkspaceLeafForElement(anchor);
+      const view = leaf?.view as { file?: unknown; getViewType?: () => string } | undefined;
+      const file = view?.file;
+      const link = parseObsidianOpenLink(rawHref);
+      if (!link || !leaf || view?.getViewType?.() !== "markdown" || !(file instanceof TFile) || file.extension !== "md" || file.path === WEBVIEW_NOTE_PATH) return;
+      const currentVault = this.app.vault.getName().trim();
+      if (link.vault && currentVault && link.vault.localeCompare(currentVault, undefined, { sensitivity: "accent" }) !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      runAsync(() => this.openNoteBrowser(rawHref, true));
+      return;
+    }
+
+    // Obsidian internal links may expose a browser-resolved absolute href.
+    // Keep them (and attachment/protocol links) on Obsidian's native router.
+    if (anchor.classList.contains("internal-link") || anchor.hasAttribute("data-href")) return;
+    if (isLegacyObsidianFileUrl(rawHref)) return;
+    if (!/^https?:\/\//i.test(rawHref)) return;
     const url = anchor.href.trim();
     if (!/^https?:\/\//i.test(url)) return;
 
@@ -8444,12 +8730,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     const copy = actions.createEl("button", { cls: "mwv-result-action", attr: { type: "button", "data-mwv-copy-url": result.url, "data-mwv-copy-title": result.title, title: "Copy link" } });
     setIcon(copy, "copy");
     const titleLine = item.createDiv({ cls: "mwv-result-title-line" });
-    titleLine.createEl("a", {
+    const titleLink = titleLine.createEl("a", {
       cls: "mwv-bing-result-title",
       text: result.title,
       href: result.url,
       attr: { "data-mwv-open-url": result.url, title: result.url }
     });
+    titleLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const embed = parent.closest<HTMLElement>(".mwv-embed[data-url]");
+      if (embed && this.isNoteWebOwnedElement(embed)) void this.openUrlInEmbed(embed, result.url);
+    }, true);
     item.createDiv({ cls: "mwv-bing-result-url", text: result.url });
     const body = item.createDiv({ cls: "mwv-result-body" });
     if (result.imageUrl) {
@@ -8481,11 +8773,16 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async openUrlInEmbed(embed: HTMLElement, url: string, recordHistory = true): Promise<void> {
+    const requestToken = ++this.embedRenderSeq;
+    this.embedRenderTokens.set(embed, requestToken);
+    if (this.disposed || !embed.isConnected) return;
     const nextUrl = normalizeInput(url, this.settings.searchUrl);
     const previousUrl = embed.dataset.url;
     await this.flushEmbedReaderNow(embed);
+    if (this.disposed || !embed.isConnected || this.embedRenderTokens.get(embed) !== requestToken) return;
     if (previousUrl && !equivalentEmbedUrl(previousUrl, nextUrl)) {
       await this.resetNoteDrawWebviewControllers(embed);
+      if (this.disposed || !embed.isConnected || this.embedRenderTokens.get(embed) !== requestToken) return;
     }
     if (recordHistory) {
       this.pushEmbedHistory(embed, nextUrl);
@@ -8494,6 +8791,26 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvProgrammaticUrl = nextUrl;
       embed.setAttribute("data-url", nextUrl);
       void this.persistEmbedState(embed);
+    }
+    const obsidianLink = parseObsidianOpenLink(nextUrl);
+    if (obsidianLink) {
+      await this.renderObsidianNoteEmbed(embed, obsidianLink, nextUrl);
+      const file = this.resolveObsidianOpenFile(obsidianLink);
+      await this.syncEmbedActiveTab(embed, nextUrl, file?.basename || obsidianLink.file);
+      return;
+    }
+    const liveSurface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
+    if (embed.hasClass("is-web-front") && liveSurface && /^https?:\/\//i.test(nextUrl)) {
+      // Raw Web mode navigates the already-mounted guest page. Do not render
+      // a second reader/search document or replace the WebView while the user
+      // is switching between the two presentations.
+      this.updateEmbedChrome(embed, nextUrl, hostName(nextUrl));
+      if (!this.sameWebPage(this.safeBrowserSurfaceUrl(liveSurface), nextUrl)) {
+        this.setBrowserSurfaceUrl(liveSurface, nextUrl);
+      }
+      void this.addHistory({ title: hostName(nextUrl), url: nextUrl, time: Date.now() });
+      await this.syncEmbedActiveTab(embed, nextUrl, hostName(nextUrl));
+      return;
     }
     const utilityKind = internalUtilityKind(nextUrl);
     if (utilityKind) {
@@ -8717,6 +9034,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderUtilityEmbed(embed: HTMLElement, kind: UtilityPageKind, url = utilityPageUrl(kind)): void {
+    this.disposeBrowserSurfacesIn(embed);
     embed.empty();
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
@@ -8899,12 +9217,35 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async prepareEmbedForRerender(embed: HTMLElement): Promise<void> {
+    if (this.disposed) return;
     await this.flushEmbedReaderNow(embed);
+    if (this.disposed) return;
     await this.resetNoteDrawWebviewControllers(embed);
-    this.disposeBrowserSurfacesIn(embed);
+    if (this.disposed) return;
+    // The Note and Web presentations share one live page. Keep that WebView
+    // mounted across host-side reader/search rerenders so session state,
+    // history, cookies, and the current document are not forked.
+    const liveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (liveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+      Array.from(embed.children).forEach((child) => {
+        if (child !== liveBrowser) child.remove();
+      });
+    } else {
+      this.disposeBrowserSurfacesIn(embed);
+    }
   }
 
   async renderEmbed(embed: HTMLElement, url: string): Promise<void> {
+    const renderToken = ++this.embedRenderSeq;
+    this.embedRenderTokens.set(embed, renderToken);
+    if (this.disposed || !embed.isConnected) return;
+    const obsidianLink = parseObsidianOpenLink(url);
+    if (obsidianLink) {
+      await this.renderObsidianNoteEmbed(embed, obsidianLink, url);
+      const file = this.resolveObsidianOpenFile(obsidianLink);
+      await this.syncEmbedActiveTab(embed, url, file?.basename || obsidianLink.file);
+      return;
+    }
     const utilityKind = internalUtilityKind(url);
     if (utilityKind) {
       this.renderUtilityEmbed(embed, utilityKind, url);
@@ -8919,13 +9260,26 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     await this.prepareEmbedForRerender(embed);
-    embed.empty();
+    const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+      Array.from(embed.children).forEach((child) => {
+        if (child !== retainedLiveBrowser) child.remove();
+      });
+    } else {
+      embed.empty();
+    }
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
     embed.dataset.url = url;
     embed.setAttribute("data-url", url);
     embed.removeClass("mwv-bing-home");
     this.renderBrowserChrome(embed, url, this.tr("loading"));
+    if (retainedLiveBrowser) {
+      const retainedFrame = retainedLiveBrowser.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-frame");
+      if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), url)) {
+        this.setBrowserSurfaceUrl(retainedFrame, url);
+      }
+    }
     this.notifyNoteDrawWebviewChanged(embed);
 
     if (this.settings.liveBrowserFirst) {
@@ -8968,6 +9322,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderEmbedFallback(embed: HTMLElement, url: string, title: string): void {
+    this.disposeBrowserSurfacesIn(embed);
     embed.empty();
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
@@ -9345,8 +9700,18 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async renderBingShellEmbed(embed: HTMLElement, query = ""): Promise<void> {
+    const renderToken = ++this.embedRenderSeq;
+    this.embedRenderTokens.set(embed, renderToken);
     await this.prepareEmbedForRerender(embed);
-    embed.empty();
+    if (this.disposed || !embed.isConnected || this.embedRenderTokens.get(embed) !== renderToken) return;
+    const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+      Array.from(embed.children).forEach((child) => {
+        if (child !== retainedLiveBrowser) child.remove();
+      });
+    } else {
+      embed.empty();
+    }
     embed.addClass("mwv-bing-home");
     embed.toggleClass("mwv-bing-home-empty", !query.trim());
     embed.toggleClass("mwv-bing-home-results", Boolean(query.trim()));
@@ -9359,6 +9724,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.dataset.url = currentUrl;
     embed.setAttribute("data-url", currentUrl);
     this.renderBrowserChrome(embed, currentUrl, query ? `Bing: ${query}` : "Bing");
+    if (retainedLiveBrowser) {
+      const retainedFrame = retainedLiveBrowser.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-frame");
+      if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), currentUrl)) {
+        this.setBrowserSurfaceUrl(retainedFrame, currentUrl);
+      }
+    }
     this.notifyNoteDrawWebviewChanged(embed);
 
     const noteContent = embed.createDiv({ cls: "mwv-bing-note-content" });
@@ -9816,7 +10187,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction(tabActions, "bot", this.tr("cancipAi"), () => void this.newEmbedBrowserTab(embed, utilityPageUrl("cancip", url)), true);
 
     addAction(pageActions, "external-link", this.tr("openInBrowser"), () => {
-      window.open(url, "_blank");
+      void this.openNoteBrowser(url, true);
     });
     addAction(pageActions, "copy", this.tr("copyLink"), async () => {
       await navigator.clipboard.writeText(`[${title}](${url})`);
@@ -10422,12 +10793,26 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderPageEmbed(embed: HTMLElement, page: NotePage): void {
-    embed.empty();
+    const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+      Array.from(embed.children).forEach((child) => {
+        if (child !== retainedLiveBrowser) child.remove();
+      });
+    } else {
+      embed.empty();
+    }
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
     embed.dataset.url = page.url;
+    embed.setAttribute("data-url", page.url);
     embed.removeClass("mwv-bing-home");
     this.renderBrowserChrome(embed, page.url, page.title || hostName(page.url));
+    if (retainedLiveBrowser) {
+      const retainedFrame = retainedLiveBrowser.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-frame");
+      if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), page.url)) {
+        this.setBrowserSurfaceUrl(retainedFrame, page.url);
+      }
+    }
     embed.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     embed.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
     if (page.images.length) {
@@ -11299,6 +11684,11 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   disposeBrowserSurfacesIn(root: ParentNode | null | undefined): void {
     if (!root) return;
+    root.querySelectorAll<LocalNoteEmbedElement>(".mwv-local-note-surface").forEach((surface) => {
+      const embed = surface.closest<LocalNoteEmbedElement>(".mwv-embed");
+      embed?._mwvMarkdownComponent?.unload();
+      if (embed) embed._mwvMarkdownComponent = undefined;
+    });
     root.querySelectorAll<BrowserSurfaceElement>(".mwv-real-webview, .mwv-live-frame").forEach((surface) => {
       this.disposeBrowserSurface(surface);
     });
@@ -11340,17 +11730,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     for (const element of elements) {
       if (enabled) {
-        if (!element.dataset.mwvRawWebHiddenStyle) element.dataset.mwvRawWebHiddenStyle = element.getAttribute("style") ?? "";
-        element.style.setProperty("display", "none", "important");
-        element.style.setProperty("visibility", "hidden", "important");
-        element.style.setProperty("pointer-events", "none", "important");
-      } else if (element.dataset.mwvRawWebHiddenStyle !== undefined) {
-        const previous = element.dataset.mwvRawWebHiddenStyle;
-        delete element.dataset.mwvRawWebHiddenStyle;
-        if (previous) element.setAttribute("style", previous);
-        else element.removeAttribute("style");
+        element.addClass("mwv-noteweb-raw-hidden");
+      } else {
+        element.removeClass("mwv-noteweb-raw-hidden");
       }
     }
+    this.queueNoteDrawControllerRestore(embed);
   }
 
   supportsElectronWebview(): boolean {
@@ -11466,6 +11851,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     } catch {
       return webview.src || "";
     }
+  }
+
+  safeBrowserSurfaceUrl(surface: BrowserSurfaceElement | null | undefined): string {
+    if (!surface) return "";
+    return this.isElectronWebview(surface) ? this.safeWebviewUrl(surface) : surface.src || "";
   }
 
   safeWebviewTitle(webview: ElectronWebviewElement): string {
@@ -13408,6 +13798,34 @@ export default class MobileWebviewerPlugin extends Plugin {
             time: typeof tab.time === "number" ? tab.time : Date.now()
           }))
       : [];
+    // Older builds captured Obsidian's internal file links as localhost HTTP
+    // URLs. They are not web pages and must never become the startup target.
+    if (isLegacyObsidianFileUrl(this.settings.noteBrowserUrl)) {
+      this.settings.noteBrowserUrl = this.settings.homeUrl;
+      this.settings.noteBrowserBack = [];
+      this.settings.noteBrowserForward = [];
+      shouldSaveSettings = true;
+    }
+    // Deep links are handled when explicitly clicked, but must not become the
+    // next implicit NoteBrowser startup target after a reload.
+    if (parseObsidianOpenLink(this.settings.noteBrowserUrl)) {
+      this.settings.noteBrowserUrl = this.settings.homeUrl;
+      this.settings.noteBrowserBack = [];
+      this.settings.noteBrowserForward = [];
+      shouldSaveSettings = true;
+    }
+    this.settings.browserTabs = this.settings.browserTabs.map((tab) => {
+      if (!isLegacyObsidianFileUrl(tab.url) && !parseObsidianOpenLink(tab.url)) return tab;
+      shouldSaveSettings = true;
+      return {
+        ...tab,
+        title: hostName(this.settings.homeUrl),
+        url: this.settings.homeUrl,
+        back: [],
+        forward: [],
+        time: Date.now()
+      };
+    });
     this.ensureBrowserTab(this.settings.activeBrowserTabId);
     if (shouldSaveSettings) {
       await this.saveSettings();
