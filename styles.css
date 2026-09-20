@@ -1519,15 +1519,37 @@
   max-width: none;
 }
 
-/* The native Obsidian view title already carries the current URL. Avoid
-   repeating the same address inside the NoteWeb content area. */
+/* The native Obsidian view title only mirrors the current URL and cannot be
+   edited, and the native pane menu has no back/forward entry. NoteWeb
+   therefore keeps a compact, editable address row plus its navigation
+   controls on every platform, mobile included. Only the duplicated action row
+   stays hidden, because Obsidian's native view actions already host those
+   commands. */
 .mwv-note-browser-document .mwv-browser-chrome {
-  grid-template-areas: "controls actions";
-  gap: 0;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "controls"
+    "address";
+  gap: 2px;
+  padding: 4px 6px 5px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: transparent;
+}
+
+.mwv-note-browser-document .mwv-browser-controls {
+  display: inline-flex;
+  grid-area: controls;
+  justify-content: flex-start;
 }
 
 .mwv-note-browser-document .mwv-browser-address {
-  display: none;
+  display: grid;
+  grid-area: address;
+}
+
+.mwv-note-browser-document .mwv-browser-actions {
+  display: none !important;
 }
 
 /* Host-side NoteDraw layers are hidden only while the NoteWeb document is
@@ -1539,18 +1561,30 @@
   pointer-events: none !important;
 }
 
-/* The Markdown Note is the primary NoteWeb surface. Its controls are hosted
-   by Obsidian's native view actions and pane menu, so the embedded duplicate
-   chrome should not consume vertical space or draw a second frame. */
-.mwv-note-browser-document .mwv-browser-chrome {
-  display: none !important;
-}
-
 /* Markdown preview roots can be rebuilt by Obsidian without giving the
    post-processor another chance to add mwv-note-browser-document. Keep the
-   embedded NoteWeb chrome hidden from the structural marker as well. */
+   editable address row reachable from the structural marker as well, so the
+   address input survives a preview rebuild instead of disappearing. */
 .markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
 .markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "controls"
+    "address";
+  gap: 2px;
+  padding: 4px 6px 5px;
+  background: transparent;
+}
+
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-address,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-address {
+  display: grid;
+  grid-area: address;
+}
+
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-actions,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-actions {
   display: none !important;
 }
 
@@ -1649,11 +1683,43 @@
 /* Web is a presentation of the live guest, not another rendered Note page.
    Legacy NoteWeb documents can still contain unwrapped search/reader nodes;
    remove every host child except the live surface from layout so those nodes
-   can never squeeze the Electron guest to a zero-height viewport. */
-.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser) {
+   can never squeeze the Electron guest to a zero-height viewport. The
+   browser chrome is deliberately exempt: a real page must still let the user
+   type a different URL, so the address row stays mounted above the guest. */
+.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome) {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
+}
+
+/* The address row and the raw guest share one column: the chrome keeps its
+   natural height, the live page takes every remaining pixel. */
+.mwv-note-browser-document .mwv-embed.is-web-front {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  flex: 0 0 auto;
+  z-index: 1210;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-address,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-url,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-go,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-home {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-live-browser {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
 }
 
 /* Explicit raw-page editing is the only Web-mode exception. Reveal the
