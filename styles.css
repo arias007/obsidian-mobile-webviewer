@@ -1495,20 +1495,32 @@
   display: block;
 }
 
-.mwv-note-browser-document .markdown-preview-sizer {
-  width: 100%;
-  max-width: none;
-  margin-right: 0;
-  margin-left: 0;
-  padding-right: 0;
-  padding-left: 0;
+/* The browser document owns the entire Obsidian pane. Obsidian's readable-line
+   -width rule (`.markdown-preview-view.is-readable-line-width
+   .markdown-preview-sizer`) is one step more specific than a two-class
+   selector, so the file-margin variables are reset on the document element and
+   the sizing chain is pinned with matching specificity. */
+.markdown-preview-view.mwv-note-browser-document,
+.markdown-rendered.mwv-note-browser-document,
+.mwv-note-browser-document {
+  --file-margins: 0px;
+  --file-line-width: 100%;
+  --line-width: 100%;
+  --line-width-adaptive: 100%;
 }
 
-.markdown-preview-view.mwv-note-browser-document,
-.markdown-rendered.mwv-note-browser-document {
-  padding-right: 8px;
-  padding-left: 8px;
-  padding-top: 0;
+.markdown-preview-view.mwv-note-browser-document {
+  padding: 0 !important;
+}
+
+.markdown-preview-view.mwv-note-browser-document .markdown-preview-sizer,
+.markdown-preview-view.mwv-note-browser-document .markdown-preview-section {
+  width: 100% !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
 }
 
 .mwv-note-browser-document .mwv-embed,
@@ -1600,7 +1612,6 @@
 }
 
 .mwv-note-browser-document .mwv-bing-home-empty {
-  min-height: calc(100dvh - 92px);
   padding-top: 0;
 }
 
@@ -1620,6 +1631,71 @@
 
 .mwv-note-browser-document .mwv-bing-side {
   display: none;
+}
+
+/* Note mode (reader page / native home) shares the same contract as Web mode:
+   the browser chrome keeps its natural height and the document body takes every
+   remaining pixel, instead of relying on a hard-coded viewport offset. */
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) {
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) > .notedraw-reading-stage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) > .markdown-preview-sizer,
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .markdown-preview-sizer > .el-div:has(> .mwv-embed.is-note-front),
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer
+  > .el-div:has(> .mwv-embed.is-note-front) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-embed.is-note-front {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-browser-chrome {
+  flex: 0 0 auto;
+}
+
+/* Content below the address row scrolls inside the pane so the note itself
+   never scrolls away from the browser chrome. */
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-reader-panel,
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-bing-note-content,
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-note-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* Web mode owns the NoteWeb viewport. Remove Obsidian's reading-view tail
@@ -1685,19 +1761,39 @@
    remove every host child except the live surface from layout so those nodes
    can never squeeze the Electron guest to a zero-height viewport. The
    browser chrome is deliberately exempt: a real page must still let the user
-   type a different URL, so the address row stays mounted above the guest. */
-.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome) {
+   type a different URL, so the address row stays mounted above the guest.
+   The extension ("More") panel is exempt as well: it is inserted as a direct
+   child of the embed and must stay visible above the guest, otherwise the
+   More entry appears to do nothing in Web mode. */
+.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome):not(.mwv-extension-panel):not(.mwv-more-panel) {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
 }
 
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-extension-panel,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-more-panel {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* The More panel is absolutely positioned; anchor it to the embed in every
+   mode so it never escapes to an unrelated Obsidian container. */
+.mwv-note-browser-document .mwv-embed:has(> .mwv-extension-panel),
+.mwv-note-browser-document .mwv-embed:has(> .mwv-more-panel) {
+  position: relative;
+}
+
 /* The address row and the raw guest share one column: the chrome keeps its
-   natural height, the live page takes every remaining pixel. */
+   natural height, the live page takes every remaining pixel. min-height is a
+   floor for mobile and for preview rebuilds whose flex chain has not settled
+   yet (it must never collapse the home page to a zero-height blank view), and
+   it is clamped by the viewport so it can never push past the Obsidian pane. */
 .mwv-note-browser-document .mwv-embed.is-web-front {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: min(480px, calc(100dvh - 100px));
 }
 
 .mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome {
@@ -1719,7 +1815,7 @@
 .mwv-note-browser-document .mwv-embed.is-web-front > .mwv-live-browser {
   flex: 1 1 auto;
   height: auto;
-  min-height: 0;
+  min-height: min(440px, calc(100dvh - 140px));
 }
 
 /* Explicit raw-page editing is the only Web-mode exception. Reveal the

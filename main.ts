@@ -3342,6 +3342,438 @@ function imageCandidatesFromDocument(root: ParentNode, baseUrl: string, limit = 
   return result;
 }
 
+/* ---------------------------------------------------------------------------
+ * Reader extraction: HTML -> structured Markdown.
+ * The reader layer should keep the structure a site actually published instead
+ * of flattening it into paragraphs. This walks the DOM in document order and
+ * preserves heading levels, ordered/unordered/nested lists, task items, GFM
+ * tables, fenced code, quotes, figures, definition lists and inline emphasis,
+ * while rewriting every link and image against the page URL.
+ * ------------------------------------------------------------------------ */
+
+const MD_SKIP_TAGS = new Set([
+  "script", "style", "noscript", "template", "svg", "canvas", "iframe",
+  "object", "embed", "link", "meta", "base", "head", "title", "colgroup",
+  "nav", "footer", "form", "aside", "button", "select", "textarea", "dialog"
+]);
+
+const MD_BLOCK_TAGS = new Set([
+  "address", "article", "aside", "blockquote", "details", "div", "dl", "dd",
+  "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+  "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+  "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"
+]);
+
+/**
+ * Page chrome that survives the tag-level filters because sites render it with
+ * ordinary `<div>`/`<span>` markup. Kept deliberately conservative: anything
+ * that could plausibly carry the article headline, byline or body is absent.
+ */
+const MD_NOISE_PATTERN = /(^|[-_ ])(toc|table-of-contents|sidebar|side-bar|breadcrumbs?|navbar|navigation|nav-links|navmenu|site-nav|main-nav|sub-nav|advert|advertisement|adsbygoogle|ads|promo|promotion|sponsored|cookie|consent|newsletter|subscribe|social|share|sharing|related|recommend|recommendations?|comments?|pagination|pager|skip-link|visually-hidden|sr-only|screen-reader|screenreader|print-only|hidden-text)([-_ ]|$)/;
+
+const MD_NOISE_ROLES = new Set(["navigation", "complementary", "search", "banner", "contentinfo", "dialog", "alertdialog"]);
+
+const MD_MAX_READER_CHARS = 40000;
+
+function mdIsNoiseElement(element: HTMLElement): boolean {
+  if (element.getAttribute("aria-hidden") === "true") return true;
+  const role = (element.getAttribute("role") ?? "").trim().toLowerCase();
+  if (role && MD_NOISE_ROLES.has(role)) return true;
+  const id = (element.id ?? "").toLowerCase();
+  if (id && MD_NOISE_PATTERN.test(id)) return true;
+  const className = typeof element.className === "string" ? element.className.toLowerCase() : "";
+  return !!className && MD_NOISE_PATTERN.test(className);
+}
+
+function mdCollapseSpace(value: string): string {
+  return value.replace(/[\t\r\n]+/g, " ").replace(/\u00a0/g, " ").replace(/ {2,}/g, " ");
+}
+
+function mdAbsoluteLink(raw: string | null, baseUrl: string): string {
+  const value = (raw ?? "").trim();
+  if (!value) return "";
+  if (value.startsWith("#")) return "";
+  if (/^(mailto:|tel:|javascript:|data:|blob:)/i.test(value)) return "";
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return /^https?:\/\//i.test(value) ? value : "";
+  }
+}
+
+function mdDetectLanguage(element: HTMLElement): string {
+  const raw = `${element.className} ${element.getAttribute("data-lang") ?? ""} ${element.getAttribute("data-language") ?? ""}`;
+  const match = /(?:language|lang|brush|highlight)[-: ]([a-z0-9+#._-]+)/i.exec(raw);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function mdFenceFor(code: string): string {
+  return code.includes("```") ? "````" : "```";
+}
+
+function mdIndentBlock(block: string, prefix: string): string {
+  return block
+    .split("\n")
+    .map((line) => (line.length ? prefix + line : line))
+    .join("\n");
+}
+
+function mdInlineNodes(nodes: Node[], baseUrl: string): string {
+  let out = "";
+  for (const child of nodes) {
+    if (child.nodeType === 3) {
+      out += mdCollapseSpace(child.nodeValue ?? "");
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const element = child as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if (MD_SKIP_TAGS.has(tag)) continue;
+    if (mdIsNoiseElement(element)) continue;
+    if (tag === "br") {
+      out += "  \n";
+      continue;
+    }
+    if (tag === "wbr") continue;
+    if (tag === "img") {
+      const src = mdAbsoluteLink(
+        element.getAttribute("src") ??
+          element.getAttribute("data-src") ??
+          element.getAttribute("data-original") ??
+          element.getAttribute("data-lazy-src"),
+        baseUrl
+      );
+      if (!src) continue;
+      const alt = mdCollapseSpace(element.getAttribute("alt") ?? element.getAttribute("title") ?? "").trim();
+      out += `![${alt}](${src})`;
+      continue;
+    }
+    if (tag === "input") {
+      const type = (element.getAttribute("type") ?? "").toLowerCase();
+      if (type === "checkbox" || type === "radio") out += element.hasAttribute("checked") ? "[x] " : "[ ] ";
+      continue;
+    }
+    const inner = mdInlineNodes(Array.from(element.childNodes), baseUrl);
+    const trimmed = inner.trim();
+    switch (tag) {
+      case "strong":
+      case "b":
+        out += trimmed ? `**${trimmed}**` : "";
+        break;
+      case "em":
+      case "i":
+      case "cite":
+      case "var":
+      case "dfn":
+        out += trimmed ? `*${trimmed}*` : "";
+        break;
+      case "del":
+      case "s":
+      case "strike":
+        out += trimmed ? `~~${trimmed}~~` : "";
+        break;
+      case "mark":
+        out += trimmed ? `==${trimmed}==` : "";
+        break;
+      case "code":
+      case "kbd":
+      case "samp": {
+        const text = (element.textContent ?? "").trim();
+        if (!text) break;
+        const fence = text.includes("`") ? "``" : "`";
+        out += `${fence}${text}${fence}`;
+        break;
+      }
+      case "sup":
+        out += trimmed ? `<sup>${trimmed}</sup>` : "";
+        break;
+      case "sub":
+        out += trimmed ? `<sub>${trimmed}</sub>` : "";
+        break;
+      case "a": {
+        const href = mdAbsoluteLink(element.getAttribute("href"), baseUrl);
+        if (!trimmed) break;
+        out += href && href !== trimmed ? `[${trimmed}](${href})` : trimmed;
+        break;
+      }
+      case "time":
+      case "span":
+      case "label":
+      case "small":
+      case "u":
+      case "abbr":
+      case "q":
+      case "bdi":
+      case "bdo":
+      case "font":
+      default:
+        out += inner;
+        break;
+    }
+  }
+  return out;
+}
+
+function mdCodeBlock(pre: HTMLElement): string {
+  const code = pre.querySelector<HTMLElement>(":scope > code") ?? pre;
+  const language = mdDetectLanguage(code) || mdDetectLanguage(pre);
+  const text = (code.textContent ?? "").replace(/^\n+/, "").replace(/\s+$/, "");
+  if (!text) return "";
+  const fence = mdFenceFor(text);
+  return `${fence}${language}\n${text}\n${fence}`;
+}
+
+function mdList(list: HTMLElement, baseUrl: string): string {
+  const ordered = list.tagName.toLowerCase() === "ol";
+  let index = Number.parseInt(list.getAttribute("start") ?? "1", 10);
+  if (!Number.isFinite(index) || index < 0) index = 1;
+  const lines: string[] = [];
+  for (const child of Array.from(list.children)) {
+    if (child.tagName.toLowerCase() !== "li") continue;
+    const marker = ordered ? `${index++}. ` : "- ";
+    const blocks = mdBlocksFromChildren(child, baseUrl);
+    if (!blocks.length) {
+      lines.push(marker.trimEnd());
+      continue;
+    }
+    let head = blocks[0].replace(/\n+/g, " ");
+    const checkbox = child.querySelector<HTMLInputElement>(":scope > input[type='checkbox']");
+    if (checkbox) {
+      // The checkbox input is emitted as "[x] " by the inline walker, so drop
+      // that leading marker before prepending the canonical task-list marker.
+      head = head.replace(/^\[[ xX]\]\s*/, "").trimEnd();
+      lines.push(`${marker}${checkbox.hasAttribute("checked") ? "[x]" : "[ ]"} ${head}`.trimEnd());
+    } else {
+      lines.push(marker + head);
+    }
+    for (const block of blocks.slice(1)) {
+      // Continuation content must line up with the item text, which starts after
+      // the marker plus its space ("1. " -> 3 columns, "- " -> 2).
+      lines.push(mdIndentBlock(block, " ".repeat(marker.length)));
+    }
+  }
+  return lines.join("\n");
+}
+
+function mdTable(table: HTMLElement, baseUrl: string): string {
+  const rowNodes = Array.from(
+    table.querySelectorAll<HTMLElement>(":scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr, :scope > tr")
+  );
+  const rows = rowNodes.length ? rowNodes : Array.from(table.querySelectorAll<HTMLElement>("tr"));
+  const grid = rows
+    .map((row) =>
+      Array.from(row.children)
+        .filter((cell) => /^(td|th)$/i.test(cell.tagName))
+        .map((cell) => mdInlineNodes(Array.from(cell.childNodes), baseUrl).replace(/\|/g, "\\|").replace(/\n+/g, " ").trim())
+    )
+    .filter((cells) => cells.length > 0);
+  if (!grid.length) return "";
+  const columns = Math.max(...grid.map((cells) => cells.length));
+  if (columns < 2) {
+    return grid.flat().filter(Boolean).map((cell) => `- ${cell}`).join("\n");
+  }
+  const pad = (cells: string[]) => [...cells, ...Array<string>(columns - cells.length).fill("")];
+  const lines = [`| ${pad(grid[0]).join(" | ")} |`, `| ${Array<string>(columns).fill("---").join(" | ")} |`];
+  for (const cells of grid.slice(1)) lines.push(`| ${pad(cells).join(" | ")} |`);
+  return lines.join("\n");
+}
+
+function mdFigure(figure: HTMLElement, baseUrl: string): string {
+  const parts: string[] = [];
+  const media = figure.querySelector<HTMLElement>(":scope > img, :scope > picture img, :scope > a > img, :scope > video");
+  if (media) {
+    const rendered = mdInlineNodes([media], baseUrl).trim();
+    if (rendered) parts.push(rendered);
+  }
+  const caption = figure.querySelector<HTMLElement>(":scope > figcaption");
+  if (caption) {
+    const text = mdInlineNodes(Array.from(caption.childNodes), baseUrl).trim();
+    if (text) parts.push(`*${text}*`);
+  }
+  if (parts.length) return parts.join("\n\n");
+  return mdBlocksFromChildren(figure, baseUrl).join("\n\n");
+}
+
+function mdDefinitionList(list: HTMLElement, baseUrl: string): string {
+  const blocks: string[] = [];
+  let term = "";
+  const flushTerm = () => {
+    if (!term) return;
+    blocks.push(`**${term}**`);
+    term = "";
+  };
+  for (const child of Array.from(list.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (tag === "dt") {
+      flushTerm();
+      term = mdInlineNodes(Array.from(child.childNodes), baseUrl).replace(/\s+/g, " ").trim();
+      continue;
+    }
+    if (tag !== "dd") continue;
+    const hasBlockChild = Array.from(child.children).some((el) => MD_BLOCK_TAGS.has(el.tagName.toLowerCase()));
+    const inline = hasBlockChild ? "" : mdInlineNodes(Array.from(child.childNodes), baseUrl).replace(/\s+/g, " ").trim();
+    if (term && inline) {
+      blocks.push(`**${term}**: ${inline}`);
+      term = "";
+      continue;
+    }
+    flushTerm();
+    const body = mdBlocksFromChildren(child, baseUrl);
+    if (body.length) blocks.push(...body);
+  }
+  flushTerm();
+  return blocks.join("\n\n");
+}
+
+function mdDetails(details: HTMLElement, baseUrl: string): string {
+  const summary = details.querySelector<HTMLElement>(":scope > summary");
+  const head = summary ? mdInlineNodes(Array.from(summary.childNodes), baseUrl).trim() : "";
+  // Walk a summary-free clone so the disclosure label never shows up twice.
+  const clone = details.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll(":scope > summary").forEach((node) => node.remove());
+  const body = mdBlocksFromChildren(clone, baseUrl);
+  return [head ? `**${head}**` : "", ...body].filter(Boolean).join("\n\n");
+}
+
+function mdBlockFromNode(node: Node, baseUrl: string): string {
+  if (node.nodeType === 3) {
+    return mdCollapseSpace(node.nodeValue ?? "").trim();
+  }
+  if (node.nodeType !== 1) return "";
+  const element = node as HTMLElement;
+  const tag = element.tagName.toLowerCase();
+  if (MD_SKIP_TAGS.has(tag)) return "";
+  if (mdIsNoiseElement(element)) return "";
+  switch (tag) {
+    case "h1":
+    case "h2":
+    case "h3":
+    case "h4":
+    case "h5":
+    case "h6": {
+      const text = mdInlineNodes(Array.from(element.childNodes), baseUrl).trim();
+      return text ? `${"#".repeat(Number(tag.charAt(1)))} ${text}` : "";
+    }
+    case "p": {
+      return mdInlineNodes(Array.from(element.childNodes), baseUrl).trim();
+    }
+    case "hr":
+      return "---";
+    case "br":
+      return "";
+    case "pre":
+      return mdCodeBlock(element);
+    case "blockquote": {
+      const inner = mdBlocksFromChildren(element, baseUrl).join("\n\n");
+      if (!inner) return "";
+      return inner
+        .split("\n")
+        .map((line) => (line.length ? `> ${line}` : ">"))
+        .join("\n");
+    }
+    case "ul":
+    case "ol":
+      return mdList(element, baseUrl);
+    case "table":
+      return mdTable(element, baseUrl);
+    case "figure":
+      return mdFigure(element, baseUrl);
+    case "figcaption": {
+      const text = mdInlineNodes(Array.from(element.childNodes), baseUrl).trim();
+      return text ? `*${text}*` : "";
+    }
+    case "dl":
+      return mdDefinitionList(element, baseUrl);
+    case "details":
+      return mdDetails(element, baseUrl);
+    case "summary": {
+      const text = mdInlineNodes(Array.from(element.childNodes), baseUrl).trim();
+      return text ? `**${text}**` : "";
+    }
+    case "video":
+    case "audio": {
+      const source = element.querySelector<HTMLElement>("source[src]");
+      const src = mdAbsoluteLink(element.getAttribute("src") ?? source?.getAttribute("src") ?? null, baseUrl);
+      const label = element.getAttribute("title") ?? tag;
+      return src ? `[${label}](${src})` : "";
+    }
+    default:
+      break;
+  }
+  const children = mdBlocksFromChildren(element, baseUrl);
+  if (children.length) return children.join("\n\n");
+  return mdInlineNodes(Array.from(element.childNodes), baseUrl).trim();
+}
+
+function mdBlocksFromChildren(parent: Node, baseUrl: string): string[] {
+  const blocks: string[] = [];
+  let inlineRun: Node[] = [];
+  const flushInlineRun = () => {
+    if (!inlineRun.length) return;
+    const text = mdInlineNodes(inlineRun, baseUrl).trim();
+    inlineRun = [];
+    if (text) blocks.push(text);
+  };
+  for (const child of Array.from(parent.childNodes)) {
+    if (child.nodeType === 3) {
+      if ((child.nodeValue ?? "").trim()) inlineRun.push(child);
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const tag = (child as HTMLElement).tagName.toLowerCase();
+    if (MD_SKIP_TAGS.has(tag)) continue;
+    if (mdIsNoiseElement(child as HTMLElement)) continue;
+    if (MD_BLOCK_TAGS.has(tag) && !(tag === "td" || tag === "th" || tag === "tr" || tag === "tbody" || tag === "thead" || tag === "tfoot")) {
+      flushInlineRun();
+      const produced = mdBlockFromNode(child, baseUrl).trim();
+      if (produced) blocks.push(produced);
+      continue;
+    }
+    inlineRun.push(child);
+  }
+  flushInlineRun();
+  return blocks;
+}
+
+function htmlDocumentToMarkdown(root: Node, baseUrl: string): string {
+  const blocks: string[] = [];
+  let length = 0;
+  for (const block of mdBlocksFromChildren(root, baseUrl)) {
+    const clean = mdNormalizeBlockWhitespace(block);
+    if (!clean) continue;
+    const budget = MD_MAX_READER_CHARS - length;
+    if (budget <= 0) break;
+    if (clean.length > budget) {
+      // Trim inside the oversized block instead of skipping it: dropping whole
+      // blocks made long pages lose everything after the first section.
+      const slice = clean.slice(0, budget);
+      const boundary = slice.lastIndexOf("\n");
+      blocks.push((boundary > 0 ? slice.slice(0, boundary) : slice).replace(/\s+$/, ""));
+      length = MD_MAX_READER_CHARS;
+      break;
+    }
+    blocks.push(clean);
+    length += clean.length + 2;
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * Trims decorative trailing whitespace line by line while keeping the two
+ * trailing spaces that Markdown uses as a hard line break (`<br>` in source).
+ */
+function mdNormalizeBlockWhitespace(block: string): string {
+  return block
+    .split("\n")
+    .map((line) => {
+      const bare = line.replace(/[ \t]+$/, "");
+      return line.length - bare.length >= 2 ? `${bare}  ` : bare;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function relatedSearches(query: string): string[] {
   const clean = query.trim();
   if (!clean) return [];
@@ -5647,6 +6079,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
 
+    // Debug affordance: lets the maintenance tooling (and the release verifier)
+    // exercise the reader-mode HTML -> Markdown converter in isolation.
+    this.exposeMarkdownConverterDebugHook();
+
     this.registerView(VIEW_TYPE, (leaf) => new MobileWebviewerView(leaf, this));
     const hostWindow = appDocument().defaultView ?? window;
     for (const eventName of ["mousedown", "click", "dblclick"] as const) {
@@ -5731,6 +6167,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       void this.disposeInactiveNoteWebControllers(leaf);
       this.cleanupNoteBrowserDocumentResidue(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
+      // Mobile opens Mobile Webviewer.md directly from the file explorer,
+      // which fires active-leaf-change but not always layout-change. Force
+      // reading mode here too so the embed never stays trapped at 0x0 inside
+      // the Live Preview source DOM.
+      this.enforceNoteBrowserReadingMode();
+    }));
+
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+      this.enforceNoteBrowserReadingMode();
     }));
 
     this.addRibbonIcon("notebook-tabs", "Note browser", () => {
@@ -5805,8 +6251,54 @@ export default class MobileWebviewerPlugin extends Plugin {
       .forEach((documentEl) => this.queueLegacyNoteDrawWebviewerMigration(documentEl));
   }
 
+  /**
+   * Publishes the reader-mode Markdown converter on the host window so the
+   * release tooling can diff converter output against fixtures without
+   * opening a browser leaf. Purely a debug affordance; nothing in the plugin
+   * reads it back.
+   */
+  exposeMarkdownConverterDebugHook(): void {
+    const debugApi = {
+      convert: htmlDocumentToMarkdown,
+      isNoise: mdIsNoiseElement,
+      blocksFrom: mdBlocksFromChildren,
+      maxChars: MD_MAX_READER_CHARS,
+      skipTags: MD_SKIP_TAGS,
+      noisePattern: MD_NOISE_PATTERN,
+      noiseRoles: MD_NOISE_ROLES
+    };
+    for (const target of this.markdownConverterDebugWindows()) {
+      try {
+        const host = target as Window & {
+          __mwvConvertHtml?: typeof htmlDocumentToMarkdown;
+          __mwvReaderDebug?: typeof debugApi;
+        };
+        host.__mwvConvertHtml = htmlDocumentToMarkdown;
+        host.__mwvReaderDebug = debugApi;
+      } catch (error) {
+        // A locked-down window object is not worth failing plugin load over.
+      }
+    }
+  }
+
+  markdownConverterDebugWindows(): Window[] {
+    const targets: Window[] = [window];
+    const host = appDocument().defaultView;
+    if (host && host !== window) targets.push(host);
+    return targets;
+  }
+
   onunload(): void {
     this.disposed = true;
+    for (const target of this.markdownConverterDebugWindows()) {
+      try {
+        const host = target as Window & { __mwvConvertHtml?: unknown; __mwvReaderDebug?: unknown };
+        delete host.__mwvConvertHtml;
+        delete host.__mwvReaderDebug;
+      } catch (error) {
+        // Ignore.
+      }
+    }
     this.app.workspace.containerEl
       .querySelectorAll<HTMLElement>("[data-mwv-noteweb-element-edit='true']")
       .forEach((embed) => { void this.leaveNoteWebRawElementEditing(embed); });
@@ -8694,6 +9186,18 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!(view.file instanceof TFile) || view.file.path !== WEBVIEW_NOTE_PATH) return;
       const state = view.getState?.() ?? {};
       if (state.mode !== "preview" || state.source !== false) this.setNoteBrowserReadingMode(leaf);
+      // Mobile direct-open race: the Markdown post-processor can run while the
+      // view is still in Live Preview, leaving the preview sizer empty (0x0
+      // embed). Re-sweep the leaf after the mode switch so a missing embed is
+      // restored and processed even when no further layout-change fires.
+      for (const delay of [120, 400, 900]) {
+        window.setTimeout(() => {
+          const file = (leaf.view as { file?: unknown } | undefined)?.file;
+          if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+          if (!leaf.view?.containerEl?.isConnected) return;
+          this.processWebviewerEmbeds(leaf.view.containerEl);
+        }, delay);
+      }
     });
   }
 
@@ -8990,7 +9494,16 @@ export default class MobileWebviewerPlugin extends Plugin {
         binding.guardedSetState = guardedSetState;
         view.setState = guardedSetState;
       }
-      const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
+      const findEmbed = () => {
+        const live = this.getNoteBrowserEmbed(leaf);
+        if (live) return live;
+        if (embed.isConnected) return embed;
+        // The bound embed can be replaced by recovery/dedupe passes. Fall
+        // back to any connected NoteWeb embed in this leaf so menu entries
+        // never act on a detached (invisible) element.
+        const fallback = leaf.view?.containerEl?.querySelector<HTMLElement>(".mwv-embed[data-url]");
+        return fallback ?? null;
+      };
       const addMenuItem = (menu: Menu, title: string, icon: IconName, callback: () => void, checked?: boolean) => {
         menu.addItem((item) => {
           item.setTitle(title).setIcon(icon).onClick(() => callback());
@@ -9010,8 +9523,16 @@ export default class MobileWebviewerPlugin extends Plugin {
         addMenuItem(menu, this.tr("home"), "home", () => void this.openUrlInEmbed(current, this.settings.homeUrl));
         addMenuItem(menu, this.tr("saveMd"), "file-down", () => void this.exportEmbedWebNote(current));
         addMenuItem(menu, this.tr("more"), "more-horizontal", () => {
-          const chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-          if (chrome) this.toggleMorePanel(current, chrome, current.dataset.url || this.settings.homeUrl, current.dataset.mwvCurrentTitle || "");
+          const url = current.dataset.url || this.settings.homeUrl;
+          const title = current.dataset.mwvCurrentTitle || "";
+          let chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+          if (!chrome) {
+            // Recovered or fast-reloaded embeds can miss their chrome. Rebuild
+            // it instead of silently ignoring the More entry.
+            this.renderBrowserChrome(current, url, title || hostName(url));
+            chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+          }
+          if (chrome) this.toggleMorePanel(current, chrome, url, title);
         });
       };
       binding.guardedPaneMenu = guardedPaneMenu;
@@ -9092,7 +9613,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       entry.element.removeClass("mwv-note-browser-native-nav");
       binding.navButtons.splice(binding.navButtons.indexOf(entry), 1);
     }
-    const findEmbed = () => this.getNoteBrowserEmbed(leaf) ?? embed;
+    const findEmbed = () => {
+      const live = this.getNoteBrowserEmbed(leaf);
+      if (live) return live;
+      if (embed.isConnected) return embed;
+      return leaf.view?.containerEl?.querySelector<HTMLElement>(".mwv-embed[data-url]") ?? null;
+    };
     (["back", "forward"] as const).forEach((direction, index) => {
       const element = nativeButtons[index];
       if (!element || binding.navButtons.some((entry) => entry.element === element)) return;
@@ -11000,7 +11526,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       row.createDiv({ cls: "mwv-extension-state", text: item[1] });
       row.createDiv({ cls: "mwv-extension-desc", text: item[2] });
     }
-    chrome.insertAdjacentElement("afterend", panel);
+    if (chrome.isConnected && chrome.parentElement === embed) {
+      chrome.insertAdjacentElement("afterend", panel);
+    } else {
+      embed.appendChild(panel);
+    }
   }
 
   renderBookmarksBar(embed: HTMLElement): void {
@@ -14213,44 +14743,50 @@ export default class MobileWebviewerPlugin extends Plugin {
       textFromElement(doc.querySelector("[rel='author'], .author, .byline")) ||
       hostName(url);
 
-    const root =
-      doc.querySelector("article") ||
-      doc.querySelector("main") ||
-      doc.querySelector("[role='main']") ||
-      doc.body;
-    if (!root) throw new Error("No readable document body");
+    // Reader-mode root: instead of trusting the first matching container (which
+    // on sites like MDN can be a small sidebar card), convert every plausible
+    // container and keep whichever yields the richest Markdown.
+    const candidates: Element[] = [];
+    const seenRoots = new Set<Element>();
+    const addCandidate = (element: Element | null) => {
+      if (!element || seenRoots.has(element)) return;
+      seenRoots.add(element);
+      candidates.push(element);
+    };
+    addCandidate(doc.querySelector("article"));
+    addCandidate(doc.querySelector("main"));
+    addCandidate(doc.querySelector("[role='main']"));
+    addCandidate(doc.querySelector(".markdown-body, .article-content, .post-content, .entry-content"));
+    if (!candidates.length && doc.body) addCandidate(doc.body);
 
-    const blocks: string[] = [];
-    const blockNodes = Array.from(root.querySelectorAll("h1, h2, h3, p, li, blockquote"));
-    for (const node of blockNodes) {
-      const text = textFromElement(node);
-      if (text.length < 12) continue;
-      const tag = node.tagName.toLowerCase();
-      if (/^h[1-3]$/.test(tag)) {
-        blocks.push(`${"#".repeat(Number(tag.slice(1)))} ${text}`);
-      } else if (tag === "li") {
-        blocks.push(`- ${text}`);
-      } else {
-        blocks.push(text);
-      }
-      if (blocks.join("\n").length > 18000) break;
-    }
-
-    if (!blocks.length) {
-      const bodyText = textFromElement(root);
-      if (bodyText) {
-        const sentenceSource = bodyText.replace(/([。！？.!?])\s+/g, "$1\n");
-        for (const sentence of sentenceSource.split(/\n+/).map((part) => part.trim()).filter(Boolean)) {
-          if (sentence.length < 12) continue;
-          blocks.push(sentence);
-          if (blocks.join("\n").length > 12000) break;
-        }
+    let content = "";
+    let bestRoot: Element | null = null;
+    for (const candidate of candidates) {
+      const markdown = htmlDocumentToMarkdown(candidate, url);
+      if (markdown.length > content.length) {
+        content = markdown;
+        bestRoot = candidate;
       }
     }
+
+    if ((!content || content.length < 160) && doc.body && bestRoot !== doc.body) {
+      // App shells, galleries and paywalled roots produce almost nothing from
+      // the narrow roots, so fall back to the whole document before giving up.
+      const bodyMarkdown = htmlDocumentToMarkdown(doc.body, url);
+      if (bodyMarkdown.length > content.length) {
+        content = bodyMarkdown;
+        bestRoot = doc.body;
+      }
+    }
+
+    const linkRoot = bestRoot ?? doc.body;
+    if (!content.trim()) throw new Error("No readable document body");
+
+    const plainText = content.replace(/[#>*`~|]/g, " ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
 
     const links: SearchResult[] = [];
     const seen = new Set<string>();
-    for (const anchor of Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    for (const anchor of Array.from(linkRoot?.querySelectorAll<HTMLAnchorElement>("a[href]") ?? [])) {
       const href = absoluteUrl(anchor.getAttribute("href") ?? "", url);
       if (!/^https?:\/\//i.test(href) || seen.has(href)) continue;
       const label = textFromElement(anchor);
@@ -14264,9 +14800,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       title,
       url,
       byline,
-      excerpt: blocks.slice(0, 3).join(" ").slice(0, 420),
+      excerpt: (plainText || content).slice(0, 420),
       images,
-      content: blocks.join("\n\n"),
+      content,
       links
     };
     await this.rememberPageCache(page);

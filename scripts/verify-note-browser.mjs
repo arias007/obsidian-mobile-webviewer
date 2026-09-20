@@ -46,6 +46,12 @@ const externalLinkMethod = externalLinkStart >= 0 && externalLinkEnd > externalL
 const externalLinkRegistration = source.indexOf("this.handleExternalLinkClick(event);");
 const noteWebLinkRegistration = source.indexOf("void this.handleGlobalBingEvent(event);");
 
+// Rebuild the reader-mode chrome pattern so the classifier can be asserted
+// against real-world class names instead of a substring of the source.
+const noisePatternMatch = /const MD_NOISE_PATTERN = \/(.+)\/;/.exec(source);
+const noisePattern = noisePatternMatch ? new RegExp(noisePatternMatch[1]) : null;
+const classifiesAsChrome = (className) => !!noisePattern && noisePattern.test(className.toLowerCase());
+
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
   ["NoteWeb embeds opt out of Obsidian readable line width", source.includes("prepareWebviewerDocumentLayout(embed)") && styles.includes(".mwv-note-browser-document .markdown-preview-sizer")],
@@ -54,7 +60,7 @@ const checks = [
   ["late Markdown restoration cannot duplicate the NoteWeb root", source.includes("dedupeNoteBrowserEmbedRoots(root)") && source.includes('controller?.previewEl === embed') && source.includes('embed.dataset.mwvRecovered = \"true\"')],
   ["detached Electron webviews cannot throw from delayed events", source.includes("safeWebviewUrl(webview") && source.includes("isBrowserSurfaceReady(webview)") && source.includes("_mwvDispose") && source.includes('listen("destroyed"')],
   ["hidden Live Preview copies do not join NoteWeb processing", source.includes('sourceView = embed.closest<HTMLElement>(\".markdown-source-view\")') && source.includes('window.getComputedStyle(sourceView).display !== \"none\"')],
-  ["NoteWeb removes redundant nested reading-view gutters", styles.includes(".markdown-preview-view.mwv-note-browser-document") && styles.includes("padding-right: 8px")],
+  ["NoteWeb removes redundant nested reading-view gutters", styles.includes(".markdown-preview-view.mwv-note-browser-document") && styles.includes("padding: 0 !important") && styles.includes("--file-margins: 0px")],
   ["duplicate in-page Mobile Webviewer branding is removed", !source.includes("Mobile Webviewer / Bing backend") && !source.includes('cls: "mwv-note-source", text: "Mobile Webviewer"')],
   ["duplicate NoteWeb document headings are hidden without changing page titles", source.includes('title.textContent?.trim().toLowerCase() === "mobile webviewer"') && styles.includes(".mwv-note-browser-redundant-title") && styles.includes('h1[data-heading="Mobile Webviewer"]')],
   ["NoteWeb uses the URL as its native Obsidian identity", source.includes("syncNoteBrowserNativeIdentity") && source.includes('file.path !== WEBVIEW_NOTE_PATH') && source.includes("tabHeaderInnerTitleEl") && source.includes('title.setText(url)')],
@@ -159,7 +165,33 @@ const checks = [
   ["legacy migration also starts from the retained NoteWeb document", (source.match(/querySelectorAll<HTMLElement>\(\"\.mwv-note-browser-document\"\)/g) ?? []).length >= 2],
   ["cross-surface migration rebases stale note anchors", source.includes("rebaseLegacyNoteDrawStroke") && source.includes(".path = targetPath") && source.includes("noteDrawDataHasForeignAnchors")],
   ["legacy whole-note canvas hides only after verified migration", source.includes("verifiedCounts.strokes !== legacyCounts.strokes") && styles.includes(".mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-static-canvas")],
-  ["legacy drawing storage remains as recovery data", !source.includes("delete(legacyController.file") && !source.includes("remove(legacyController.file")]
+  ["legacy drawing storage remains as recovery data", !source.includes("delete(legacyController.file") && !source.includes("remove(legacyController.file")],
+  // Reader-mode HTML -> Markdown extraction
+  ["reader mode converts fetched pages through the structured Markdown pipeline", source.includes("htmlDocumentToMarkdown(candidate, url)") && source.includes("htmlDocumentToMarkdown(doc.body, url)")],
+  ["reader mode keeps the richest candidate container instead of the first match", source.includes("const addCandidate = (element: Element | null) =>") && source.includes("if (markdown.length > content.length)") && source.includes("let bestRoot: Element | null = null")],
+  ["reader mode reads link suggestions from the container it actually rendered", source.includes("const linkRoot = bestRoot ?? doc.body") && source.includes("linkRoot?.querySelectorAll<HTMLAnchorElement>(\"a[href]\")")],
+  ["reader mode emits GFM tables and escapes cell pipes", source.includes('replace(/\\|/g, "\\\\|")') && source.includes("Array<string>(columns).fill(\"---\")")],
+  ["reader mode degrades single-column tables to lists", source.includes("if (columns < 2)") && source.includes("`- ${cell}`")],
+  ["reader mode writes task list markers exactly once", source.includes('head.replace(/^\\[[ xX]\\]\\s*/, "")')],
+  ["reader mode does not repeat a details summary label", source.includes("details.cloneNode(true) as HTMLElement") && source.includes('clone.querySelectorAll(":scope > summary")')],
+  ["reader mode pairs definition terms with their definitions", source.includes("`**${term}**: ${inline}`")],
+  ["reader mode preserves Markdown hard line breaks", source.includes("function mdNormalizeBlockWhitespace(") && source.includes("line.length - bare.length >= 2")],
+  ["reader mode indents list continuations by marker width", source.includes('mdIndentBlock(block, " ".repeat(marker.length))')],
+  ["reader mode trims oversized blocks instead of dropping whole sections", source.includes("const budget = MD_MAX_READER_CHARS - length") && source.includes("const slice = clean.slice(0, budget)")],
+  ["reader mode noise filter keeps layout containers and drops real chrome", source.includes("function mdIsNoiseElement(") && source.includes("MD_NOISE_PATTERN.test(className)") &&
+    classifiesAsChrome("layout__right-sidebar reference-layout__toc") &&
+    classifiesAsChrome("related-articles") &&
+    classifiesAsChrome("advertisement banner") &&
+    classifiesAsChrome("newsletter-signup") &&
+    !classifiesAsChrome("layout__content reference-layout__content") &&
+    !classifiesAsChrome("layout__body reference-layout__body") &&
+    !classifiesAsChrome("layout__header reference-layout__header")],
+  ["reader mode exposes a debug hook for converter regression probes", source.includes("__mwvConvertHtml") && source.includes("__mwvReaderDebug")],
+  ["mobile direct-open forces reading mode on file-open and leaf change", source.includes('on("file-open"') && source.includes("this.enforceNoteBrowserReadingMode()")],
+  ["reading-mode enforcement re-sweeps stale preview embeds", source.includes("this.processWebviewerEmbeds(leaf.view.containerEl)")],
+  ["More panel stays visible in Web mode", styles.includes(":not(.mwv-extension-panel):not(.mwv-more-panel)") && styles.includes(".mwv-embed.is-web-front > .mwv-extension-panel")],
+  ["More menu entry rebuilds missing chrome instead of no-op", source.includes("this.renderBrowserChrome(current, url, title || hostName(url))") && source.includes("embed.appendChild(panel)")],
+  ["native menu actions never use a detached embed", source.includes('querySelector<HTMLElement>(".mwv-embed[data-url]")') && source.includes("if (embed.isConnected) return embed")]
 ];
 
 const failed = checks.filter(([, passed]) => !passed).map(([name]) => name);
