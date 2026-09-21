@@ -8753,6 +8753,7 @@ class MobileWebviewerView extends ItemView {
   /** Mounts the shared NoteDraw wand proxy so real web pages get the same magic wand as NoteWeb. */
   ensureNoteDrawWandButton(): void {
     window.setTimeout(() => {
+      this.plugin.pokeNoteDrawSync();
       this.plugin.ensureNoteWebWandProxy(this.surfaceEl, true);
     }, 120);
   }
@@ -18993,6 +18994,22 @@ export default class MobileWebviewerPlugin extends Plugin {
   async clearProxyCookies(): Promise<void> {
     this.settings.cookieJar = {};
     await this.saveSettings();
+  }
+
+  /**
+   * NoteDraw only rescans webview surfaces on its own layout events; a freshly
+   * opened Browser View can stay unscanned until something else changes the
+   * workspace. Poke its webview sync so the drawing controller exists right
+   * after the view (re)opens.
+   */
+  pokeNoteDrawSync(): void {
+    const plugin = this.getNoteDrawPlugin() as { syncWebviewControllers?: () => unknown } | null;
+    if (typeof plugin?.syncWebviewControllers !== "function") return;
+    try {
+      void plugin.syncWebviewControllers();
+    } catch (error) {
+      console.warn("[mobile-webviewer] NoteDraw webview sync poke failed", error);
+    }
   }
 
   /**
