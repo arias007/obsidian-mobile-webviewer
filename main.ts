@@ -10802,6 +10802,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         // A MarkdownView can be reused for a different file before Obsidian
         // rebuilds its header DOM. Remove only the classes/elements owned by
         // NoteWeb so the ordinary note's native toolbar remains authoritative.
+        leaf.removeClass("mwv-note-browser-view");
         leaf.querySelectorAll<HTMLElement>(
           ".mwv-note-browser-mode-action, .mwv-note-browser-native-nav, .mwv-note-browser-replaced-edit-action, .mwv-note-browser-native-title"
         ).forEach((element) => {
@@ -13769,6 +13770,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!leaf) return;
     const file = (leaf?.view as { file?: unknown } | undefined)?.file;
     if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+    // Marker for CSS/JS: this leaf-content hosts the NoteBrowser view (both
+    // Note and Web fronts share the header tab strip replacing the URL title).
+    leafContent.addClass("mwv-note-browser-view");
     const leafEl = leafContent.closest<HTMLElement>(".workspace-leaf") ?? leafContent;
     const tabTitle = (leaf as WorkspaceLeaf & { tabHeaderInnerTitleEl?: HTMLElement }).tabHeaderInnerTitleEl;
     const titles = [
@@ -13991,6 +13995,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     // address bar above the RealWeb chrome — hide it in web mode on all
     // platforms; the chrome tab strip replaces it visually.
     const modeLeafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
+    modeLeafContent?.addClass("mwv-note-browser-view");
     modeLeafContent?.toggleClass("mwv-realweb-immersive", mode === "web");
     embed.toggleClass("is-split-front", mode === "split");
     this.applyBrowserRuntimeClasses(embed);
@@ -15035,7 +15040,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     const strip = chrome.createDiv({ cls: "mwv-embed-tabstrip" });
     const header = leafContent?.querySelector<HTMLElement>(".view-header");
     const headerActions = header?.querySelector<HTMLElement>(".view-actions");
-    if (leafContent?.hasClass("mwv-realweb-immersive") && header && headerActions) {
+    if (leafContent?.hasClass("mwv-note-browser-view") && header && headerActions) {
+      // NoteWeb (both Note and Web fronts): the browser tabs replace the URL
+      // title in the header row, sharing it with the native header buttons.
       strip.addClass("mwv-embed-tabstrip-in-header");
       header.insertBefore(strip, headerActions);
     } else {

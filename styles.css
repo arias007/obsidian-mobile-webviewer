@@ -4163,22 +4163,18 @@
   cursor: pointer;
 }
 
-/* --- RealWeb: hide the URL-mirroring header title, keep native header buttons --- */
-.workspace-leaf-content.mwv-realweb-immersive .view-header-title {
-  display: none;
-}
-
-/* --- RealWeb: browser tabs share the header row with the native buttons --- */
-.workspace-leaf-content.mwv-realweb-immersive .view-header {
+/* --- NoteWeb (Note + Web fronts): browser tabs share the header row with the native buttons --- */
+.workspace-leaf-content.mwv-note-browser-view .view-header {
   display: flex;
   align-items: center;
   gap: 4px;
 }
-.workspace-leaf-content.mwv-realweb-immersive .view-header-title-container,
-.workspace-leaf-content.mwv-realweb-immersive .view-header-nav-buttons {
+.workspace-leaf-content.mwv-note-browser-view .view-header-title,
+.workspace-leaf-content.mwv-note-browser-view .view-header-title-container,
+.workspace-leaf-content.mwv-note-browser-view .view-header-nav-buttons {
   display: none;
 }
-.workspace-leaf-content.mwv-realweb-immersive .view-header .mwv-embed-tabstrip {
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip {
   flex: 1 1 auto;
   min-width: 0;
   margin: 0 2px;
