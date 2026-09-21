@@ -2032,7 +2032,7 @@
 }
 
 .workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
-  .view-actions .notedraw-webview-button:not(.mwv-notedraw-web-wand) {
+  .view-actions > .notedraw-webview-button {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -3931,7 +3931,8 @@
   pointer-events: auto;
 }
 
-.mwv-notedraw-anchor .mwv-notedraw-web-wand {
+.mwv-notedraw-anchor .mwv-notedraw-web-wand,
+.mwv-notedraw-anchor .notedraw-webview-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;

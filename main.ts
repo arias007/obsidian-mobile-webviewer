@@ -10804,8 +10804,21 @@ export default class MobileWebviewerPlugin extends Plugin {
       .some((candidate) => candidate.isConnected && this.isMobileWebviewerSurface(candidate));
     if (!hasWebviewerSurface) return;
 
+    // The wand is NoteDraw's own button — never hide it while it is the only
+    // wand in the leaf. Suppress NoteDraw's duplicate header button only when
+    // the anchor already hosts the native webview wand; when the anchor is
+    // empty (e.g. NoteWeb reader mode) let NoteDraw show its own button.
+    const anchor = leaf.querySelector<HTMLElement>(".mwv-notedraw-anchor");
+    const nativeWandMounted = Boolean(anchor?.querySelector(":scope > .notedraw-webview-button"));
     leaf.querySelectorAll<NoteDrawButtonElement>(".view-actions .notedraw-header-button").forEach((button) => {
       if (button.closest(".mwv-notedraw-anchor")) return;
+      if (!nativeWandMounted) {
+        button.removeClass("mwv-notedraw-webviewer-header-hidden");
+        button.removeClass("mwv-notedraw-source-button");
+        button.removeAttribute("aria-hidden");
+        button.tabIndex = 0;
+        return;
+      }
       button.addClass("mwv-notedraw-webviewer-header-hidden");
       button.addClass("mwv-notedraw-source-button");
       button.setAttribute("aria-hidden", "true");
@@ -10980,7 +10993,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     button.removeClass("mwv-notedraw-webviewer-header-hidden");
     button.removeAttribute("aria-hidden");
     button.tabIndex = 0;
-    this.decorateNoteDrawWebWandButton(button);
+    // NoteDraw owns the icon and label — no restyling, no icon cloning.
     this.bindNoteDrawWebviewButton(button, controller);
     return button;
   }
@@ -10999,105 +11012,36 @@ export default class MobileWebviewerPlugin extends Plugin {
       return null;
     }
     const anchor = this.ensureNoteDrawStableAnchor(surface);
-    // A retained native NoteDraw button already occupies the anchor — never
-    // resurrect a proxy wand next to it (other surfaces' sync passes would
-    // otherwise re-create the proxy and duplicate the wand). The relocated
-    // More button shares this anchor but is not a wand candidate.
-    // NoteDraw 4.x builds its view-actions host button as a <div>
-    // (installSurfaceButton only uses <button> for inline hosts), so the
-    // native wand must be matched by class as well. A button-only selector
-    // made every sync pass believe the native wand was missing and respawn
-    // the proxy beside it — duplicate globe icons, flicker, dead clicks.
+    // The wand button belongs to NoteDraw, full stop. NoteDraw mounts it
+    // itself (a <div class="notedraw-webview-button"> in the view-actions
+    // host since 4.x) and this sync only *recognizes* it — it never
+    // fabricates a proxy button, never clones icons, never rewrites the
+    // label. Home-grown proxies used to duplicate the wand, flicker between
+    // sync passes and swallow clicks on freshly rebuilt elements.
     const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(
-      ":scope > .notedraw-webview-button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true']), :scope > button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true'])"
+      ":scope > .notedraw-webview-button:not([data-mwv-browser-more='true'])"
     );
-    let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
-    if (button && nativeInAnchor) {
-      button.remove();
-      button = null;
-    }
     if (nativeInAnchor) return nativeInAnchor;
-    if (!button) {
-      button = anchor.createEl("button", {
-        cls: "mwv-notedraw-web-wand mwv-notedraw-host-proxy clickable-icon",
-        attr: {
-          type: "button",
-          "data-mwv-noteweb-wand": "true",
-          "aria-label": "Web notedraw",
-          title: "Web notedraw"
-        }
-      }) as NoteDrawButtonElement;
-      button._mwvNoteWebWandProxy = true;
-      // Keep the wand first: the relocated More button sits right beside it.
+    // Remove any stale home-grown proxy left behind by older builds.
+    const staleProxy = anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']");
+    if (staleProxy) staleProxy.remove();
+    // Adopt a native button NoteDraw mounted directly in the view-actions
+    // host (outside the anchor) by moving it into the stable anchor.
+    const adopted = this.findNoteDrawWebviewSourceButton(surface);
+    if (adopted?.isConnected && adopted.parentElement !== anchor) {
       const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
-      if (moreButton) anchor.insertBefore(button, moreButton);
+      if (moreButton) anchor.insertBefore(adopted, moreButton);
+      else anchor.appendChild(adopted);
+      adopted.addClass("mwv-notedraw-top-button");
+      adopted.removeClass("mwv-notedraw-source-button");
+      adopted.removeClass("mwv-notedraw-webviewer-header-hidden");
+      adopted.removeAttribute("aria-hidden");
+      adopted.tabIndex = 0;
+      const adoptedController = adopted._noteDrawController;
+      if (adoptedController) this.bindNoteDrawWebviewButton(adopted, adoptedController);
+      return adopted;
     }
-    // The proxy is anchored in Obsidian's view-actions host, outside the
-    // embed subtree. Retain the exact owner surface so click handling cannot
-    // lose the NoteWeb page when the button is rendered in that host.
-    button._mwvNoteWebWandSurface = surface;
-    button.addClass("mwv-notedraw-top-button");
-    button.removeAttribute("aria-hidden");
-    button.tabIndex = 0;
-    this.decorateNoteDrawWebWandButton(button);
-    button.toggleClass("is-active", this.isNoteBrowserRawEditingMode(surface));
-    button.setAttribute("aria-pressed", String(this.isNoteBrowserRawEditingMode(surface)));
-    if (!button._mwvNoteWebWandBound) {
-      button._mwvNoteWebWandBound = true;
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation?.();
-        const current = button?._mwvNoteWebWandSurface;
-        if (!current?.isConnected || !this.isNoteDrawSurfaceElement(current)) return;
-        // The live website is a separate Electron guest document. Mounting a
-        // full NoteDraw controller on its host changes the host layout but
-        // still cannot reach guest-page text. Use the explicit cross-WebView
-        // element editor instead and keep the original website presentation.
-        if (this.isNoteBrowserWebMode(current)) {
-          void this.toggleNoteWebRawElementEditing(current);
-          return;
-        }
-        const controller = this.findWebviewNoteDrawController(current, true);
-        if (controller && this.activateNoteDrawWebviewController(controller, current)) return;
-        const activatePreviewController = () => {
-          const preview = this.findNoteDrawPreviewController(current, true);
-          if (!preview || !this.noteDrawControllerBelongsToRoot(preview, current)) return false;
-          // A preview controller is the NoteDraw toolbar used to edit the
-          // NoteWeb reading presentation. Do not toggle an already-active
-          // controller off while recovering from a Web -> Note switch.
-          if (this.isNoteDrawControllerActive(preview)) {
-            this.ensureNoteDrawControllerButtonAnchored(preview);
-            this.syncNoteDrawHeaderButtonState(current, preview);
-            this.queueNoteDrawControllerSync(current, false);
-            return true;
-          }
-          return this.activateNoteDrawControllerFromHeader(preview, current);
-        };
-        if (activatePreviewController()) return;
-        this.queueNoteDrawControllerRestore(current);
-        let activated = false;
-        for (const delay of [120, 280, 600, 1000, 1800]) {
-          window.setTimeout(() => {
-            if (activated || !current.isConnected || this.isNoteBrowserWebMode(current)) return;
-            const restored = this.findWebviewNoteDrawController(current, true);
-            if (restored && this.activateNoteDrawWebviewController(restored, current)) {
-              activated = true;
-              return;
-            }
-            if (activatePreviewController()) {
-              activated = true;
-              return;
-            }
-            if (delay === 1800) {
-              activated = true;
-              this.triggerNoteDraw(current);
-            }
-          }, delay);
-        }
-      }, true);
-    }
-    return button;
+    return adopted ?? null;
   }
 
   async toggleNoteWebRawElementEditing(embed: HTMLElement): Promise<void> {
@@ -13151,7 +13095,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     button.removeClass("mwv-notedraw-source-button");
     button.removeAttribute("aria-hidden");
     button.tabIndex = 0;
-    this.decorateNoteDrawWebWandButton(button);
+    // NoteDraw owns the icon and label — no restyling, no icon cloning.
     this.bindNoteDrawWebviewButton(button, controller);
   }
 
@@ -13162,32 +13106,6 @@ export default class MobileWebviewerPlugin extends Plugin {
     return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden";
   }
 
-  decorateNoteDrawWebWandButton(button: NoteDrawButtonElement): void {
-    button.addClass("mwv-notedraw-web-wand");
-    button.setAttribute("aria-label", "Web notedraw");
-    button.setAttribute("title", "Web notedraw");
-    // Inherit NoteDraw's own icon so the wand looks native. Try to clone the
-    // SVG from any real NoteDraw button already in the document; fall back to
-    // the globe+wand glyph when none exists (e.g. NoteDraw just loaded).
-    const sourceIcon = document.querySelector<SVGElement>(
-      ".notedraw-header-button:not(.mwv-notedraw-web-wand) > svg, .notedraw-webview-button:not(.mwv-notedraw-web-wand) > svg, .notedraw-launcher > svg"
-    );
-    if (sourceIcon) {
-      const clone = sourceIcon.cloneNode(true) as SVGElement;
-      button.empty();
-      button.appendChild(clone);
-      button.dataset.mwvWebWandDecorated = "inherited";
-      return;
-    }
-    if (button.dataset.mwvWebWandDecorated === "true") return;
-    button.dataset.mwvWebWandDecorated = "true";
-    button.empty();
-    const globe = button.createSpan({ cls: "mwv-web-wand-globe", attr: { "aria-hidden": "true" } });
-    setIcon(globe, "globe-2");
-    const wand = button.createSpan({ cls: "mwv-web-wand-spark", attr: { "aria-hidden": "true" } });
-    setIcon(wand, "wand-sparkles");
-  }
-
   bindNoteDrawWebviewButton(button: NoteDrawButtonElement, controller: NoteDrawControllerLike): void {
     button._mwvNoteDrawBoundController = controller;
     button._mwvNoteDrawBound = true;
@@ -13195,7 +13113,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   handleNoteDrawWebWandLifecycle(event: Event): void {
     const target = isHtmlElement(event.target)
-      ? event.target.closest<NoteDrawButtonElement>(".mwv-notedraw-web-wand.notedraw-webview-button")
+      ? event.target.closest<NoteDrawButtonElement>(".notedraw-webview-button")
       : null;
     const controller = target?._mwvNoteDrawBoundController;
     if (!target || !controller || !this.isNoteWebOwnedElement(target) || !this.isNoteWebOwnedElement(controller.previewEl) || !this.isVisibleNoteDrawSurface(controller.previewEl)) return;
