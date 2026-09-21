@@ -13972,10 +13972,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.browserFrontendMode = mode === "web" ? "web" : "note";
     void this.saveSettings();
     embed.toggleClass("is-web-front", mode === "web");
-    // On mobile the view header just mirrors the current URL and reads like a
-    // second address bar above the RealWeb chrome — hide it in web mode.
+    // The view header just mirrors the current URL and reads like a second
+    // address bar above the RealWeb chrome — hide it in web mode on all
+    // platforms; the chrome tab strip replaces it visually.
     const modeLeafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
-    modeLeafContent?.toggleClass("mwv-realweb-immersive", mode === "web" && Platform.isMobile);
+    modeLeafContent?.toggleClass("mwv-realweb-immersive", mode === "web");
     embed.toggleClass("is-split-front", mode === "split");
     this.applyBrowserRuntimeClasses(embed);
     this.applyNoteBrowserWebIsolation(embed, mode === "web" && !this.isNoteBrowserRawEditingMode(embed));
@@ -15012,6 +15013,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     chrome.querySelector(":scope > .mwv-embed-tabstrip")?.remove();
     if (this.settings.browserTabs.length === 0) return;
     const strip = chrome.createDiv({ cls: "mwv-embed-tabstrip" });
+    chrome.insertBefore(strip, chrome.firstChild);
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
     for (const tab of this.settings.browserTabs.slice(0, 12)) {
       const item = strip.createDiv({ cls: "mwv-embed-tab" + (tab.id === activeId ? " is-active" : "") });
@@ -15531,8 +15533,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       void this.openUrlInEmbed(embed, addressInput.value);
     });
+    // Back / forward / reload join the address row's left side, removing the
+    // separate controls row so the content area grows.
+    for (const button of Array.from(controls.querySelectorAll<HTMLElement>(".mwv-browser-nav")).reverse()) {
+      address.insertBefore(button, address.firstChild);
+    }
+    controls.remove();
 
     this.renderBookmarksBar(embed);
+    this.renderEmbedTabstrip(embed, chrome);
     const initialMode = ["note", "web", "split"].includes(embed.dataset.mwvBrowserMode ?? "")
       ? embed.dataset.mwvBrowserMode as "note" | "web" | "split"
       : "note";

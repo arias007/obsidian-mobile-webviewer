@@ -4167,3 +4167,41 @@
 .workspace-leaf-content.mwv-realweb-immersive .view-header {
   display: none;
 }
+
+/* --- Compact RealWeb chrome: tabstrip on top, nav buttons inside the address row --- */
+.mwv-browser-chrome {
+  grid-template-areas:
+    "tabstrip actions"
+    "address address";
+}
+.mwv-browser-chrome .mwv-embed-tabstrip {
+  grid-area: tabstrip;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 0 2px;
+  scrollbar-width: none;
+}
+.mwv-browser-chrome .mwv-browser-address {
+  display: flex !important;
+  grid-area: address;
+  align-items: center;
+  gap: 3px;
+}
+.mwv-browser-chrome .mwv-browser-address .mwv-browser-nav {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+.mwv-browser-chrome .mwv-browser-address .mwv-browser-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  grid-template-areas:
+    "tabstrip actions"
+    "address address" !important;
+}
