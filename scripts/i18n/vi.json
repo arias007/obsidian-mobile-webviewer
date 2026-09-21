@@ -333,12 +333,6 @@
   "systemBrowser": "Mở bằng trình duyệt hệ thống",
   "proxyModeActive": "Trang từ chối nhúng — đã tải trang thật qua proxy tích hợp",
   "postFormUnsupported": "Chế độ proxy không hỗ trợ gửi biểu mẫu POST",
-  "drawOnPage": "Vẽ trên trang",
-  "drawPen": "Bút vẽ",
-  "drawEraser": "Tẩy",
-  "drawUndo": "Hoàn tác nét vẽ",
-  "drawClear": "Xóa bản vẽ",
-  "drawDone": "Xong",
   "clearCookies": "Xóa cookie của trang",
   "cookiesCleared": "Đã xóa cookie của trang"
 }

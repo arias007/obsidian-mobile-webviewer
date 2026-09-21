@@ -333,12 +333,6 @@
   "systemBrowser": "سىستېما كۆرگۈچىدە ئېچىش",
   "proxyModeActive": "بەت كىرگۈزۈشنى رەت قىلدى — ئىچكى ۋاكالەتچى بىلەن ھەقىقىي بەت يۈكلەندى",
   "postFormUnsupported": "ۋاكالەتچى ئۇسلۇبىدا POST جەدۋەل يوللاش قوللىمايدۇ",
-  "drawOnPage": "بەت ئۈستىگە سىزىش",
-  "drawPen": "قەلەم",
-  "drawEraser": "ئۆچۈرگۈچ",
-  "drawUndo": "سىزىقنى ئەكىس كەلتۈرۈش",
-  "drawClear": "سىزىلغاننى تازىلاش",
-  "drawDone": "تامام",
   "clearCookies": "تور بەت Cookie لىرىنى تازىلاش",
   "cookiesCleared": "تور بەت Cookie لىرى تازىلاندى"
 }

@@ -333,12 +333,6 @@
   "systemBrowser": "Buka di peramban sistem",
   "proxyModeActive": "Situs menolak penyematan — halaman asli dimuat lewat proxy bawaan",
   "postFormUnsupported": "Pengiriman formulir POST tidak didukung dalam mode proxy",
-  "drawOnPage": "Menggambar di halaman",
-  "drawPen": "Pena",
-  "drawEraser": "Penghapus",
-  "drawUndo": "Batalkan goresan",
-  "drawClear": "Hapus gambar",
-  "drawDone": "Selesai",
   "clearCookies": "Hapus cookie situs",
   "cookiesCleared": "Cookie situs dihapus"
 }

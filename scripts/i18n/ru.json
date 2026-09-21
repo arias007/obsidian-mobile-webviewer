@@ -333,12 +333,6 @@
   "systemBrowser": "Открыть в системном браузере",
   "proxyModeActive": "Сайт запрещает встраивание — реальная страница загружена через встроенный прокси",
   "postFormUnsupported": "Отправка POST-форм не поддерживается в режиме прокси",
-  "drawOnPage": "Рисовать на странице",
-  "drawPen": "Перо",
-  "drawEraser": "Ластик",
-  "drawUndo": "Отменить штрих",
-  "drawClear": "Очистить рисунок",
-  "drawDone": "Готово",
   "clearCookies": "Очистить cookie сайта",
   "cookiesCleared": "Cookie сайта очищены"
 }

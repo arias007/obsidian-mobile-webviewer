@@ -333,12 +333,6 @@
   "systemBrowser": "システムブラウザーで開く",
   "proxyModeActive": "サイトが埋め込みを拒否 — 内蔵プロキシで実際のページを読み込みました",
   "postFormUnsupported": "プロキシモードでは POST フォーム送信に対応していません",
-  "drawOnPage": "ページに描画",
-  "drawPen": "ペン",
-  "drawEraser": "消しゴム",
-  "drawUndo": "ストロークを元に戻す",
-  "drawClear": "描画を消去",
-  "drawDone": "完了",
   "clearCookies": "サイトのCookieを消去",
   "cookiesCleared": "サイトのCookieを消去しました"
 }

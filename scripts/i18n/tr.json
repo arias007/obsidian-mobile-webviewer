@@ -333,12 +333,6 @@
   "systemBrowser": "Sistem tarayıcısında aç",
   "proxyModeActive": "Site gömmeyi reddetti — gerçek sayfa yerleşik proxy ile yüklendi",
   "postFormUnsupported": "Proxy modunda POST form gönderimi desteklenmiyor",
-  "drawOnPage": "Sayfaya çiz",
-  "drawPen": "Kalem",
-  "drawEraser": "Silgi",
-  "drawUndo": "Çizgiyi geri al",
-  "drawClear": "Çizimi temizle",
-  "drawDone": "Bitti",
   "clearCookies": "Site çerezlerini temizle",
   "cookiesCleared": "Site çerezleri temizlendi"
 }

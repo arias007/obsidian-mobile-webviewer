@@ -333,12 +333,6 @@
   "systemBrowser": "เปิดในเบราว์เซอร์ของระบบ",
   "proxyModeActive": "ไซต์ปฏิเสธการฝัง — โหลดหน้าจริงผ่านพร็อกซีในตัว",
   "postFormUnsupported": "โหมดพร็อกซียังไม่รองรับการส่งฟอร์มแบบ POST",
-  "drawOnPage": "วาดบนหน้าเว็บ",
-  "drawPen": "ปากกา",
-  "drawEraser": "ยางลบ",
-  "drawUndo": "ย้อนเส้น",
-  "drawClear": "ล้างภาพวาด",
-  "drawDone": "เสร็จ",
   "clearCookies": "ล้างคุกกี้ของเว็บ",
   "cookiesCleared": "ล้างคุกกี้ของเว็บแล้ว"
 }

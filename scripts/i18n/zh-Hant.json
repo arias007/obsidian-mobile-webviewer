@@ -333,12 +333,6 @@
   "systemBrowser": "用系統瀏覽器開啟",
   "proxyModeActive": "網站拒絕內嵌，已用內建代理載入真實頁面",
   "postFormUnsupported": "代理模式暫不支援 POST 表單提交",
-  "drawOnPage": "頁面塗鴉",
-  "drawPen": "畫筆",
-  "drawEraser": "橡皮擦",
-  "drawUndo": "復原筆畫",
-  "drawClear": "清空塗鴉",
-  "drawDone": "完成",
   "clearCookies": "清除網站 Cookie",
   "cookiesCleared": "已清除網站 Cookie"
 }

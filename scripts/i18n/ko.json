@@ -333,12 +333,6 @@
   "systemBrowser": "시스템 브라우저로 열기",
   "proxyModeActive": "사이트가 임베딩을 거부 — 내장 프록시로 실제 페이지를 불러왔습니다",
   "postFormUnsupported": "프록시 모드에서는 POST 양식 제출을 지원하지 않습니다",
-  "drawOnPage": "페이지에 그리기",
-  "drawPen": "펜",
-  "drawEraser": "지우개",
-  "drawUndo": "획 되돌리기",
-  "drawClear": "그림 지우기",
-  "drawDone": "완료",
   "clearCookies": "사이트 쿠키 지우기",
   "cookiesCleared": "사이트 쿠키를 지웠습니다"
 }

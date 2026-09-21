@@ -333,12 +333,6 @@
   "systemBrowser": "فتح في متصفح النظام",
   "proxyModeActive": "يرفض الموقع التضمين — حُمّلت الصفحة الحقيقية عبر الوكيل المدمج",
   "postFormUnsupported": "إرسال نماذج POST غير مدعوم في وضع الوكيل",
-  "drawOnPage": "الرسم على الصفحة",
-  "drawPen": "القلم",
-  "drawEraser": "الممحاة",
-  "drawUndo": "التراجع عن الخط",
-  "drawClear": "مسح الرسم",
-  "drawDone": "تم",
   "clearCookies": "مسح كوكيز الموقع",
   "cookiesCleared": "تم مسح كوكيز الموقع"
 }

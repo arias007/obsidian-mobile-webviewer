@@ -333,12 +333,6 @@
   "systemBrowser": "Ouvrir dans le navigateur système",
   "proxyModeActive": "Le site refuse l'intégration — vraie page chargée via le proxy intégré",
   "postFormUnsupported": "L'envoi de formulaires POST n'est pas pris en charge en mode proxy",
-  "drawOnPage": "Dessiner sur la page",
-  "drawPen": "Stylo",
-  "drawEraser": "Gomme",
-  "drawUndo": "Annuler le trait",
-  "drawClear": "Effacer le dessin",
-  "drawDone": "Terminé",
   "clearCookies": "Effacer les cookies du site",
   "cookiesCleared": "Cookies du site effacés"
 }

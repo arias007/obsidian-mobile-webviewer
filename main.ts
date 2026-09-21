@@ -759,12 +759,6 @@ type UiTextKey =
   | "systemBrowser"
   | "proxyModeActive"
   | "postFormUnsupported"
-  | "drawOnPage"
-  | "drawPen"
-  | "drawEraser"
-  | "drawUndo"
-  | "drawClear"
-  | "drawDone"
   | "clearCookies"
   | "cookiesCleared";
 
@@ -1105,12 +1099,6 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   systemBrowser: "Open in system browser",
   proxyModeActive: "Site refuses embedding — real page loaded via built-in proxy",
   postFormUnsupported: "POST form submissions are not supported in proxy mode",
-  drawOnPage: "Draw on page",
-  drawPen: "Pen",
-  drawEraser: "Eraser",
-  drawUndo: "Undo stroke",
-  drawClear: "Clear drawing",
-  drawDone: "Done",
   clearCookies: "Clear site cookies",
   cookiesCleared: "Site cookies cleared"
 };
@@ -1450,23 +1438,11 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   systemBrowser: "用系统浏览器打开",
   proxyModeActive: "网站拒绝内嵌，已用内置代理加载真实页面",
   postFormUnsupported: "代理模式暂不支持 POST 表单提交",
-  drawOnPage: "页面涂鸦",
-  drawPen: "画笔",
-  drawEraser: "橡皮",
-  drawUndo: "撤销笔画",
-  drawClear: "清空涂鸦",
-  drawDone: "完成",
   clearCookies: "清除站点 Cookie",
   cookiesCleared: "已清除站点 Cookie"
 };
 
 const UI_TEXT_ZH_HANT: UiDictionary = {
-  drawOnPage: "頁面塗鴉",
-  drawPen: "畫筆",
-  drawEraser: "橡皮擦",
-  drawUndo: "復原筆畫",
-  drawClear: "清空塗鴉",
-  drawDone: "完成",
   clearCookies: "清除網站 Cookie",
   cookiesCleared: "已清除網站 Cookie",
   coreEntryDesc: "首頁、搜尋、瀏覽器入口與啟動行為。",
@@ -1807,12 +1783,6 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
 };
 
 const UI_TEXT_UG: UiDictionary = {
-  drawOnPage: "بەت ئۈستىگە سىزىش",
-  drawPen: "قەلەم",
-  drawEraser: "ئۆچۈرگۈچ",
-  drawUndo: "سىزىقنى ئەكىس كەلتۈرۈش",
-  drawClear: "سىزىلغاننى تازىلاش",
-  drawDone: "تامام",
   clearCookies: "تور بەت Cookie لىرىنى تازىلاش",
   cookiesCleared: "تور بەت Cookie لىرى تازىلاندى",
   noBookmarksYet: "تېخى خەتكۈش يوق",
@@ -2156,12 +2126,6 @@ function commonUi(values: UiDictionary): UiDictionary {
 }
 
 const UI_TEXT_AR = commonUi({
-  drawOnPage: "الرسم على الصفحة",
-  drawPen: "القلم",
-  drawEraser: "الممحاة",
-  drawUndo: "التراجع عن الخط",
-  drawClear: "مسح الرسم",
-  drawDone: "تم",
   clearCookies: "مسح كوكيز الموقع",
   cookiesCleared: "تم مسح كوكيز الموقع",
   uiLanguageDesc: "يتبع افتراضياً لغة Obsidian/النظام. يمكنك أيضاً تثبيت لغة ثابتة للإضافة.",
@@ -2501,12 +2465,6 @@ const UI_TEXT_AR = commonUi({
 });
 
 const UI_TEXT_RU = commonUi({
-  drawOnPage: "Рисовать на странице",
-  drawPen: "Перо",
-  drawEraser: "Ластик",
-  drawUndo: "Отменить штрих",
-  drawClear: "Очистить рисунок",
-  drawDone: "Готово",
   clearCookies: "Очистить cookie сайта",
   cookiesCleared: "Cookie сайта очищены",
   uiLanguageDesc: "По умолчанию следует языку Obsidian/системы. Можно закрепить фиксированный язык плагина.",
@@ -2846,12 +2804,6 @@ const UI_TEXT_RU = commonUi({
 });
 
 const UI_TEXT_TR = commonUi({
-  drawOnPage: "Sayfaya çiz",
-  drawPen: "Kalem",
-  drawEraser: "Silgi",
-  drawUndo: "Çizgiyi geri al",
-  drawClear: "Çizimi temizle",
-  drawDone: "Bitti",
   clearCookies: "Site çerezlerini temizle",
   cookiesCleared: "Site çerezleri temizlendi",
   uiLanguageDesc: "Varsayılan olarak Obsidian/sistem dilini izler. İsterseniz eklenti için sabit bir dil seçebilirsiniz.",
@@ -3191,12 +3143,6 @@ const UI_TEXT_TR = commonUi({
 });
 
 const UI_TEXT_JA = commonUi({
-  drawOnPage: "ページに描画",
-  drawPen: "ペン",
-  drawEraser: "消しゴム",
-  drawUndo: "ストロークを元に戻す",
-  drawClear: "描画を消去",
-  drawDone: "完了",
   clearCookies: "サイトのCookieを消去",
   cookiesCleared: "サイトのCookieを消去しました",
   uiLanguageDesc: "デフォルトでは Obsidian/システムの言語に従います。プラグインの言語を固定することもできます。",
@@ -3536,12 +3482,6 @@ const UI_TEXT_JA = commonUi({
 });
 
 const UI_TEXT_KO = commonUi({
-  drawOnPage: "페이지에 그리기",
-  drawPen: "펜",
-  drawEraser: "지우개",
-  drawUndo: "획 되돌리기",
-  drawClear: "그림 지우기",
-  drawDone: "완료",
   clearCookies: "사이트 쿠키 지우기",
   cookiesCleared: "사이트 쿠키를 지웠습니다",
   uiLanguageDesc: "기본적으로 Obsidian/시스템 언어를 따릅니다. 플러그인 언어를 고정할 수도 있습니다.",
@@ -3881,12 +3821,6 @@ const UI_TEXT_KO = commonUi({
 });
 
 const UI_TEXT_FR = commonUi({
-  drawOnPage: "Dessiner sur la page",
-  drawPen: "Stylo",
-  drawEraser: "Gomme",
-  drawUndo: "Annuler le trait",
-  drawClear: "Effacer le dessin",
-  drawDone: "Terminé",
   clearCookies: "Effacer les cookies du site",
   cookiesCleared: "Cookies du site effacés",
   uiLanguageDesc: "Suit par défaut la langue d'Obsidian/du système. Vous pouvez aussi fixer une langue pour ce plugin.",
@@ -4226,12 +4160,6 @@ const UI_TEXT_FR = commonUi({
 });
 
 const UI_TEXT_DE = commonUi({
-  drawOnPage: "Auf der Seite zeichnen",
-  drawPen: "Stift",
-  drawEraser: "Radierer",
-  drawUndo: "Strich rückgängig",
-  drawClear: "Zeichnung löschen",
-  drawDone: "Fertig",
   clearCookies: "Website-Cookies löschen",
   cookiesCleared: "Website-Cookies gelöscht",
   uiLanguageDesc: "Folgt standardmäßig der Obsidian-/Systemsprache. Sie können auch eine feste Sprache für dieses Plugin wählen.",
@@ -4571,12 +4499,6 @@ const UI_TEXT_DE = commonUi({
 });
 
 const UI_TEXT_ES = commonUi({
-  drawOnPage: "Dibujar en la página",
-  drawPen: "Lápiz",
-  drawEraser: "Borrador",
-  drawUndo: "Deshacer trazo",
-  drawClear: "Borrar dibujo",
-  drawDone: "Hecho",
   clearCookies: "Borrar cookies del sitio",
   cookiesCleared: "Cookies del sitio borradas",
   uiLanguageDesc: "Sigue por defecto el idioma de Obsidian/sistema. También puedes fijar un idioma para el plugin.",
@@ -4986,12 +4908,6 @@ const UI_TEXT_IT = commonUi({
 });
 
 const UI_TEXT_HI = commonUi({
-  drawOnPage: "पेज पर चित्र बनाएँ",
-  drawPen: "पेंसिल",
-  drawEraser: "इरेज़र",
-  drawUndo: "स्ट्रोक पूर्ववत करें",
-  drawClear: "चित्र मिटाएँ",
-  drawDone: "पूर्ण",
   clearCookies: "साइट कुकीज़ मिटाएँ",
   cookiesCleared: "साइट कुकीज़ मिटा दी गईं",
   uiLanguageDesc: "डिफ़ॉल्ट रूप से Obsidian/सिस्टम भाषा का पालन करती है। आप प्लगइन के लिए निश्चित भाषा भी चुन सकते हैं।",
@@ -5479,12 +5395,6 @@ const UI_TEXT_UZ = commonUi({
 
 const UI_TEXT_ID = commonUi({
   ...UI_TEXT_EN,
-  drawOnPage: "Menggambar di halaman",
-  drawPen: "Pena",
-  drawEraser: "Penghapus",
-  drawUndo: "Batalkan goresan",
-  drawClear: "Hapus gambar",
-  drawDone: "Selesai",
   clearCookies: "Hapus cookie situs",
   cookiesCleared: "Cookie situs dihapus",
   uiLanguageDesc: "Secara baku mengikuti bahasa Obsidian/sistem. Anda juga dapat menetapkan bahasa tetap untuk plugin ini.",
@@ -5842,12 +5752,6 @@ const UI_TEXT_MS = commonUi({
 });
 
 const UI_TEXT_TH = commonUi({
-  drawOnPage: "วาดบนหน้าเว็บ",
-  drawPen: "ปากกา",
-  drawEraser: "ยางลบ",
-  drawUndo: "ย้อนเส้น",
-  drawClear: "ล้างภาพวาด",
-  drawDone: "เสร็จ",
   clearCookies: "ล้างคุกกี้ของเว็บ",
   cookiesCleared: "ล้างคุกกี้ของเว็บแล้ว",
   uiLanguageDesc: "ตามภาษา Obsidian/ระบบโดยค่าเริ่มต้น คุณยังกำหนดภาษาคงที่ให้ปลั๊กอินได้",
@@ -6187,12 +6091,6 @@ const UI_TEXT_TH = commonUi({
 });
 
 const UI_TEXT_VI = commonUi({
-  drawOnPage: "Vẽ trên trang",
-  drawPen: "Bút vẽ",
-  drawEraser: "Tẩy",
-  drawUndo: "Hoàn tác nét vẽ",
-  drawClear: "Xóa bản vẽ",
-  drawDone: "Xong",
   clearCookies: "Xóa cookie của trang",
   cookiesCleared: "Đã xóa cookie của trang",
   uiLanguageDesc: "Mặc định theo ngôn ngữ Obsidian/hệ thống. Bạn cũng có thể cố định một ngôn ngữ cho plugin.",
@@ -6568,18 +6466,6 @@ interface MwvCookie {
   hostOnly: boolean;
 }
 
-interface MwvDrawPoint {
-  x: number;
-  y: number;
-}
-
-interface MwvDrawStroke {
-  color: string;
-  size: number;
-  erase?: boolean;
-  points: MwvDrawPoint[];
-}
-
 interface MobileWebviewerSettings {
   homeUrl: string;
   searchUrl: string;
@@ -6632,7 +6518,6 @@ interface MobileWebviewerSettings {
   downloads: DownloadEntry[];
   cookieJar: Record<string, MwvCookie>;
   proxyStorage: Record<string, Record<string, string>>;
-  surfaceDrawings: Record<string, MwvDrawStroke[]>;
 }
 
 const PORTABLE_SETTING_KEYS = [
@@ -6978,8 +6863,7 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   downloads: [],
   bookmarks: [],
   cookieJar: {},
-  proxyStorage: {},
-  surfaceDrawings: {}
+  proxyStorage: {}
 };
 
 function normalizeInput(input: string, searchUrl: string): string {
@@ -8618,16 +8502,6 @@ class MobileWebviewerView extends ItemView {
   activeDoodlePath?: SVGPathElement;
   activeDoodlePointerId?: number;
   activeDoodleSvg?: SVGSVGElement;
-  drawActive = false;
-  drawTool: "pen" | "erase" = "pen";
-  drawColor = "#ff3b30";
-  drawSize = 4;
-  drawStrokes: MwvDrawStroke[] = [];
-  drawOverlayEl?: HTMLElement;
-  drawCanvasEl?: HTMLCanvasElement;
-  drawCtx?: CanvasRenderingContext2D;
-  drawSaveTimer?: number;
-  drawResizeHandler?: () => void;
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
 
   constructor(leaf: WorkspaceLeaf, plugin: MobileWebviewerPlugin) {
@@ -8658,19 +8532,10 @@ class MobileWebviewerView extends ItemView {
     this.applyBrowserTab(tab);
     this.renderTabStrip();
     this.navigate(tab.url || this.plugin.settings.homeUrl, false);
+    this.ensureNoteDrawWandButton();
   }
 
   async onClose(): Promise<void> {
-    if (this.drawActive) {
-      this.drawActive = false;
-      if (this.drawResizeHandler) window.removeEventListener("resize", this.drawResizeHandler);
-      this.drawOverlayEl?.remove();
-      this.drawOverlayEl = undefined;
-      this.drawCanvasEl = undefined;
-      this.drawCtx = undefined;
-      this.drawButtons = undefined;
-      await this.saveDrawStrokesNow();
-    }
     this.plugin.disposeBrowserSurface(this.surfaceEl);
     await this.saveCurrentWebNoteNow();
   }
@@ -8882,6 +8747,14 @@ class MobileWebviewerView extends ItemView {
     if (title) {
       this.handleSurfaceTitle(title);
     }
+    this.ensureNoteDrawWandButton();
+  }
+
+  /** Mounts the shared NoteDraw wand proxy so real web pages get the same magic wand as NoteWeb. */
+  ensureNoteDrawWandButton(): void {
+    window.setTimeout(() => {
+      this.plugin.ensureNoteWebWandProxy(this.surfaceEl, true);
+    }, 120);
   }
 
   handleSurfaceTitle(title: string): void {
@@ -8926,7 +8799,6 @@ class MobileWebviewerView extends ItemView {
     }
 
     this.currentUrl = nextUrl;
-    if (this.drawActive) this.loadDrawStrokes();
     this.currentTitle = this.plugin.getBrowserSurfaceTitle(this.surfaceEl) || hostName(nextUrl);
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
@@ -9768,8 +9640,6 @@ class MobileWebviewerView extends ItemView {
     wrap?.toggleClass("is-web-front", enabled && this.frontendMode === "web");
     wrap?.toggleClass("is-split-front", enabled && this.frontendMode === "split");
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
-    root?.toggleClass("is-raw-web", enabled && this.frontendMode === "web");
-    root?.toggleAttribute("data-notedraw-ignore", enabled && this.frontendMode === "web");
     if (root) this.plugin.applyBrowserRuntimeClasses(root);
     this.homeEl.toggleClass("is-visible", !enabled || this.frontendMode !== "web");
     if (enabled) {
@@ -9790,8 +9660,6 @@ class MobileWebviewerView extends ItemView {
     const wrap = this.surfaceEl?.parentElement;
     if (!wrap) return;
     const root = this.containerEl.children[1] as HTMLElement | undefined;
-    root?.toggleClass("is-raw-web", wrap.hasClass("is-live-page") && mode === "web");
-    root?.toggleAttribute("data-notedraw-ignore", wrap.hasClass("is-live-page") && mode === "web");
     if (root) this.plugin.applyBrowserRuntimeClasses(root);
     wrap.toggleClass("is-note-front", mode === "note");
     wrap.toggleClass("is-web-front", mode === "web");
@@ -10307,7 +10175,6 @@ class MobileWebviewerView extends ItemView {
     });
 
     addAction(toolActions, "text-cursor-input", this.plugin.tr("autofillPage"), () => this.autofillCurrentPage());
-    addAction(toolActions, "brush", this.plugin.tr("drawOnPage"), () => this.toggleDrawOverlay());
     addAction(toolActions, "wand-sparkles", this.plugin.tr("scriptsCount", { count: this.plugin.getActiveUserScriptRules(url).length }), () => {
       this.plugin.toggleUserScriptsPanel(body, url);
     });
@@ -10396,229 +10263,6 @@ class MobileWebviewerView extends ItemView {
       this.plugin.clearFindMarks(this.containerEl);
     });
     input.focus();
-  }
-
-  toggleDrawOverlay(): void {
-    if (this.drawActive) {
-      this.closeDrawOverlay();
-      return;
-    }
-    this.openDrawOverlay();
-  }
-
-  private drawTargetUrl(): string {
-    return this.currentUrl || "";
-  }
-
-  private loadDrawStrokes(): void {
-    const url = this.drawTargetUrl();
-    this.drawStrokes = [...(this.plugin.settings.surfaceDrawings[url] ?? [])];
-    this.redrawDrawCanvas();
-  }
-
-  openDrawOverlay(): void {
-    const wrap = this.surfaceEl?.parentElement;
-    if (!wrap) return;
-    this.drawActive = true;
-    const url = this.drawTargetUrl();
-    this.drawStrokes = [...(this.plugin.settings.surfaceDrawings[url] ?? [])];
-
-    const overlay = createDiv({ cls: "mwv-draw-overlay" });
-    this.drawOverlayEl = overlay;
-    wrap.addClass("mwv-draw-target");
-    wrap.appendChild(overlay);
-
-    const bar = overlay.createDiv({ cls: "mwv-draw-bar" });
-    const colorButtons: HTMLButtonElement[] = [];
-    for (const color of ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff"]) {
-      const button = bar.createEl("button", {
-        cls: "mwv-draw-color",
-        attr: { type: "button", "aria-label": color, title: color }
-      });
-      button.style.background = color;
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        this.drawTool = "pen";
-        this.drawColor = color;
-        this.syncDrawButtons();
-      });
-      colorButtons.push(button);
-    }
-    const mkButton = (icon: string, label: string, onClick: () => void) => {
-      const button = bar.createEl("button", {
-        cls: "mwv-draw-button",
-        attr: { type: "button", "aria-label": label, title: label }
-      });
-      setIcon(button, icon);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        onClick();
-      });
-      return button;
-    };
-    const penButton = mkButton("pen-tool", this.tr("drawPen"), () => {
-      this.drawTool = "pen";
-      this.syncDrawButtons();
-    });
-    const eraserButton = mkButton("eraser", this.tr("drawEraser"), () => {
-      this.drawTool = "erase";
-      this.syncDrawButtons();
-    });
-    mkButton("undo-2", this.tr("drawUndo"), () => this.undoDrawStroke());
-    mkButton("trash-2", this.tr("drawClear"), () => this.clearDrawStrokes());
-    mkButton("check", this.tr("drawDone"), () => this.closeDrawOverlay());
-    this.drawButtons = { colorButtons, penButton, eraserButton };
-
-    const canvas = overlay.createEl("canvas", { cls: "mwv-draw-canvas" });
-    this.drawCanvasEl = canvas;
-    const ctx = canvas.getContext("2d");
-    this.drawCtx = ctx ?? undefined;
-
-    canvas.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 && event.pointerType === "mouse") return;
-      event.preventDefault();
-      canvas.setPointerCapture(event.pointerId);
-      this.drawPointerId = event.pointerId;
-      const stroke: MwvDrawStroke = {
-        color: this.drawColor,
-        size: this.drawTool === "erase" ? Math.max(18, this.drawSize * 5) : this.drawSize,
-        erase: this.drawTool === "erase" || undefined,
-        points: [this.normalizedDrawPoint(event, canvas)]
-      };
-      this.drawStrokes.push(stroke);
-      this.drawCurrentStroke = stroke;
-      this.redrawDrawCanvas();
-    });
-    canvas.addEventListener("pointermove", (event) => {
-      if (this.drawPointerId !== event.pointerId || !this.drawCurrentStroke) return;
-      const point = this.normalizedDrawPoint(event, canvas);
-      const last = this.drawCurrentStroke.points[this.drawCurrentStroke.points.length - 1];
-      if (last && Math.abs(last.x - point.x) < 0.0015 && Math.abs(last.y - point.y) < 0.0015) return;
-      this.drawCurrentStroke.points.push(point);
-      this.redrawDrawCanvas();
-    });
-    const finishStroke = () => {
-      if (!this.drawCurrentStroke) return;
-      this.drawCurrentStroke = undefined;
-      this.drawPointerId = undefined;
-      this.scheduleDrawSave();
-    };
-    canvas.addEventListener("pointerup", finishStroke);
-    canvas.addEventListener("pointercancel", finishStroke);
-
-    this.resizeDrawCanvas();
-    this.drawResizeHandler = () => this.resizeDrawCanvas();
-    window.addEventListener("resize", this.drawResizeHandler);
-    this.syncDrawButtons();
-    this.redrawDrawCanvas();
-  }
-
-  private drawButtons?: { colorButtons: HTMLButtonElement[]; penButton: HTMLButtonElement; eraserButton: HTMLButtonElement };
-  private drawPointerId?: number;
-  private drawCurrentStroke?: MwvDrawStroke;
-
-  private normalizedDrawPoint(event: PointerEvent, canvas: HTMLCanvasElement): MwvDrawPoint {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: rect.width > 0 ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) : 0,
-      y: rect.height > 0 ? Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) : 0
-    };
-  }
-
-  private syncDrawButtons(): void {
-    const buttons = this.drawButtons;
-    if (!buttons) return;
-    for (const button of buttons.colorButtons) {
-      button.toggleClass("is-active", this.drawTool === "pen" && button.style.background === this.drawColor);
-    }
-    buttons.penButton.toggleClass("is-active", this.drawTool === "pen");
-    buttons.eraserButton.toggleClass("is-active", this.drawTool === "erase");
-  }
-
-  private resizeDrawCanvas(): void {
-    const canvas = this.drawCanvasEl;
-    const wrap = this.surfaceEl?.parentElement;
-    if (!canvas || !wrap) return;
-    canvas.width = Math.max(1, Math.round(wrap.clientWidth * (window.devicePixelRatio || 1)));
-    canvas.height = Math.max(1, Math.round(wrap.clientHeight * (window.devicePixelRatio || 1)));
-    this.redrawDrawCanvas();
-  }
-
-  private redrawDrawCanvas(): void {
-    const canvas = this.drawCanvasEl;
-    const ctx = this.drawCtx;
-    if (!canvas || !ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const stroke of this.drawStrokes) {
-      if (stroke.points.length === 0) continue;
-      ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = Math.max(1, stroke.size * (window.devicePixelRatio || 1));
-      ctx.beginPath();
-      const first = stroke.points[0];
-      ctx.moveTo(first.x * canvas.width, first.y * canvas.height);
-      if (stroke.points.length === 1) {
-        ctx.lineTo(first.x * canvas.width + 0.01, first.y * canvas.height);
-      } else {
-        for (let i = 1; i < stroke.points.length; i++) {
-          ctx.lineTo(stroke.points[i].x * canvas.width, stroke.points[i].y * canvas.height);
-        }
-      }
-      ctx.stroke();
-    }
-    ctx.globalCompositeOperation = "source-over";
-  }
-
-  private undoDrawStroke(): void {
-    this.drawStrokes.pop();
-    this.redrawDrawCanvas();
-    this.scheduleDrawSave();
-  }
-
-  private clearDrawStrokes(): void {
-    this.drawStrokes = [];
-    this.redrawDrawCanvas();
-    this.scheduleDrawSave();
-  }
-
-  private scheduleDrawSave(): void {
-    if (this.drawSaveTimer) window.clearTimeout(this.drawSaveTimer);
-    this.drawSaveTimer = window.setTimeout(() => {
-      this.drawSaveTimer = undefined;
-      void this.saveDrawStrokesNow();
-    }, 800);
-  }
-
-  private async saveDrawStrokesNow(): Promise<void> {
-    const url = this.drawTargetUrl();
-    if (!url) return;
-    if (this.drawStrokes.length === 0) delete this.plugin.settings.surfaceDrawings[url];
-    else this.plugin.settings.surfaceDrawings[url] = this.drawStrokes.slice(-3000);
-    await this.plugin.saveSettings();
-  }
-
-  closeDrawOverlay(): void {
-    if (!this.drawActive) return;
-    this.drawActive = false;
-    if (this.drawSaveTimer) {
-      window.clearTimeout(this.drawSaveTimer);
-      this.drawSaveTimer = undefined;
-      void this.saveDrawStrokesNow();
-    }
-    if (this.drawResizeHandler) {
-      window.removeEventListener("resize", this.drawResizeHandler);
-      this.drawResizeHandler = undefined;
-    }
-    this.drawOverlayEl?.remove();
-    this.drawOverlayEl = undefined;
-    this.drawCanvasEl = undefined;
-    this.drawCtx = undefined;
-    this.drawButtons = undefined;
-    this.drawCurrentStroke = undefined;
-    this.drawPointerId = undefined;
-    this.surfaceEl?.parentElement?.removeClass("mwv-draw-target");
   }
 
   async captureLink(): Promise<void> {
@@ -11296,7 +10940,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
-    if (!surface.isConnected || !this.isNoteWebOwnedElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
+    if (!surface.isConnected || !this.isNoteDrawSurfaceElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
     const anchor = this.ensureNoteDrawStableAnchor(surface);
     let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
     if (!button) {
@@ -11328,7 +10972,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.stopPropagation();
         event.stopImmediatePropagation?.();
         const current = button?._mwvNoteWebWandSurface;
-        if (!current?.isConnected || !this.isNoteWebOwnedElement(current)) return;
+        if (!current?.isConnected || !this.isNoteDrawSurfaceElement(current)) return;
         // The live website is a separate Electron guest document. Mounting a
         // full NoteDraw controller on its host changes the host layout but
         // still cannot reach guest-page text. Use the explicit cross-WebView
@@ -12398,7 +12042,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   getNoteDrawSearchScopes(root?: HTMLElement): HTMLElement[] {
     const scopes: HTMLElement[] = [];
     if (root?.isConnected) {
-      if (!this.isNoteWebOwnedElement(root)) return scopes;
+      if (!this.isNoteDrawSurfaceElement(root)) return scopes;
       scopes.push(root);
       const leaf = root.closest<HTMLElement>(".workspace-leaf-content");
       if (leaf) scopes.push(leaf);
@@ -12439,7 +12083,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   collectNoteDrawControllers(root?: HTMLElement): NoteDrawControllerLike[] {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return [];
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return [];
     const scopes = this.getNoteDrawSearchScopes(root);
 
     const controllers: NoteDrawControllerLike[] = [];
@@ -12583,7 +12227,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   queueNoteDrawControllerSync(root?: HTMLElement, forceEditMode = false): void {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     if (this.isNoteBrowserWebMode(root) && !this.isNoteBrowserRawEditingMode(root)) return;
     for (const delay of [0, 80, 220, 520]) {
       window.setTimeout(() => {
@@ -12594,7 +12238,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   queueNoteDrawControllerRestore(root?: HTMLElement): void {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root) || this.isNoteBrowserWebMode(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root) || this.isNoteBrowserWebMode(root)) return;
     const noteDrawPlugin = this.getNoteDrawPlugin();
     if (typeof noteDrawPlugin?.syncWebviewControllers !== "function") return;
     const token = ++this.noteDrawControllerRestoreSeq;
@@ -12621,7 +12265,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   syncNoteDrawControllers(root?: HTMLElement, forceEditMode = false): void {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     if (this.isNoteBrowserWebMode(root) && !this.isNoteBrowserRawEditingMode(root)) return;
     for (const controller of this.collectNoteDrawControllers(root)) {
       if (!controller.previewEl?.isConnected || controller.surfaceType !== "webview") continue;
@@ -12894,7 +12538,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   queueNoteDrawDrawingSave(controller?: NoteDrawControllerLike | null): void {
-    if (!controller?.file || !this.isNoteWebOwnedElement(controller.previewEl)) return;
+    if (!controller?.file || !this.isNoteDrawSurfaceElement(controller.previewEl)) return;
     const data = (controller as NoteDrawControllerLike & { drawingData?: unknown }).drawingData;
     if (!data) return;
     const existing = this.noteDrawDrawingSaveTimers.get(controller);
@@ -13187,7 +12831,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   flushNoteDrawDrawingNow(controller?: NoteDrawControllerLike | null): Promise<void> {
-    if (!controller?.file || !this.isNoteWebOwnedElement(controller.previewEl)) return Promise.resolve();
+    if (!controller?.file || !this.isNoteDrawSurfaceElement(controller.previewEl)) return Promise.resolve();
     const data = (controller as NoteDrawControllerLike & { drawingData?: unknown }).drawingData;
     if (!data) return Promise.resolve();
     const pendingTimer = this.noteDrawDrawingSaveTimers.get(controller);
@@ -13212,15 +12856,31 @@ export default class MobileWebviewerPlugin extends Plugin {
     return file instanceof TFile && file.path === WEBVIEW_NOTE_PATH;
   }
 
+  /** Leaves that host a NoteDraw-capable surface: the NoteWeb note leaf and the Browser View. */
+  isNoteDrawSurfaceLeaf(leaf?: WorkspaceLeaf | null): boolean {
+    if (this.isNoteBrowserLeaf(leaf)) return true;
+    const view = leaf?.view as { getViewType?: () => string } | undefined;
+    return view?.getViewType?.() === VIEW_TYPE;
+  }
+
+  /**
+   * Like isNoteWebOwnedElement, but also admits Browser View surfaces so the
+   * NoteDraw magic wand can annotate real web pages exactly like NoteWeb does.
+   */
+  isNoteDrawSurfaceElement(element?: HTMLElement | null): boolean {
+    if (!element?.isConnected) return false;
+    return this.isNoteDrawSurfaceLeaf(this.findWorkspaceLeafForElement(element));
+  }
+
   isNoteWebOwnedElement(element?: HTMLElement | null): boolean {
     if (!element?.isConnected) return false;
     return this.isNoteBrowserLeaf(this.findWorkspaceLeafForElement(element));
   }
 
   noteDrawControllerBelongsToRoot(controller: NoteDrawControllerLike | null | undefined, root?: HTMLElement | null): boolean {
-    if (!controller || !root?.isConnected || !this.isNoteWebOwnedElement(root)) return false;
+    if (!controller || !root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return false;
     const preview = controller.previewEl;
-    if (!preview?.isConnected || !this.isNoteWebOwnedElement(preview)) return false;
+    if (!preview?.isConnected || !this.isNoteDrawSurfaceElement(preview)) return false;
     return preview === root || root.contains(preview) || preview.contains(root);
   }
 
@@ -13243,7 +12903,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   refreshNoteDrawWorkspaceBinding(root?: HTMLElement, forceEditMode = false, emitWorkspaceEvents = true): void {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     if (this.isNoteBrowserWebMode(root) && !this.isNoteBrowserRawEditingMode(root)) return;
 
     // Do not synthesize workspace layout/leaf/file events here. NoteDraw
@@ -13257,7 +12917,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   notifyNoteDrawWebviewChanged(root?: HTMLElement, forceEditMode = false): void {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     // The real web page owns the viewport in Web mode. NoteDraw's Markdown
     // virtual-height pass is for the note view and can otherwise feed the
     // live page's measured height back into the parent layout.
@@ -13276,7 +12936,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async resetNoteDrawWebviewControllers(root?: HTMLElement): Promise<void> {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     delete root.dataset.mwvNotewebDrawingVisible;
     const noteDrawPlugin = this.getNoteDrawPlugin();
     const controllers = new Set<NoteDrawControllerLike>();
@@ -13369,7 +13029,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   isVisibleNoteDrawSurface(surface?: HTMLElement | null): boolean {
-    if (!surface?.isConnected || !this.isNoteWebOwnedElement(surface)) return false;
+    if (!surface?.isConnected || !this.isNoteDrawSurfaceElement(surface)) return false;
     const rect = surface.getBoundingClientRect();
     const style = window.getComputedStyle(surface);
     return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden";
@@ -13435,7 +13095,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   isMobileWebviewerSurface(surface?: HTMLElement | null): boolean {
-    if (!surface || !this.isNoteWebOwnedElement(surface)) return false;
+    if (!surface || !this.isNoteDrawSurfaceElement(surface)) return false;
     return Boolean(
       surface.closest(MWV_DEDUPE_ROOT_SELECTOR) ||
       surface.matches(MWV_DEDUPE_ROOT_SELECTOR) ||
@@ -13493,7 +13153,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   forceCloseNoteDraw(root?: HTMLElement, onClose?: () => void): boolean {
-    if (!root?.isConnected || !this.isNoteWebOwnedElement(root)) return false;
+    if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return false;
     const shell = this.findActiveNoteDrawShell(root);
     const controller = shell?._noteDrawController ?? this.findActiveNoteDrawController(root);
     const target = controller?.previewEl ?? shell;
@@ -13563,7 +13223,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   triggerNoteDraw(root?: HTMLElement): void {
-    if (root && (!root.isConnected || !this.isNoteWebOwnedElement(root))) return;
+    if (root && (!root.isConnected || !this.isNoteDrawSurfaceElement(root))) return;
     const pluginRegistry = (this.app as App & {
       plugins?: { plugins?: Record<string, unknown> };
       commands?: {
