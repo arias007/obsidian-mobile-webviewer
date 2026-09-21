@@ -11003,7 +11003,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     // resurrect a proxy wand next to it (other surfaces' sync passes would
     // otherwise re-create the proxy and duplicate the wand). The relocated
     // More button shares this anchor but is not a wand candidate.
-    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(":scope > button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true'])");
+    // NoteDraw 4.x builds its view-actions host button as a <div>
+    // (installSurfaceButton only uses <button> for inline hosts), so the
+    // native wand must be matched by class as well. A button-only selector
+    // made every sync pass believe the native wand was missing and respawn
+    // the proxy beside it — duplicate globe icons, flicker, dead clicks.
+    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(
+      ":scope > .notedraw-webview-button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true']), :scope > button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true'])"
+    );
     let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
     if (button && nativeInAnchor) {
       button.remove();
