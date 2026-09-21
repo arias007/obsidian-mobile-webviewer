@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,7 @@
     "mobile",
     "webviewer"
   ],
-  "author": "Murat / Codex",
+  "author": "Murat",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.30",
