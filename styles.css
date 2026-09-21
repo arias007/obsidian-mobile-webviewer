@@ -4163,8 +4163,8 @@
   cursor: pointer;
 }
 
-/* --- Immersive RealWeb on mobile: hide the URL-mirroring view header --- */
-.workspace-leaf-content.mwv-realweb-immersive .view-header {
+/* --- RealWeb: hide the URL-mirroring header title, keep native header buttons --- */
+.workspace-leaf-content.mwv-realweb-immersive .view-header-title {
   display: none;
 }
 
