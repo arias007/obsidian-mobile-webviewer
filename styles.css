@@ -1764,8 +1764,13 @@
    type a different URL, so the address row stays mounted above the guest.
    The extension ("More") panel is exempt as well: it is inserted as a direct
    child of the embed and must stay visible above the guest, otherwise the
-   More entry appears to do nothing in Web mode. */
-.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome):not(.mwv-extension-panel):not(.mwv-more-panel) {
+   More entry appears to do nothing in Web mode.
+   NoteDraw's own UI layers (toolbar, panels, canvases — every element whose
+   class starts with "notedraw-") are exempt too: NoteDraw 4.x mounts its
+   toolbar as a direct child of the embed in Web mode, and this rule used to
+   outrank every raw-edit exception, leaving the wand with a toolbar that was
+   mounted but permanently display:none. */
+.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome):not(.mwv-extension-panel):not(.mwv-more-panel):not([class^="notedraw-"]):not([class*=" notedraw-"]) {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
