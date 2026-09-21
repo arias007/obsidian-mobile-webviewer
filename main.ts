@@ -8799,6 +8799,8 @@ class MobileWebviewerView extends ItemView {
     }
 
     this.currentUrl = nextUrl;
+    this.plugin.syncCrossViewNavigation(nextUrl, "view");
+    this.ensureNoteDrawWandButton();
     this.currentTitle = this.plugin.getBrowserSurfaceTitle(this.surfaceEl) || hostName(nextUrl);
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
@@ -14259,6 +14261,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (this.disposed || !embed.isConnected) return;
     const nextUrl = normalizeInput(url, this.settings.searchUrl);
     const previousUrl = embed.dataset.url;
+    if (nextUrl) this.syncCrossViewNavigation(nextUrl, "embed");
     await this.flushEmbedReaderNow(embed);
     if (this.disposed || !embed.isConnected || this.embedRenderTokens.get(embed) !== requestToken) return;
     if (previousUrl && !equivalentEmbedUrl(previousUrl, nextUrl)) {
@@ -14938,6 +14941,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     embed.dataset.url = nextUrl;
     embed.setAttribute("data-url", nextUrl);
+    this.syncCrossViewNavigation(nextUrl, "embed");
     this.updateEmbedChrome(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
     this.notifyNoteDrawWebviewChanged(embed);
     void this.persistEmbedState(embed);
@@ -17269,6 +17273,8 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   private readonly proxyFrameState = new WeakMap<BrowserSurfaceElement, { url: string; dispose: () => void }>();
   private proxyFindSeq = 0;
+  private proxyProbeSeq = 0;
+  private lastCrossViewSync = { url: "", at: 0 };
   private readonly proxyFindResolvers = new Map<number, (count: number) => void>();
 
   /**
@@ -17518,18 +17524,23 @@ export default class MobileWebviewerPlugin extends Plugin {
       return;
     }
     this.wireProxyBridge(frame, callbacks);
-    const doc = await this.fetchLiveDocument(clean);
-    if (!frame.isConnected) return;
-    if (doc && this.isEmbedBlockedByHeaders(doc.headers)) {
-      this.renderProxyDocument(frame, clean, doc.text, callbacks);
-      return;
-    }
-    // Embedding is allowed (or the probe failed) — load natively so cookies
-    // and full page JavaScript keep working. Existing load/error/timeout
-    // listeners below still provide the reader fallback.
+    // Load natively right away so ordinary sites open instantly with their
+    // own cookies and full page JavaScript. The embed-blocked probe runs in
+    // parallel and swaps the frame to the built-in proxy only when the site
+    // refuses to be framed — a blocking pre-probe here used to stall every
+    // navigation behind a full-document fetch.
+    const probeToken = ++this.proxyProbeSeq;
+    frame.dataset.mwvProbeToken = String(probeToken);
     frame.removeAttribute("srcdoc");
     frame.removeAttribute("data-mwv-proxy-url");
     frame.src = clean;
+    void callbacks.onLoading?.(true, clean);
+    void (async () => {
+      const doc = await this.fetchLiveDocument(clean);
+      if (!frame.isConnected || frame.dataset.mwvProbeToken !== String(probeToken)) return;
+      if (!doc || !this.isEmbedBlockedByHeaders(doc.headers)) return;
+      this.renderProxyDocument(frame, clean, doc.text, callbacks);
+    })();
   }
 
   async loadProxyNavigation(frame: BrowserSurfaceElement, url: string, callbacks: BrowserSurfaceCallbacks): Promise<void> {
@@ -18982,6 +18993,41 @@ export default class MobileWebviewerPlugin extends Plugin {
   async clearProxyCookies(): Promise<void> {
     this.settings.cookieJar = {};
     await this.saveSettings();
+  }
+
+  /**
+   * NoteWeb and the Browser View are two views of the same browser: they
+   * share one address. Navigating in either surface makes the other follow,
+   * with a short dedupe window so the two directions cannot loop.
+   */
+  syncCrossViewNavigation(url: string, source: "view" | "embed"): void {
+    if (!/^https?:\/\//i.test(url)) return;
+    const now = Date.now();
+    if (this.lastCrossViewSync.url === url && now - this.lastCrossViewSync.at < 1500) return;
+    this.lastCrossViewSync = { url, at: now };
+    this.settings.noteBrowserUrl = url;
+    void this.saveSettings();
+    if (source === "embed") {
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const view = leaf.view as unknown as { getViewType?: () => string; currentUrl?: string; navigate?: (url: string, addToHistory: boolean) => Promise<void> | void };
+        if (view?.getViewType?.() !== VIEW_TYPE || typeof view.navigate !== "function") return;
+        if (view.currentUrl === url) return;
+        void view.navigate(url, false);
+      });
+      return;
+    }
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const file = (leaf.view as { file?: unknown }).file;
+      if (!(file instanceof TFile) || file.path !== WEBVIEW_NOTE_PATH) return;
+      const container = leaf.view.containerEl;
+      if (!container?.isConnected) return;
+      const embeds = container.querySelectorAll<HTMLElement>(".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front");
+      for (const embed of Array.from(embeds)) {
+        const current = embed.dataset.url;
+        if (current && equivalentEmbedUrl(current, url)) continue;
+        void this.openUrlInEmbed(embed, url, false);
+      }
+    });
   }
 
   private storageOriginOf(url: string): string {
