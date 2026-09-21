@@ -13715,7 +13715,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
       embed.dataset.mwvActiveTabId = tab.id;
-      const url = this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl;
+      // A markdown re-render rebuilds this embed from the note markup. If a
+      // sibling embed in the same leaf still hosts a live surface, adopt its
+      // URL — otherwise the rebuild navigates to a stale baked/noteBrowserUrl
+      // and the page visibly bounces between addresses on every re-render.
+      const liveSibling = Array.from(root.querySelectorAll<HTMLElement>(".mwv-embed[data-url]")).find(
+        (candidate) => candidate !== embed && candidate.querySelector(".mwv-live-frame")
+      );
+      const url = (liveSibling?.dataset.url || this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl);
       embed.dataset.url = url;
       void this.renderEmbed(embed, url)
         .catch((error) => {
@@ -13821,11 +13828,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Note and Web fronts share the header tab strip replacing the URL title).
     leafContent.addClass("mwv-note-browser-view");
     const leafEl = leafContent.closest<HTMLElement>(".workspace-leaf") ?? leafContent;
+    // The browser tab strip in the view header owns tab presentation now.
+    // Writing the live URL into Obsidian's own leaf tab title duplicated it
+    // and clashed with the tab strip — restore the note name instead.
     const tabTitle = (leaf as WorkspaceLeaf & { tabHeaderInnerTitleEl?: HTMLElement }).tabHeaderInnerTitleEl;
-    const titles = [
-      ...Array.from(leafEl.querySelectorAll<HTMLElement>(".view-header-title")),
-      ...(tabTitle ? [tabTitle] : [])
-    ];
+    if (tabTitle && tabTitle.hasClass("mwv-note-browser-native-title")) {
+      tabTitle.removeClass("mwv-note-browser-native-title");
+      const file = (leaf.view as { file?: unknown }).file;
+      if (file instanceof TFile) tabTitle.setText(file.basename);
+    }
+    const titles = Array.from(leafEl.querySelectorAll<HTMLElement>(".view-header-title"));
     for (const title of titles) {
       title.setText(url);
       title.setAttribute("title", url);
@@ -15638,6 +15650,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         "aria-label": this.tr("address")
       }
     });
+    // Obsidian's createEl ignores the `value` option on inputs — assign the
+    // property directly so a rebuilt chrome shows the current address.
+    addressInput.value = url;
     const go = address.createEl("button", {
       cls: "mwv-browser-go",
       attr: { type: "submit", title: this.tr("go"), "aria-label": this.tr("go") }
@@ -19213,6 +19228,23 @@ export default class MobileWebviewerPlugin extends Plugin {
       for (const embed of Array.from(embeds)) {
         const current = embed.dataset.url;
         if (current && equivalentEmbedUrl(current, url)) continue;
+        // Redirects change the URL (www ↔ regional host). If the live frame
+        // is already showing the target, re-navigating would reload the page
+        // and produce an endless bounce.
+        const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+        let liveUrl = "";
+        try {
+          const electronFrame = frame as ElectronWebviewElement | null;
+          if (electronFrame && typeof electronFrame.getURL === "function") liveUrl = electronFrame.getURL() || "";
+          else if (frame && frame.src) liveUrl = frame.src;
+        } catch {
+          liveUrl = "";
+        }
+        if (liveUrl && equivalentEmbedUrl(liveUrl, url)) {
+          embed.dataset.url = url;
+          embed.setAttribute("data-url", url);
+          continue;
+        }
         void this.openUrlInEmbed(embed, url, false);
       }
     });
