@@ -10521,6 +10521,15 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     // Keep the note browser enhanced after Markdown renders and Live Preview updates.
     this.app.workspace.onLayoutReady(() => {
+      // The standalone tabbed view is retired — detach any leaf restored
+      // from a saved workspace layout so only NoteWeb/RealWeb remain.
+      for (const legacyLeaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        try {
+          legacyLeaf.detach();
+        } catch (error) {
+          console.warn("[mobile-webviewer] failed to detach legacy browser view", error);
+        }
+      }
       this.processWebviewerEmbeds(this.app.workspace.containerEl);
       this.cleanupStaleNoteDrawButtonResidue(this.app.workspace.containerEl);
       this.app.workspace.containerEl
@@ -13373,16 +13382,19 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async activateBrowserView(url?: string, newTab = false, tabId?: string): Promise<void> {
-    let leaf = newTab ? undefined : this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = this.app.workspace.getLeaf(newTab ? "tab" : false);
-      await leaf.setViewState({ type: VIEW_TYPE, active: true });
-    }
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    const view = leaf.view;
-    if (url && view instanceof MobileWebviewerView) {
-      if (tabId) view.activeBrowserTabId = tabId;
-      view.openUrl(url);
+    // The standalone tabbed "note browser" view is retired: there is one
+    // browser with two views (NoteWeb reader + RealWeb). Everything that
+    // used to open that view now opens NoteWeb directly in RealWeb mode.
+    void tabId;
+    const target = url ?? this.settings.noteBrowserUrl ?? this.settings.homeUrl;
+    await this.openNoteBrowser(target, newTab);
+    const leaf = this.app.workspace.getMostRecentLeaf();
+    const container = leaf?.view?.containerEl;
+    if (!container) return;
+    const embed = Array.from(container.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"))
+      .find((candidate) => this.isVisibleNoteDrawSurface(candidate)) ?? container.querySelector<HTMLElement>(".mwv-embed[data-url]");
+    if (embed && embed.dataset.mwvBrowserMode !== "web") {
+      this.setNoteBrowserEmbedMode(embed, "web");
     }
   }
 
@@ -13960,6 +13972,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.browserFrontendMode = mode === "web" ? "web" : "note";
     void this.saveSettings();
     embed.toggleClass("is-web-front", mode === "web");
+    // On mobile the view header just mirrors the current URL and reads like a
+    // second address bar above the RealWeb chrome — hide it in web mode.
+    const modeLeafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
+    modeLeafContent?.toggleClass("mwv-realweb-immersive", mode === "web" && Platform.isMobile);
     embed.toggleClass("is-split-front", mode === "split");
     this.applyBrowserRuntimeClasses(embed);
     this.applyNoteBrowserWebIsolation(embed, mode === "web" && !this.isNoteBrowserRawEditingMode(embed));
@@ -14985,7 +15001,39 @@ export default class MobileWebviewerPlugin extends Plugin {
       more.dataset.mwvUrl = url;
       more.dataset.mwvTitle = title;
     }
+    const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+    if (chrome) this.renderEmbedTabstrip(embed, chrome);
     this.syncNoteBrowserNativeIdentity(embed, url);
+  }
+
+  /** Tab strip for RealWeb — the shared browser tabs rendered inside the embed chrome. */
+  renderEmbedTabstrip(embed: HTMLElement, chrome: HTMLElement): void {
+    if (!chrome?.isConnected) return;
+    chrome.querySelector(":scope > .mwv-embed-tabstrip")?.remove();
+    if (this.settings.browserTabs.length === 0) return;
+    const strip = chrome.createDiv({ cls: "mwv-embed-tabstrip" });
+    const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
+    for (const tab of this.settings.browserTabs.slice(0, 12)) {
+      const item = strip.createDiv({ cls: "mwv-embed-tab" + (tab.id === activeId ? " is-active" : "") });
+      item.createSpan({ cls: "mwv-embed-tab-title", text: tab.title || hostName(tab.url || "") });
+      const close = item.createSpan({ cls: "mwv-embed-tab-close", attr: { "aria-label": this.tr("close") } });
+      setIcon(close, "x");
+      item.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const hitClose = (event.target as HTMLElement | null)?.closest(".mwv-embed-tab-close");
+        const rerender = () => this.renderEmbedTabstrip(embed, chrome);
+        if (hitClose) void this.closeEmbedBrowserTab(embed, tab.id).then(rerender);
+        else void this.switchEmbedBrowserTab(embed, tab.id).then(rerender);
+      });
+    }
+    const plus = strip.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
+    setIcon(plus, "plus");
+    plus.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.newEmbedBrowserTab(embed).then(() => this.renderEmbedTabstrip(embed, chrome));
+    });
   }
 
   updateEmbedStatus(embed: HTMLElement, url: string, title = ""): void {
