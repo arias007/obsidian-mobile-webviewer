@@ -3942,6 +3942,21 @@
   cursor: var(--cursor, pointer);
 }
 
+.mwv-notedraw-anchor .mwv-browser-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-4-4, 32px);
+  height: var(--size-4-4, 32px);
+  margin-left: 2px;
+  padding: 0;
+  pointer-events: auto;
+  cursor: var(--cursor, pointer);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
 .mwv-embed.notedraw-shell > .notedraw-toolbar {
   z-index: 1300;
 }

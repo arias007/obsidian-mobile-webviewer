@@ -451,6 +451,11 @@ type UiTextKey =
   | "liveBrowserFirst"
   | "liveBrowserFirstDesc"
   | "frontendMode"
+  | "defaultOpenMode"
+  | "defaultOpenModeDesc"
+  | "openDefaultObsidian"
+  | "openDefaultRealweb"
+  | "openDefaultNoteweb"
   | "frontendModeDesc"
   | "editableNote"
   | "fullWebPage"
@@ -794,6 +799,11 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   frontendModeDesc: "Default foreground: editable note or full web page.",
   editableNote: "Editable note",
   fullWebPage: "Full web page",
+  defaultOpenMode: "Default open mode",
+  defaultOpenModeDesc: "How links clicked in Obsidian notes open by default.",
+  openDefaultObsidian: "Obsidian (native)",
+  openDefaultRealweb: "RealWeb",
+  openDefaultNoteweb: "NoteWeb",
   autoSaveWebNotes: "Auto-save web notes",
   autoSaveWebNotesDesc: "Auto-save edited reader text and doodles into plugin data only. Use Save MD to add a Markdown file to the vault.",
   webNoteFolder: "Web note folder",
@@ -1133,6 +1143,11 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   frontendModeDesc: "默认前景：可编辑笔记或完整网页。",
   editableNote: "可编辑笔记",
   fullWebPage: "完整网页",
+  defaultOpenMode: "默认打开方式",
+  defaultOpenModeDesc: "笔记里的网址和 obsidian:// 链接默认用哪种方式打开。",
+  openDefaultObsidian: "Obsidian 原生打开",
+  openDefaultRealweb: "RealWeb 打开",
+  openDefaultNoteweb: "NoteWeb 打开",
   autoSaveWebNotes: "自动保存网页笔记",
   autoSaveWebNotesDesc: "自动把阅读层文字和涂鸦保存到插件数据；用 存 MD 再加入 Vault。",
   webNoteFolder: "网页笔记文件夹",
@@ -6481,6 +6496,7 @@ interface MobileWebviewerSettings {
   noteBrowserForward: string[];
   liveBrowserFirst: boolean;
   browserFrontendMode: "note" | "web" | "split";
+  defaultOpenMode: "obsidian" | "realweb" | "noteweb";
   autoSaveWebNotes: boolean;
   webNoteFolder: string;
   userScriptsEnabled: boolean;
@@ -6531,6 +6547,7 @@ const PORTABLE_SETTING_KEYS = [
   "noteBrowserUrl",
   "liveBrowserFirst",
   "browserFrontendMode",
+  "defaultOpenMode",
   "autoSaveWebNotes",
   "webNoteFolder",
   "userScriptsEnabled",
@@ -6827,6 +6844,7 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   noteBrowserForward: [],
   liveBrowserFirst: true,
   browserFrontendMode: "note",
+  defaultOpenMode: "realweb",
   autoSaveWebNotes: true,
   webNoteFolder: DEFAULT_WEB_NOTE_FOLDER,
   userScriptsEnabled: true,
@@ -9643,7 +9661,15 @@ class MobileWebviewerView extends ItemView {
     wrap?.toggleClass("is-web-front", enabled && this.frontendMode === "web");
     wrap?.toggleClass("is-split-front", enabled && this.frontendMode === "split");
     this.homeEl.toggleClass("mwv-reader-strip", enabled);
-    if (root) this.plugin.applyBrowserRuntimeClasses(root);
+    if (root) {
+      // A raw web page is rendered by the site itself. Mark the root so
+      // NoteDraw and host presentation passes leave it untouched, and let
+      // the runtime class pass read a consistent marker.
+      const rawRoot = enabled && this.frontendMode === "web";
+      root.toggleClass("is-raw-web", rawRoot);
+      root.toggleAttribute("data-notedraw-ignore", rawRoot);
+      this.plugin.applyBrowserRuntimeClasses(root);
+    }
     this.homeEl.toggleClass("is-visible", !enabled || this.frontendMode !== "web");
     if (enabled) {
       this.surfaceEl.removeClass("is-hidden");
@@ -10943,7 +10969,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!this.isNoteWebOwnedElement(previewEl) || !this.isNoteWebOwnedElement(button)) return null;
     if (!this.isMobileWebviewerSurface(previewEl) || !this.isNoteBrowserWebMode(previewEl)) return null;
     const anchor = this.ensureNoteDrawStableAnchor(previewEl);
-    if (button.parentElement !== anchor) anchor.appendChild(button);
+    if (button.parentElement !== anchor) {
+      // Native wand stays ahead of the relocated More button.
+      const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
+      if (moreButton) anchor.insertBefore(button, moreButton);
+      else anchor.appendChild(button);
+    }
     button.addClass("mwv-notedraw-top-button");
     button.removeClass("mwv-notedraw-source-button");
     button.removeClass("mwv-notedraw-webviewer-header-hidden");
@@ -10961,11 +10992,18 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
     if (!surface.isConnected || !this.isNoteDrawSurfaceElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
+    // The wand is NoteDraw's entry point — without the NoteDraw plugin there
+    // is nothing to open, so never render (or keep) the button.
+    if (!this.getNoteDrawPlugin()) {
+      this.removeNoteWebWandProxy(surface);
+      return null;
+    }
     const anchor = this.ensureNoteDrawStableAnchor(surface);
     // A retained native NoteDraw button already occupies the anchor — never
     // resurrect a proxy wand next to it (other surfaces' sync passes would
-    // otherwise re-create the proxy and duplicate the wand).
-    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(":scope > button:not([data-mwv-noteweb-wand='true'])");
+    // otherwise re-create the proxy and duplicate the wand). The relocated
+    // More button shares this anchor but is not a wand candidate.
+    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(":scope > button:not([data-mwv-noteweb-wand='true']):not([data-mwv-browser-more='true'])");
     let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
     if (button && nativeInAnchor) {
       button.remove();
@@ -10983,6 +11021,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
       }) as NoteDrawButtonElement;
       button._mwvNoteWebWandProxy = true;
+      // Keep the wand first: the relocated More button sits right beside it.
+      const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
+      if (moreButton) anchor.insertBefore(button, moreButton);
     }
     // The proxy is anchored in Obsidian's view-actions host, outside the
     // embed subtree. Retain the exact owner surface so click handling cannot
@@ -11081,9 +11122,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.setNoteWebWandActive(embed, true);
     try { this.getNoteDrawPlugin()?.syncWebviewControllers?.(); } catch (error) { console.warn("[mobile-webviewer] raw NoteDraw sync skipped", error); }
     let controllerAttached = false;
-    for (const delay of [0, 80, 220, 520, 1000]) {
+    for (const delay of [0, 150, 400, 800, 1400, 2200, 3200]) {
       window.setTimeout(() => {
         if (controllerAttached || !embed.isConnected || embed.dataset.mwvNotewebElementEdit !== "true" || token !== this.noteWebRawEditingSeq) return;
+        // Keep isolation markers cleared on every attempt: other sync passes
+        // may re-add them and would CSS-hide the toolbar the moment it mounts.
+        this.applyNoteBrowserWebIsolation(embed, false);
         const controller = this.findWebviewNoteDrawController(embed, true);
         if (!controller) {
           try { this.getNoteDrawPlugin()?.syncWebviewControllers?.(); } catch (error) { /* noop */ }
@@ -12655,9 +12699,16 @@ export default class MobileWebviewerPlugin extends Plugin {
   isRawNoteWebLeaf(leaf?: WorkspaceLeaf | null): boolean {
     if (!this.isNoteBrowserLeaf(leaf)) return false;
     const container = leaf?.view?.containerEl;
-    return Boolean(container?.querySelector?.(
+    const webEmbed = container?.querySelector?.(
       ".mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front"
-    ));
+    );
+    if (!webEmbed) return false;
+    // The wand explicitly opened the element editor on this page — keep the
+    // leaf visible to NoteDraw's scan so the full webview controller (and its
+    // complete toolbar) can mount. Hiding it here used to leave RealWeb with
+    // only the 2-button fallback toolbar.
+    if (webEmbed instanceof HTMLElement && webEmbed.dataset.mwvNotewebElementEdit === "true") return false;
+    return true;
   }
 
   runNoteDrawWithoutRawNoteWebLeaves<T>(task: () => T): T {
@@ -13108,6 +13159,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     button.addClass("mwv-notedraw-web-wand");
     button.setAttribute("aria-label", "Web notedraw");
     button.setAttribute("title", "Web notedraw");
+    // Inherit NoteDraw's own icon so the wand looks native. Try to clone the
+    // SVG from any real NoteDraw button already in the document; fall back to
+    // the globe+wand glyph when none exists (e.g. NoteDraw just loaded).
+    const sourceIcon = document.querySelector<SVGElement>(
+      ".notedraw-header-button:not(.mwv-notedraw-web-wand) > svg, .notedraw-webview-button:not(.mwv-notedraw-web-wand) > svg, .notedraw-launcher > svg"
+    );
+    if (sourceIcon) {
+      const clone = sourceIcon.cloneNode(true) as SVGElement;
+      button.empty();
+      button.appendChild(clone);
+      button.dataset.mwvWebWandDecorated = "inherited";
+      return;
+    }
     if (button.dataset.mwvWebWandDecorated === "true") return;
     button.dataset.mwvWebWandDecorated = "true";
     button.empty();
@@ -14153,6 +14217,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     return this.getEmbedStack(embed, direction === "back" ? "mwvBack" : "mwvForward").length > 0;
   }
 
+  // Routes a clicked note link to the configured default view. "noteweb"
+  // keeps the classic reader surface; "realweb" opens the same one-browser
+  // flow and then flips the embed into the immersive web presentation.
+  openExternalUrlWithDefaultMode(url: string, newTab = false): Promise<void> {
+    if (this.settings.defaultOpenMode === "noteweb") {
+      return this.openNoteBrowser(url, newTab);
+    }
+    return this.activateBrowserView(url, newTab);
+  }
+
   handleExternalLinkClick(event: MouseEvent): void {
     if (event.defaultPrevented) return;
     if (event.type === "click" && event.button !== 0) return;
@@ -14173,10 +14247,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!link || !leaf || view?.getViewType?.() !== "markdown" || !(file instanceof TFile) || file.extension !== "md" || file.path === WEBVIEW_NOTE_PATH) return;
       const currentVault = this.app.vault.getName().trim();
       if (link.vault && currentVault && link.vault.localeCompare(currentVault, undefined, { sensitivity: "accent" }) !== 0) return;
+      if (this.settings.defaultOpenMode === "obsidian") return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      runAsync(() => this.openNoteBrowser(rawHref, true));
+      runAsync(() => this.openExternalUrlWithDefaultMode(rawHref, true));
       return;
     }
 
@@ -14195,11 +14270,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     const view = leaf?.view as { file?: unknown; getViewType?: () => string } | undefined;
     const file = view?.file;
     if (!leaf || view?.getViewType?.() !== "markdown" || !(file instanceof TFile) || file.extension !== "md" || file.path === WEBVIEW_NOTE_PATH) return;
+    if (this.settings.defaultOpenMode === "obsidian") return;
 
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    runAsync(() => this.openNoteBrowser(url, true));
+    runAsync(() => this.openExternalUrlWithDefaultMode(url, true));
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -15571,26 +15647,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       });
       return button;
     };
-    const makeModeButton = (icon: string, label: string, mode: "note" | "web" | "split") => {
-      const button = actions.createEl("button", {
-        cls: "mwv-browser-action mwv-browser-mode",
-        attr: { type: "button", title: label, "aria-label": label }
-      });
-      button.dataset.mwvEmbedMode = mode;
-      setIcon(button, icon);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setMode(mode);
-      });
-      return button;
-    };
 
     makeNavButton("arrow-left", this.tr("back"), () => void this.navigateEmbedBack(embed), this.getEmbedStack(embed, "mwvBack").length === 0);
     makeNavButton("arrow-right", this.tr("forward"), () => void this.navigateEmbedForward(embed), this.getEmbedStack(embed, "mwvForward").length === 0);
-    makeNavButton("rotate-cw", this.tr("reload"), () => void this.refreshEmbed(embed));
-    makeModeButton("file-text", this.tr("note"), "note");
-    makeModeButton("globe-2", this.tr("web"), "web");
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
@@ -15601,42 +15660,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.stopPropagation();
       void this.exportEmbedWebNote(embed);
     });
-    const more = actions.createEl("button", {
-      cls: "mwv-browser-action mwv-browser-more",
-      attr: {
-        type: "button",
-        title: this.tr("more"),
-        "aria-label": this.tr("more")
-      }
-    });
-    more.dataset.mwvUrl = url;
-    more.dataset.mwvTitle = title;
-    setIcon(more, "more-horizontal");
-    more.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const liveUrl = more.dataset.mwvUrl || embed.dataset.url || url;
-      const liveTitle =
-        more.dataset.mwvTitle ||
-        this.getEmbedSurfaceTitle(embed) ||
-        title ||
-        hostName(liveUrl);
-      this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
-    });
+    // The More button lives beside the NoteDraw wand in the leaf header
+    // (view-actions) instead of the chrome row, with its own icon.
+    this.ensureNoteBrowserMoreButton(embed, url, title);
 
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
       attr: { title: url }
-    });
-    const home = address.createEl("button", {
-      cls: "mwv-browser-home",
-      attr: { type: "button", title: this.tr("home"), "aria-label": this.tr("home") }
-    });
-    setIcon(home, "home");
-    home.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.openUrlInEmbed(embed, this.settings.homeUrl);
     });
     const addressInput = address.createEl("input", {
       cls: "mwv-browser-url",
@@ -15678,6 +15708,54 @@ export default class MobileWebviewerPlugin extends Plugin {
     setMode(initialMode || "note");
     this.watchEmbedChrome(embed);
     this.syncNoteBrowserNativeIdentity(embed, url);
+  }
+
+  // The More entry used to be a chrome-row action; it now lives in the leaf
+  // header next to the NoteDraw wand (view-actions anchor) with its own icon.
+  // Chrome rebuilds upsert the same button instead of stacking duplicates.
+  ensureNoteBrowserMoreButton(embed: HTMLElement, url: string, title: string): HTMLButtonElement | null {
+    if (!embed.isConnected) return null;
+    const anchor = this.ensureNoteDrawStableAnchor(embed);
+    if (!anchor?.isConnected) return null;
+    type MoreButton = HTMLButtonElement & { _mwvMoreEmbedSurface?: HTMLElement };
+    let button = anchor.querySelector<HTMLButtonElement>(":scope > button[data-mwv-browser-more='true']");
+    if (!button) {
+      button = anchor.createEl("button", {
+        cls: "mwv-browser-more clickable-icon",
+        attr: {
+          type: "button",
+          "data-mwv-browser-more": "true",
+          "aria-label": this.tr("more"),
+          title: this.tr("more")
+        }
+      });
+      setIcon(button, "wrench");
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const moreButton = event.currentTarget as MoreButton | null;
+        if (!moreButton?.isConnected) return;
+        const owner = moreButton._mwvMoreEmbedSurface;
+        const current = owner?.isConnected
+          ? owner
+          : this.findWorkspaceLeafForElement(moreButton)?.view?.containerEl?.querySelector<HTMLElement>(".mwv-embed[data-url]");
+        if (!current) return;
+        const liveUrl = moreButton.dataset.mwvUrl || current.dataset.url || this.settings.homeUrl;
+        const liveTitle = moreButton.dataset.mwvTitle || this.getEmbedSurfaceTitle(current) || hostName(liveUrl);
+        let moreChrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+        if (!moreChrome) {
+          this.renderBrowserChrome(current, liveUrl, liveTitle);
+          moreChrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+        }
+        if (moreChrome) this.toggleMorePanel(current, moreChrome, liveUrl, liveTitle);
+      });
+    }
+    (button as MoreButton)._mwvMoreEmbedSurface = embed;
+    button.dataset.mwvUrl = url;
+    button.dataset.mwvTitle = title;
+    // Keep the button right after the wand inside the stable anchor.
+    if (button.parentElement !== anchor || anchor.lastElementChild !== button) anchor.appendChild(button);
+    return button;
   }
 
   watchEmbedChrome(embed: HTMLElement): void {
@@ -20030,6 +20108,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.browserFrontendMode = ["note", "web"].includes(this.settings.browserFrontendMode)
       ? this.settings.browserFrontendMode
       : "note";
+    this.settings.defaultOpenMode = ["obsidian", "realweb", "noteweb"].includes(this.settings.defaultOpenMode)
+      ? this.settings.defaultOpenMode
+      : "realweb";
     this.settings.autoSaveWebNotes = typeof this.settings.autoSaveWebNotes === "boolean" ? this.settings.autoSaveWebNotes : true;
     this.settings.webNoteFolder = typeof this.settings.webNoteFolder === "string" && this.settings.webNoteFolder.trim()
       ? normalizePath(this.settings.webNoteFolder)
@@ -20402,6 +20483,21 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.browserFrontendMode)
           .onChange(async (value) => {
             this.plugin.settings.browserFrontendMode = value as "note" | "web" | "split";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.tr("defaultOpenMode"))
+      .setDesc(this.plugin.tr("defaultOpenModeDesc"))
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("obsidian", this.plugin.tr("openDefaultObsidian"))
+          .addOption("realweb", this.plugin.tr("openDefaultRealweb"))
+          .addOption("noteweb", this.plugin.tr("openDefaultNoteweb"))
+          .setValue(this.plugin.settings.defaultOpenMode)
+          .onChange(async (value) => {
+            this.plugin.settings.defaultOpenMode = value as "obsidian" | "realweb" | "noteweb";
             await this.plugin.saveSettings();
           })
       );
