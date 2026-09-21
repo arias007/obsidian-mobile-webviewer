@@ -10697,8 +10697,15 @@ export default class MobileWebviewerPlugin extends Plugin {
         const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
         leaf?.addClass("mwv-notedraw-surface-leaf");
         const controller = this.findWebviewNoteDrawController(surface, true);
-        if (this.isNoteBrowserRawEditingMode(surface) && controller) {
+        const editing = this.isNoteBrowserRawEditingMode(surface);
+        if (editing && controller) {
           this.ensureNoteWebElementSelectButton(controller, surface);
+        }
+        // Editing sessions must never end up without a toolbar: if the
+        // NoteDraw controller died between syncs, reveal the fallback again.
+        if (editing) {
+          const controllerAlive = Boolean(controller && controller.toolbar?.isConnected);
+          this.syncNoteWebRawFallbackToolbar(surface, controllerAlive);
         }
         const retainedButton = controller ? this.retainNoteDrawWebviewButton(controller, surface) : null;
         if (retainedButton) {
@@ -11083,7 +11090,11 @@ export default class MobileWebviewerPlugin extends Plugin {
           return;
         }
         controllerAttached = true;
-        fallbackToolbar.remove();
+        // Keep the fallback toolbar mounted but hidden — if the NoteDraw
+        // controller is destroyed later by one of its own sync passes, the
+        // next surface sync reveals the fallback again instead of leaving the
+        // user with a toolbar that "flashes" away.
+        fallbackToolbar.addClass("mwv-noteweb-fallback-hidden");
         this.ensureNoteWebElementSelectButton(controller, embed);
         this.activateNoteDrawWebviewController(controller, embed);
         this.ensureNoteWebElementSelectButton(controller, embed);
@@ -11091,7 +11102,34 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     const enabled = await this.setNoteWebRawElementSelector(embed, true);
     if (!enabled && embed.isConnected && embed.dataset.mwvNotewebElementEdit === "true") {
-      await this.leaveNoteWebRawElementEditing(embed);
+      // Unsupported kernels (iframe/proxy surfaces) cannot host the guest
+      // editor — leave immediately. For real webviews a single transient
+      // failure (guest still painting, navigation race) must NOT tear the
+      // editor down: that reads as a toolbar "flash crash". Retry instead.
+      const frame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
+      if (!this.isElectronWebview(frame)) {
+        await this.leaveNoteWebRawElementEditing(embed);
+      } else {
+        let injected = false;
+        for (const delay of [500, 1100, 1800]) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+          if (!embed.isConnected || embed.dataset.mwvNotewebElementEdit !== "true" || token !== this.noteWebRawEditingSeq) {
+            injected = true;
+            break;
+          }
+          try {
+            if (await this.setNoteWebRawElementSelector(embed, true)) {
+              injected = true;
+              break;
+            }
+          } catch {
+            // keep retrying
+          }
+        }
+        if (!injected && embed.isConnected && embed.dataset.mwvNotewebElementEdit === "true" && token === this.noteWebRawEditingSeq) {
+          await this.leaveNoteWebRawElementEditing(embed);
+        }
+      }
     }
   }
 
@@ -11207,6 +11245,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       : controller.toolMode === "edit-md";
     button.toggleClass("is-active", active);
     button.setAttribute("aria-pressed", String(active));
+  }
+
+  /** Reveals the fallback editor toolbar whenever the NoteDraw controller is gone. */
+  syncNoteWebRawFallbackToolbar(embed: HTMLElement, controllerAlive: boolean): void {
+    if (!embed.isConnected || !this.isNoteBrowserRawEditingMode(embed)) return;
+    const host = embed.closest<HTMLElement>(".workspace-leaf-content") ?? embed;
+    const fallback = host.querySelector<NoteWebElementToolbar>(".mwv-noteweb-element-toolbar");
+    if (!fallback || fallback._mwvNoteWebElementSurface !== embed) return;
+    fallback.toggleClass("mwv-noteweb-fallback-hidden", controllerAlive);
   }
 
   ensureNoteWebRawElementToolbar(embed: HTMLElement): NoteWebElementToolbar {
@@ -14044,6 +14091,40 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     }
     this.syncNoteBrowserNativeIdentity(embed, embed.dataset.url || this.settings.homeUrl);
+    this.alignEmbedChromeToLiveUrl(embed);
+  }
+
+  /**
+   * After a Note/Web mode switch the live surface is retained, so its actual
+   * URL is the source of truth. Re-assert it so the address bar, tab title,
+   * and persisted state can never show a stale address after switching.
+   */
+  alignEmbedChromeToLiveUrl(embed: HTMLElement): void {
+    if (!embed.isConnected) return;
+    const surface = embed.querySelector<BrowserSurfaceElement>(".mwv-live-browser .mwv-live-frame, .mwv-live-frame");
+    let liveUrl = "";
+    try {
+      const electronSurface = surface as ElectronWebviewElement | null;
+      if (electronSurface && typeof electronSurface.getURL === "function") liveUrl = electronSurface.getURL() || "";
+      else if (surface && surface.src) liveUrl = surface.src;
+    } catch {
+      liveUrl = "";
+    }
+    if (!liveUrl || !/^https?:\/\//i.test(liveUrl)) return;
+    const current = embed.dataset.url || "";
+    if (!current || !equivalentEmbedUrl(current, liveUrl)) {
+      embed.dataset.url = liveUrl;
+      embed.setAttribute("data-url", liveUrl);
+    }
+    const title = this.getEmbedSurfaceTitle(embed) || embed.dataset.mwvCurrentTitle || hostName(liveUrl);
+    // Recovered/reloaded embeds can come back without their chrome at all —
+    // rebuild it instead of leaving the user without an address bar.
+    if (!embed.querySelector(":scope > .mwv-browser-chrome")) {
+      this.renderBrowserChrome(embed, liveUrl, title);
+      return;
+    }
+    this.updateEmbedChrome(embed, liveUrl, title);
+    void this.syncEmbedActiveTab(embed, liveUrl, title);
   }
 
   canNavigateEmbed(embed: HTMLElement, direction: "back" | "forward"): boolean {
@@ -16493,11 +16574,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   async updateBrowserTab(id: string, patch: Partial<Omit<BrowserTab, "id">>): Promise<void> {
     const tab = this.settings.browserTabs.find((item) => item.id === id);
     if (!tab) return;
+    // Update in place: reordering (MRU-to-front) made tabs jump to the left
+    // whenever the active tab was synced (switch/navigate). Tab positions
+    // must stay stable; only creation/close may change the order.
     Object.assign(tab, patch);
-    this.settings.browserTabs = [
-      tab,
-      ...this.settings.browserTabs.filter((item) => item.id !== id)
-    ].slice(0, MAX_BROWSER_TABS);
     await this.saveSettings();
   }
 

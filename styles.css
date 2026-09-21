@@ -4194,6 +4194,11 @@
   gap: 2px;
   padding: 0 4px;
 }
+
+/* --- RealWeb editing: fallback toolbar hidden while a live NoteDraw toolbar is up --- */
+.mwv-noteweb-fallback-hidden {
+  display: none !important;
+}
 .workspace-leaf-content.mwv-realweb-immersive .markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
 .workspace-leaf-content.mwv-realweb-immersive .markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
   grid-template-areas: "address actions" !important;
