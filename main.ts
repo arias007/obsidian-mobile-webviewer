@@ -129,7 +129,12 @@ const MWV_PROXY_BRIDGE_SOURCE = [
   "    } catch (e) { send('navigate', {url: action}); }",
   "  } else {",
   "    ev.preventDefault();",
-  "    send('post-unsupported', {url: action});",
+  "    try {",
+  "      var fd2 = new FormData(form);",
+  "      var entries = [];",
+  "      fd2.forEach(function(v, k){ if (typeof v === 'string') entries.push([k, v]); });",
+  "      send('post-form', {url: action, entries: entries});",
+  "    } catch (e) { send('post-unsupported', {url: action}); }",
   "  }",
   "}, true);",
   "window.open = function(u){ if (u) send('new-window', {url: abs(String(u))}); return null; };",
@@ -192,9 +197,100 @@ const MWV_PROXY_BRIDGE_SOURCE = [
   "  if (ev.source !== window.parent) return;",
   "  var data = ev.data;",
   "  if (!data || typeof data !== 'object') return;",
+  "  if (data.mwvFetchResult && typeof data.requestId === 'number') { resolveFetch(data.requestId, data); return; }",
   "  if (typeof data.mwvFind === 'string') findInPage(data.mwvFind, data.mwvDir >= 0 ? 1 : -1, data.requestId);",
   "  else if (data.mwvClearFind) clearFind();",
   "});",
+  "var INIT = window.__mwvInit || {};",
+  "var cook = {};",
+  "(function(){ var seed = INIT.cookies || {}; for (var k in seed) cook[k] = String(seed[k]); })();",
+  "try {",
+  "  Object.defineProperty(document, 'cookie', {",
+  "    configurable: true,",
+  "    get: function(){ var out = []; for (var n in cook) out.push(n + '=' + cook[n]); return out.join('; '); },",
+  "    set: function(v){",
+  "      if (typeof v !== 'string' || !v) return;",
+  "      var parts = v.split(';'); var kv = parts[0]; var eq = kv.indexOf('=');",
+  "      if (eq <= 0) return;",
+  "      var name = kv.slice(0, eq).trim(); var val = kv.slice(eq + 1).trim();",
+  "      if (!name) return;",
+  "      if (val === '' || /expires=Thu, 01 Jan 1970/i.test(v) || /max-age=0/i.test(v)) delete cook[name];",
+  "      else cook[name] = val;",
+  "      send('cookie-set', {raw: v});",
+  "    }",
+  "  });",
+  "} catch (e) {}",
+  "function makeStore(kind, seed){",
+  "  var d = {}; for (var k in (seed || {})) d[k] = String(seed[k]);",
+  "  return {",
+  "    getItem: function(k){ return Object.prototype.hasOwnProperty.call(d, String(k)) ? d[String(k)] : null; },",
+  "    setItem: function(k, v){ d[String(k)] = String(v); send('storage-set', {kind: kind, key: String(k), value: String(v)}); },",
+  "    removeItem: function(k){ delete d[String(k)]; send('storage-set', {kind: kind, key: String(k), value: null}); },",
+  "    clear: function(){ d = {}; send('storage-set', {kind: kind, key: '__mwv_clear__', value: null}); },",
+  "    key: function(i){ var ks = Object.keys(d); return i >= 0 && i < ks.length ? ks[i] : null; },",
+  "    get length(){ return Object.keys(d).length; }",
+  "  };",
+  "}",
+  "try { Object.defineProperty(window, 'localStorage', { configurable: true, get: function(){ if (!window.__mwvLocal) window.__mwvLocal = makeStore('local', INIT.storage || {}); return window.__mwvLocal; } }); } catch (e) {}",
+  "try { Object.defineProperty(window, 'sessionStorage', { configurable: true, get: function(){ if (!window.__mwvSession) window.__mwvSession = makeStore('session', {}); return window.__mwvSession; } }); } catch (e) {}",
+  "var fseq = 0; var fpending = {};",
+  "function resolveFetch(id, data){ var p = fpending[id]; if (!p) return; delete fpending[id]; p(data); }",
+  "function hostRequest(opts){ return new Promise(function(res){ var id = ++fseq; fpending[id] = res; send('fetch', {requestId: id, url: opts.url, method: opts.method || 'GET', headers: opts.headers || {}, body: typeof opts.body === 'string' ? opts.body : ''}); }); }",
+  "function headersToObject(h){",
+  "  var out = {}; if (!h) return out;",
+  "  if (typeof h.forEach === 'function') { h.forEach(function(v, k){ out[k] = v; }); return out; }",
+  "  if (Array.isArray(h)) { h.forEach(function(kv){ out[kv[0]] = kv[1]; }); return out; }",
+  "  for (var k in h) out[k] = h[k]; return out;",
+  "}",
+  "function bodyToString(b){",
+  "  if (b == null) return '';",
+  "  if (typeof b === 'string') return b;",
+  "  try { if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) return b.toString(); } catch (e) {}",
+  "  try { if (typeof FormData !== 'undefined' && b instanceof FormData) { var qs = new URLSearchParams(); b.forEach(function(v, k){ if (typeof v === 'string') qs.append(k, v); }); return qs.toString(); } } catch (e) {}",
+  "  try { return JSON.stringify(b); } catch (e) { return ''; }",
+  "}",
+  "if (typeof window.fetch === 'function') {",
+  "  window.fetch = function(input, init){",
+  "    try {",
+  "      var url = typeof input === 'string' ? input : (input && input.url) || '';",
+  "      var reqHeaders = headersToObject((init && init.headers) || (input && input.headers));",
+  "      var method = (init && init.method) || (input && input.method) || 'GET';",
+  "      var body = bodyToString(init && init.body);",
+  "      if (body && !reqHeaders['content-type'] && !reqHeaders['Content-Type']) reqHeaders['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';",
+  "      return hostRequest({url: abs(url), method: method, headers: reqHeaders, body: body}).then(function(d){",
+  "        var bodyText = d.body || '';",
+  "        try { return new Response(bodyText, { status: d.status || 200, statusText: d.statusText || '', headers: d.headers || {} }); }",
+  "        catch (e) { return { ok: (d.status || 200) >= 200 && (d.status || 200) < 300, status: d.status || 200, statusText: d.statusText || '', url: url, headers: { get: function(k){ return (d.headers || {})[String(k).toLowerCase()] || null; }, forEach: function(cb){ var hh = d.headers || {}; for (var k in hh) cb(hh[k], k); } }, text: function(){ return Promise.resolve(bodyText); }, json: function(){ try { return Promise.resolve(JSON.parse(bodyText)); } catch (err) { return Promise.reject(err); } } }; }",
+  "      });",
+  "    } catch (e) { return Promise.reject(e); }",
+  "  };",
+  "}",
+  "function MwvXhr(){ this.readyState = 0; this.status = 0; this.statusText = ''; this.response = ''; this.responseText = ''; this.responseType = ''; this.withCredentials = false; this._headers = {}; this._respHeaders = {}; this._listeners = {}; }",
+  "MwvXhr.prototype.open = function(m, u){ this._method = (m || 'GET').toUpperCase(); this._url = abs(String(u || '')); this.readyState = 1; };",
+  "MwvXhr.prototype.setRequestHeader = function(k, v){ this._headers[String(k).toLowerCase()] = String(v); };",
+  "MwvXhr.prototype.getAllResponseHeaders = function(){ var out = ''; for (var k in this._respHeaders) out += k + ': ' + this._respHeaders[k] + '\\r\\n'; return out; };",
+  "MwvXhr.prototype.getResponseHeader = function(k){ return this._respHeaders[String(k).toLowerCase()] || null; };",
+  "MwvXhr.prototype.abort = function(){};",
+  "MwvXhr.prototype.addEventListener = function(t, fn){ (this._listeners[t] = this._listeners[t] || []).push(fn); };",
+  "MwvXhr.prototype.removeEventListener = function(t, fn){ var a = this._listeners[t] || []; var i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); };",
+  "MwvXhr.prototype._fire = function(t){ var ev = { target: this, currentTarget: this, type: t }; var a = (this._listeners[t] || []).slice(0); for (var i = 0; i < a.length; i++) { try { a[i](ev); } catch (e) {} } };",
+  "MwvXhr.prototype.send = function(body){",
+  "  var self = this;",
+  "  self.readyState = 2;",
+  "  self._fire('readystatechange');",
+  "  hostRequest({url: self._url, method: self._method, headers: self._headers, body: bodyToString(body)}).then(function(d){",
+  "    self.status = d.status || 200; self.statusText = d.statusText || ''; self._respHeaders = d.headers || {};",
+  "    var bodyText = d.body || '';",
+  "    self.responseText = bodyText;",
+  "    self.response = self.responseType === 'json' ? (function(){ try { return JSON.parse(bodyText); } catch (e) { return null; } })() : bodyText;",
+  "    self.readyState = 4;",
+  "    self._fire('readystatechange');",
+  "    if (typeof self.onreadystatechange === 'function') { try { self.onreadystatechange({ target: self, currentTarget: self }); } catch (e) {} }",
+  "    self._fire('load');",
+  "    if (typeof self.onload === 'function') { try { self.onload({ target: self, currentTarget: self }); } catch (e) {} }",
+  "  }, function(){ self.status = 0; self.readyState = 4; self._fire('error'); if (typeof self.onerror === 'function') { try { self.onerror({ target: self }); } catch (e) {} } });",
+  "};",
+  "window.XMLHttpRequest = MwvXhr;",
   "reportTitle();",
   "})();"
 ].join("\n");
@@ -662,7 +758,15 @@ type UiTextKey =
   | "pageLoadLimited"
   | "systemBrowser"
   | "proxyModeActive"
-  | "postFormUnsupported";
+  | "postFormUnsupported"
+  | "drawOnPage"
+  | "drawPen"
+  | "drawEraser"
+  | "drawUndo"
+  | "drawClear"
+  | "drawDone"
+  | "clearCookies"
+  | "cookiesCleared";
 
 type UiDictionary = Partial<Record<UiTextKey, string>>;
 
@@ -1000,7 +1104,15 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   pageLoadLimited: "Page loading is limited; an editable note layer is kept.",
   systemBrowser: "Open in system browser",
   proxyModeActive: "Site refuses embedding — real page loaded via built-in proxy",
-  postFormUnsupported: "POST form submissions are not supported in proxy mode"
+  postFormUnsupported: "POST form submissions are not supported in proxy mode",
+  drawOnPage: "Draw on page",
+  drawPen: "Pen",
+  drawEraser: "Eraser",
+  drawUndo: "Undo stroke",
+  drawClear: "Clear drawing",
+  drawDone: "Done",
+  clearCookies: "Clear site cookies",
+  cookiesCleared: "Site cookies cleared"
 };
 
 const UI_TEXT_ZH_HANS: UiDictionary = {
@@ -1337,10 +1449,26 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   pageLoadLimited: "页面加载受限，已保留可编辑笔记层。",
   systemBrowser: "用系统浏览器打开",
   proxyModeActive: "网站拒绝内嵌，已用内置代理加载真实页面",
-  postFormUnsupported: "代理模式暂不支持 POST 表单提交"
+  postFormUnsupported: "代理模式暂不支持 POST 表单提交",
+  drawOnPage: "页面涂鸦",
+  drawPen: "画笔",
+  drawEraser: "橡皮",
+  drawUndo: "撤销笔画",
+  drawClear: "清空涂鸦",
+  drawDone: "完成",
+  clearCookies: "清除站点 Cookie",
+  cookiesCleared: "已清除站点 Cookie"
 };
 
 const UI_TEXT_ZH_HANT: UiDictionary = {
+  drawOnPage: "頁面塗鴉",
+  drawPen: "畫筆",
+  drawEraser: "橡皮擦",
+  drawUndo: "復原筆畫",
+  drawClear: "清空塗鴉",
+  drawDone: "完成",
+  clearCookies: "清除網站 Cookie",
+  cookiesCleared: "已清除網站 Cookie",
   coreEntryDesc: "首頁、搜尋、瀏覽器入口與啟動行為。",
   homePage: "首頁",
   searchUrl: "搜尋 URL",
@@ -1679,6 +1807,14 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
 };
 
 const UI_TEXT_UG: UiDictionary = {
+  drawOnPage: "بەت ئۈستىگە سىزىش",
+  drawPen: "قەلەم",
+  drawEraser: "ئۆچۈرگۈچ",
+  drawUndo: "سىزىقنى ئەكىس كەلتۈرۈش",
+  drawClear: "سىزىلغاننى تازىلاش",
+  drawDone: "تامام",
+  clearCookies: "تور بەت Cookie لىرىنى تازىلاش",
+  cookiesCleared: "تور بەت Cookie لىرى تازىلاندى",
   noBookmarksYet: "تېخى خەتكۈش يوق",
   noHistoryYet: "تېخى تارىخ يوق",
   noDownloadsYet: "تېخى چۈشۈرمە يوق",
@@ -2020,6 +2156,14 @@ function commonUi(values: UiDictionary): UiDictionary {
 }
 
 const UI_TEXT_AR = commonUi({
+  drawOnPage: "الرسم على الصفحة",
+  drawPen: "القلم",
+  drawEraser: "الممحاة",
+  drawUndo: "التراجع عن الخط",
+  drawClear: "مسح الرسم",
+  drawDone: "تم",
+  clearCookies: "مسح كوكيز الموقع",
+  cookiesCleared: "تم مسح كوكيز الموقع",
   uiLanguageDesc: "يتبع افتراضياً لغة Obsidian/النظام. يمكنك أيضاً تثبيت لغة ثابتة للإضافة.",
   coreEntry: "المدخل الأساسي",
   coreEntryDesc: "الصفحة الرئيسية، البحث، مداخل المتصفح وسلوك بدء التشغيل.",
@@ -2357,6 +2501,14 @@ const UI_TEXT_AR = commonUi({
 });
 
 const UI_TEXT_RU = commonUi({
+  drawOnPage: "Рисовать на странице",
+  drawPen: "Перо",
+  drawEraser: "Ластик",
+  drawUndo: "Отменить штрих",
+  drawClear: "Очистить рисунок",
+  drawDone: "Готово",
+  clearCookies: "Очистить cookie сайта",
+  cookiesCleared: "Cookie сайта очищены",
   uiLanguageDesc: "По умолчанию следует языку Obsidian/системы. Можно закрепить фиксированный язык плагина.",
   coreEntry: "Основной вход",
   coreEntryDesc: "Домашняя страница, поиск, входы в браузер и поведение при запуске.",
@@ -2694,6 +2846,14 @@ const UI_TEXT_RU = commonUi({
 });
 
 const UI_TEXT_TR = commonUi({
+  drawOnPage: "Sayfaya çiz",
+  drawPen: "Kalem",
+  drawEraser: "Silgi",
+  drawUndo: "Çizgiyi geri al",
+  drawClear: "Çizimi temizle",
+  drawDone: "Bitti",
+  clearCookies: "Site çerezlerini temizle",
+  cookiesCleared: "Site çerezleri temizlendi",
   uiLanguageDesc: "Varsayılan olarak Obsidian/sistem dilini izler. İsterseniz eklenti için sabit bir dil seçebilirsiniz.",
   coreEntry: "Temel giriş",
   coreEntryDesc: "Ana sayfa, arama, tarayıcı girişleri ve başlangıç davranışı.",
@@ -3031,6 +3191,14 @@ const UI_TEXT_TR = commonUi({
 });
 
 const UI_TEXT_JA = commonUi({
+  drawOnPage: "ページに描画",
+  drawPen: "ペン",
+  drawEraser: "消しゴム",
+  drawUndo: "ストロークを元に戻す",
+  drawClear: "描画を消去",
+  drawDone: "完了",
+  clearCookies: "サイトのCookieを消去",
+  cookiesCleared: "サイトのCookieを消去しました",
   uiLanguageDesc: "デフォルトでは Obsidian/システムの言語に従います。プラグインの言語を固定することもできます。",
   coreEntry: "基本エントリー",
   coreEntryDesc: "ホームページ、検索、ブラウザーの入口と起動時の動作。",
@@ -3368,6 +3536,14 @@ const UI_TEXT_JA = commonUi({
 });
 
 const UI_TEXT_KO = commonUi({
+  drawOnPage: "페이지에 그리기",
+  drawPen: "펜",
+  drawEraser: "지우개",
+  drawUndo: "획 되돌리기",
+  drawClear: "그림 지우기",
+  drawDone: "완료",
+  clearCookies: "사이트 쿠키 지우기",
+  cookiesCleared: "사이트 쿠키를 지웠습니다",
   uiLanguageDesc: "기본적으로 Obsidian/시스템 언어를 따릅니다. 플러그인 언어를 고정할 수도 있습니다.",
   coreEntry: "기본 진입",
   coreEntryDesc: "홈페이지, 검색, 브라우저 진입점과 시작 동작.",
@@ -3705,6 +3881,14 @@ const UI_TEXT_KO = commonUi({
 });
 
 const UI_TEXT_FR = commonUi({
+  drawOnPage: "Dessiner sur la page",
+  drawPen: "Stylo",
+  drawEraser: "Gomme",
+  drawUndo: "Annuler le trait",
+  drawClear: "Effacer le dessin",
+  drawDone: "Terminé",
+  clearCookies: "Effacer les cookies du site",
+  cookiesCleared: "Cookies du site effacés",
   uiLanguageDesc: "Suit par défaut la langue d'Obsidian/du système. Vous pouvez aussi fixer une langue pour ce plugin.",
   coreEntry: "Entrée principale",
   coreEntryDesc: "Page d'accueil, recherche, entrées du navigateur et comportement au démarrage.",
@@ -4042,6 +4226,14 @@ const UI_TEXT_FR = commonUi({
 });
 
 const UI_TEXT_DE = commonUi({
+  drawOnPage: "Auf der Seite zeichnen",
+  drawPen: "Stift",
+  drawEraser: "Radierer",
+  drawUndo: "Strich rückgängig",
+  drawClear: "Zeichnung löschen",
+  drawDone: "Fertig",
+  clearCookies: "Website-Cookies löschen",
+  cookiesCleared: "Website-Cookies gelöscht",
   uiLanguageDesc: "Folgt standardmäßig der Obsidian-/Systemsprache. Sie können auch eine feste Sprache für dieses Plugin wählen.",
   coreEntry: "Kerneinstieg",
   coreEntryDesc: "Startseite, Suche, Browser-Einstiege und Startverhalten.",
@@ -4379,6 +4571,14 @@ const UI_TEXT_DE = commonUi({
 });
 
 const UI_TEXT_ES = commonUi({
+  drawOnPage: "Dibujar en la página",
+  drawPen: "Lápiz",
+  drawEraser: "Borrador",
+  drawUndo: "Deshacer trazo",
+  drawClear: "Borrar dibujo",
+  drawDone: "Hecho",
+  clearCookies: "Borrar cookies del sitio",
+  cookiesCleared: "Cookies del sitio borradas",
   uiLanguageDesc: "Sigue por defecto el idioma de Obsidian/sistema. También puedes fijar un idioma para el plugin.",
   coreEntry: "Entrada principal",
   coreEntryDesc: "Página de inicio, búsqueda, entradas del navegador y comportamiento al arrancar.",
@@ -4786,6 +4986,14 @@ const UI_TEXT_IT = commonUi({
 });
 
 const UI_TEXT_HI = commonUi({
+  drawOnPage: "पेज पर चित्र बनाएँ",
+  drawPen: "पेंसिल",
+  drawEraser: "इरेज़र",
+  drawUndo: "स्ट्रोक पूर्ववत करें",
+  drawClear: "चित्र मिटाएँ",
+  drawDone: "पूर्ण",
+  clearCookies: "साइट कुकीज़ मिटाएँ",
+  cookiesCleared: "साइट कुकीज़ मिटा दी गईं",
   uiLanguageDesc: "डिफ़ॉल्ट रूप से Obsidian/सिस्टम भाषा का पालन करती है। आप प्लगइन के लिए निश्चित भाषा भी चुन सकते हैं।",
   coreEntry: "मुख्य प्रवेश",
   coreEntryDesc: "होम पेज, खोज, ब्राउज़र प्रवेश और स्टार्टअप व्यवहार।",
@@ -5271,6 +5479,14 @@ const UI_TEXT_UZ = commonUi({
 
 const UI_TEXT_ID = commonUi({
   ...UI_TEXT_EN,
+  drawOnPage: "Menggambar di halaman",
+  drawPen: "Pena",
+  drawEraser: "Penghapus",
+  drawUndo: "Batalkan goresan",
+  drawClear: "Hapus gambar",
+  drawDone: "Selesai",
+  clearCookies: "Hapus cookie situs",
+  cookiesCleared: "Cookie situs dihapus",
   uiLanguageDesc: "Secara baku mengikuti bahasa Obsidian/sistem. Anda juga dapat menetapkan bahasa tetap untuk plugin ini.",
   coreEntry: "Pintu utama",
   coreEntryDesc: "Halaman beranda, pencarian, pintu peramban, dan perilaku saat mulai.",
@@ -5626,6 +5842,14 @@ const UI_TEXT_MS = commonUi({
 });
 
 const UI_TEXT_TH = commonUi({
+  drawOnPage: "วาดบนหน้าเว็บ",
+  drawPen: "ปากกา",
+  drawEraser: "ยางลบ",
+  drawUndo: "ย้อนเส้น",
+  drawClear: "ล้างภาพวาด",
+  drawDone: "เสร็จ",
+  clearCookies: "ล้างคุกกี้ของเว็บ",
+  cookiesCleared: "ล้างคุกกี้ของเว็บแล้ว",
   uiLanguageDesc: "ตามภาษา Obsidian/ระบบโดยค่าเริ่มต้น คุณยังกำหนดภาษาคงที่ให้ปลั๊กอินได้",
   coreEntry: "ทางเข้าหลัก",
   coreEntryDesc: "หน้าแรก การค้นหา ทางเข้าเบราว์เซอร์ และพฤติกรรมตอนเริ่มทำงาน",
@@ -5963,6 +6187,14 @@ const UI_TEXT_TH = commonUi({
 });
 
 const UI_TEXT_VI = commonUi({
+  drawOnPage: "Vẽ trên trang",
+  drawPen: "Bút vẽ",
+  drawEraser: "Tẩy",
+  drawUndo: "Hoàn tác nét vẽ",
+  drawClear: "Xóa bản vẽ",
+  drawDone: "Xong",
+  clearCookies: "Xóa cookie của trang",
+  cookiesCleared: "Đã xóa cookie của trang",
   uiLanguageDesc: "Mặc định theo ngôn ngữ Obsidian/hệ thống. Bạn cũng có thể cố định một ngôn ngữ cho plugin.",
   coreEntry: "Lối vào chính",
   coreEntryDesc: "Trang chủ, tìm kiếm, lối vào trình duyệt và hành vi khi khởi động.",
@@ -6326,6 +6558,28 @@ const UI_DICTIONARIES: Record<string, UiDictionary> = {
   vi: UI_TEXT_VI
 };
 
+interface MwvCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  secure: boolean;
+  hostOnly: boolean;
+}
+
+interface MwvDrawPoint {
+  x: number;
+  y: number;
+}
+
+interface MwvDrawStroke {
+  color: string;
+  size: number;
+  erase?: boolean;
+  points: MwvDrawPoint[];
+}
+
 interface MobileWebviewerSettings {
   homeUrl: string;
   searchUrl: string;
@@ -6376,6 +6630,9 @@ interface MobileWebviewerSettings {
   webNotes: WebNoteEntry[];
   consoleEntries: BrowserConsoleEntry[];
   downloads: DownloadEntry[];
+  cookieJar: Record<string, MwvCookie>;
+  proxyStorage: Record<string, Record<string, string>>;
+  surfaceDrawings: Record<string, MwvDrawStroke[]>;
 }
 
 const PORTABLE_SETTING_KEYS = [
@@ -6719,7 +6976,10 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   webNotes: [],
   consoleEntries: [],
   downloads: [],
-  bookmarks: []
+  bookmarks: [],
+  cookieJar: {},
+  proxyStorage: {},
+  surfaceDrawings: {}
 };
 
 function normalizeInput(input: string, searchUrl: string): string {
@@ -8358,6 +8618,16 @@ class MobileWebviewerView extends ItemView {
   activeDoodlePath?: SVGPathElement;
   activeDoodlePointerId?: number;
   activeDoodleSvg?: SVGSVGElement;
+  drawActive = false;
+  drawTool: "pen" | "erase" = "pen";
+  drawColor = "#ff3b30";
+  drawSize = 4;
+  drawStrokes: MwvDrawStroke[] = [];
+  drawOverlayEl?: HTMLElement;
+  drawCanvasEl?: HTMLCanvasElement;
+  drawCtx?: CanvasRenderingContext2D;
+  drawSaveTimer?: number;
+  drawResizeHandler?: () => void;
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
 
   constructor(leaf: WorkspaceLeaf, plugin: MobileWebviewerPlugin) {
@@ -8391,6 +8661,16 @@ class MobileWebviewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.drawActive) {
+      this.drawActive = false;
+      if (this.drawResizeHandler) window.removeEventListener("resize", this.drawResizeHandler);
+      this.drawOverlayEl?.remove();
+      this.drawOverlayEl = undefined;
+      this.drawCanvasEl = undefined;
+      this.drawCtx = undefined;
+      this.drawButtons = undefined;
+      await this.saveDrawStrokesNow();
+    }
     this.plugin.disposeBrowserSurface(this.surfaceEl);
     await this.saveCurrentWebNoteNow();
   }
@@ -8646,6 +8926,7 @@ class MobileWebviewerView extends ItemView {
     }
 
     this.currentUrl = nextUrl;
+    if (this.drawActive) this.loadDrawStrokes();
     this.currentTitle = this.plugin.getBrowserSurfaceTitle(this.surfaceEl) || hostName(nextUrl);
     this.addressEl.value = nextUrl;
     this.titleEl.setText(this.currentTitle);
@@ -9958,6 +10239,10 @@ class MobileWebviewerView extends ItemView {
     }));
     addAction(pageActions, "share-2", this.plugin.tr("share"), () => this.plugin.sharePage(url, title));
     addAction(pageActions, "app-window", this.plugin.tr("systemBrowser"), () => this.plugin.openInSystemBrowser(url));
+    addAction(pageActions, "cookie", this.plugin.tr("clearCookies"), async () => {
+      await this.plugin.clearProxyCookies();
+      new Notice(this.plugin.tr("cookiesCleared"));
+    });
     addAction(pageActions, "activity", this.plugin.tr("browserStatus"), () => this.toggleMoreBrowserStatusPanel(body, url));
 
     addAction(viewActions, "zoom-in", this.plugin.tr("zoomIn", { value: this.plugin.settings.pageZoom }), () => this.plugin.setPageZoom(this.plugin.settings.pageZoom + 10, this.containerEl));
@@ -10022,6 +10307,7 @@ class MobileWebviewerView extends ItemView {
     });
 
     addAction(toolActions, "text-cursor-input", this.plugin.tr("autofillPage"), () => this.autofillCurrentPage());
+    addAction(toolActions, "brush", this.plugin.tr("drawOnPage"), () => this.toggleDrawOverlay());
     addAction(toolActions, "wand-sparkles", this.plugin.tr("scriptsCount", { count: this.plugin.getActiveUserScriptRules(url).length }), () => {
       this.plugin.toggleUserScriptsPanel(body, url);
     });
@@ -10110,6 +10396,229 @@ class MobileWebviewerView extends ItemView {
       this.plugin.clearFindMarks(this.containerEl);
     });
     input.focus();
+  }
+
+  toggleDrawOverlay(): void {
+    if (this.drawActive) {
+      this.closeDrawOverlay();
+      return;
+    }
+    this.openDrawOverlay();
+  }
+
+  private drawTargetUrl(): string {
+    return this.currentUrl || "";
+  }
+
+  private loadDrawStrokes(): void {
+    const url = this.drawTargetUrl();
+    this.drawStrokes = [...(this.plugin.settings.surfaceDrawings[url] ?? [])];
+    this.redrawDrawCanvas();
+  }
+
+  openDrawOverlay(): void {
+    const wrap = this.surfaceEl?.parentElement;
+    if (!wrap) return;
+    this.drawActive = true;
+    const url = this.drawTargetUrl();
+    this.drawStrokes = [...(this.plugin.settings.surfaceDrawings[url] ?? [])];
+
+    const overlay = createDiv({ cls: "mwv-draw-overlay" });
+    this.drawOverlayEl = overlay;
+    wrap.addClass("mwv-draw-target");
+    wrap.appendChild(overlay);
+
+    const bar = overlay.createDiv({ cls: "mwv-draw-bar" });
+    const colorButtons: HTMLButtonElement[] = [];
+    for (const color of ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff"]) {
+      const button = bar.createEl("button", {
+        cls: "mwv-draw-color",
+        attr: { type: "button", "aria-label": color, title: color }
+      });
+      button.style.background = color;
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.drawTool = "pen";
+        this.drawColor = color;
+        this.syncDrawButtons();
+      });
+      colorButtons.push(button);
+    }
+    const mkButton = (icon: string, label: string, onClick: () => void) => {
+      const button = bar.createEl("button", {
+        cls: "mwv-draw-button",
+        attr: { type: "button", "aria-label": label, title: label }
+      });
+      setIcon(button, icon);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        onClick();
+      });
+      return button;
+    };
+    const penButton = mkButton("pen-tool", this.tr("drawPen"), () => {
+      this.drawTool = "pen";
+      this.syncDrawButtons();
+    });
+    const eraserButton = mkButton("eraser", this.tr("drawEraser"), () => {
+      this.drawTool = "erase";
+      this.syncDrawButtons();
+    });
+    mkButton("undo-2", this.tr("drawUndo"), () => this.undoDrawStroke());
+    mkButton("trash-2", this.tr("drawClear"), () => this.clearDrawStrokes());
+    mkButton("check", this.tr("drawDone"), () => this.closeDrawOverlay());
+    this.drawButtons = { colorButtons, penButton, eraserButton };
+
+    const canvas = overlay.createEl("canvas", { cls: "mwv-draw-canvas" });
+    this.drawCanvasEl = canvas;
+    const ctx = canvas.getContext("2d");
+    this.drawCtx = ctx ?? undefined;
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 && event.pointerType === "mouse") return;
+      event.preventDefault();
+      canvas.setPointerCapture(event.pointerId);
+      this.drawPointerId = event.pointerId;
+      const stroke: MwvDrawStroke = {
+        color: this.drawColor,
+        size: this.drawTool === "erase" ? Math.max(18, this.drawSize * 5) : this.drawSize,
+        erase: this.drawTool === "erase" || undefined,
+        points: [this.normalizedDrawPoint(event, canvas)]
+      };
+      this.drawStrokes.push(stroke);
+      this.drawCurrentStroke = stroke;
+      this.redrawDrawCanvas();
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (this.drawPointerId !== event.pointerId || !this.drawCurrentStroke) return;
+      const point = this.normalizedDrawPoint(event, canvas);
+      const last = this.drawCurrentStroke.points[this.drawCurrentStroke.points.length - 1];
+      if (last && Math.abs(last.x - point.x) < 0.0015 && Math.abs(last.y - point.y) < 0.0015) return;
+      this.drawCurrentStroke.points.push(point);
+      this.redrawDrawCanvas();
+    });
+    const finishStroke = () => {
+      if (!this.drawCurrentStroke) return;
+      this.drawCurrentStroke = undefined;
+      this.drawPointerId = undefined;
+      this.scheduleDrawSave();
+    };
+    canvas.addEventListener("pointerup", finishStroke);
+    canvas.addEventListener("pointercancel", finishStroke);
+
+    this.resizeDrawCanvas();
+    this.drawResizeHandler = () => this.resizeDrawCanvas();
+    window.addEventListener("resize", this.drawResizeHandler);
+    this.syncDrawButtons();
+    this.redrawDrawCanvas();
+  }
+
+  private drawButtons?: { colorButtons: HTMLButtonElement[]; penButton: HTMLButtonElement; eraserButton: HTMLButtonElement };
+  private drawPointerId?: number;
+  private drawCurrentStroke?: MwvDrawStroke;
+
+  private normalizedDrawPoint(event: PointerEvent, canvas: HTMLCanvasElement): MwvDrawPoint {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: rect.width > 0 ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) : 0,
+      y: rect.height > 0 ? Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) : 0
+    };
+  }
+
+  private syncDrawButtons(): void {
+    const buttons = this.drawButtons;
+    if (!buttons) return;
+    for (const button of buttons.colorButtons) {
+      button.toggleClass("is-active", this.drawTool === "pen" && button.style.background === this.drawColor);
+    }
+    buttons.penButton.toggleClass("is-active", this.drawTool === "pen");
+    buttons.eraserButton.toggleClass("is-active", this.drawTool === "erase");
+  }
+
+  private resizeDrawCanvas(): void {
+    const canvas = this.drawCanvasEl;
+    const wrap = this.surfaceEl?.parentElement;
+    if (!canvas || !wrap) return;
+    canvas.width = Math.max(1, Math.round(wrap.clientWidth * (window.devicePixelRatio || 1)));
+    canvas.height = Math.max(1, Math.round(wrap.clientHeight * (window.devicePixelRatio || 1)));
+    this.redrawDrawCanvas();
+  }
+
+  private redrawDrawCanvas(): void {
+    const canvas = this.drawCanvasEl;
+    const ctx = this.drawCtx;
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const stroke of this.drawStrokes) {
+      if (stroke.points.length === 0) continue;
+      ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = Math.max(1, stroke.size * (window.devicePixelRatio || 1));
+      ctx.beginPath();
+      const first = stroke.points[0];
+      ctx.moveTo(first.x * canvas.width, first.y * canvas.height);
+      if (stroke.points.length === 1) {
+        ctx.lineTo(first.x * canvas.width + 0.01, first.y * canvas.height);
+      } else {
+        for (let i = 1; i < stroke.points.length; i++) {
+          ctx.lineTo(stroke.points[i].x * canvas.width, stroke.points[i].y * canvas.height);
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  private undoDrawStroke(): void {
+    this.drawStrokes.pop();
+    this.redrawDrawCanvas();
+    this.scheduleDrawSave();
+  }
+
+  private clearDrawStrokes(): void {
+    this.drawStrokes = [];
+    this.redrawDrawCanvas();
+    this.scheduleDrawSave();
+  }
+
+  private scheduleDrawSave(): void {
+    if (this.drawSaveTimer) window.clearTimeout(this.drawSaveTimer);
+    this.drawSaveTimer = window.setTimeout(() => {
+      this.drawSaveTimer = undefined;
+      void this.saveDrawStrokesNow();
+    }, 800);
+  }
+
+  private async saveDrawStrokesNow(): Promise<void> {
+    const url = this.drawTargetUrl();
+    if (!url) return;
+    if (this.drawStrokes.length === 0) delete this.plugin.settings.surfaceDrawings[url];
+    else this.plugin.settings.surfaceDrawings[url] = this.drawStrokes.slice(-3000);
+    await this.plugin.saveSettings();
+  }
+
+  closeDrawOverlay(): void {
+    if (!this.drawActive) return;
+    this.drawActive = false;
+    if (this.drawSaveTimer) {
+      window.clearTimeout(this.drawSaveTimer);
+      this.drawSaveTimer = undefined;
+      void this.saveDrawStrokesNow();
+    }
+    if (this.drawResizeHandler) {
+      window.removeEventListener("resize", this.drawResizeHandler);
+      this.drawResizeHandler = undefined;
+    }
+    this.drawOverlayEl?.remove();
+    this.drawOverlayEl = undefined;
+    this.drawCanvasEl = undefined;
+    this.drawCtx = undefined;
+    this.drawButtons = undefined;
+    this.drawCurrentStroke = undefined;
+    this.drawPointerId = undefined;
+    this.surfaceEl?.parentElement?.removeClass("mwv-draw-target");
   }
 
   async captureLink(): Promise<void> {
@@ -15514,6 +16023,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction(pageActions, "app-window", this.tr("systemBrowser"), () => {
       this.openInSystemBrowser(url);
     });
+    addAction(pageActions, "cookie", this.tr("clearCookies"), async () => {
+      await this.clearProxyCookies();
+      new Notice(this.tr("cookiesCleared"));
+    });
     addAction(pageActions, "activity", this.tr("browserStatus"), () => {
       this.toggleEmbedBrowserStatusPanel(body, embed, url);
     }, false);
@@ -17153,6 +17666,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       runtime.setAttribute("data-mwv-proxy-runtime", "");
       runtime.textContent = this.buildProxyRuntimeCss();
       head.appendChild(runtime);
+      const seed = doc.createElement("script");
+      seed.setAttribute("data-mwv-proxy-seed", "");
+      seed.textContent = this.proxySeedScript(url);
+      head.appendChild(seed);
       const bridge = doc.createElement("script");
       bridge.setAttribute("data-mwv-proxy-bridge", "");
       bridge.textContent = MWV_PROXY_BRIDGE_SOURCE;
@@ -17166,13 +17683,13 @@ export default class MobileWebviewerPlugin extends Plugin {
   async fetchLiveDocument(url: string): Promise<{ text: string; headers: Record<string, string> } | null> {
     try {
       const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 12000));
-      const request = requestUrl({
-        url,
-        method: "GET",
-        headers: this.requestHeaders("text/html,application/xhtml+xml,*/*")
-      });
+      const headers = this.requestHeaders("text/html,application/xhtml+xml,*/*");
+      const cookie = this.cookieHeaderForUrl(url);
+      if (cookie) headers["Cookie"] = cookie;
+      const request = requestUrl({ url, method: "GET", headers });
       const response = await Promise.race([request, timeout]);
       if (!response) return null;
+      this.captureSetCookies(url, response.headers);
       const contentType = headerValue(response.headers, "content-type") || "";
       if (contentType && !/text\/html|application\/xhtml/i.test(contentType)) return null;
       return { text: response.text, headers: response.headers };
@@ -17210,6 +17727,24 @@ export default class MobileWebviewerPlugin extends Plugin {
         void callbacks.onConsole?.("warn", `${this.tr("postFormUnsupported")}: ${String(data.url ?? "")}`, this.proxyFrameState.get(frame)?.url);
         return;
       }
+      if (kind === "post-form") {
+        void this.submitProxyForm(frame, String(data.url ?? ""), data.entries, callbacks);
+        return;
+      }
+      if (kind === "fetch") {
+        void this.handleProxyFetch(frame, data);
+        return;
+      }
+      if (kind === "cookie-set") {
+        const pageUrl = this.proxyFrameState.get(frame)?.url ?? "";
+        this.storeCookieFromDocument(pageUrl, String(data.raw ?? ""));
+        return;
+      }
+      if (kind === "storage-set") {
+        const pageUrl = this.proxyFrameState.get(frame)?.url ?? "";
+        this.handleProxyStorageSet(pageUrl, String(data.kind ?? "local"), String(data.key ?? ""), data.value === null || data.value === undefined ? null : String(data.value));
+        return;
+      }
       if (kind === "find-result") {
         const requestId = Number(data.requestId ?? 0);
         const resolve = this.proxyFindResolvers.get(requestId);
@@ -17221,6 +17756,83 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
     window.addEventListener("message", onMessage);
     this.proxyFrameState.set(frame, { url: "", dispose: () => window.removeEventListener("message", onMessage) });
+  }
+
+  private static readonly STRIPPED_RESPONSE_HEADERS = new Set(["set-cookie", "content-encoding", "transfer-encoding", "content-length", "connection"]);
+
+  private outHeadersForProxy(headers: Record<string, string> | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      const lower = key.toLowerCase();
+      if (MobileWebviewerPlugin.STRIPPED_RESPONSE_HEADERS.has(lower)) continue;
+      out[lower] = String(value);
+    }
+    return out;
+  }
+
+  /** Relays page-side fetch()/XHR through requestUrl so cookies and sessions keep working in proxy mode. */
+  async handleProxyFetch(frame: BrowserSurfaceElement, data: Record<string, unknown>): Promise<void> {
+    const url = String(data.url ?? "");
+    if (!/^https?:\/\//i.test(url) || !frame.isConnected) return;
+    const method = (String(data.method ?? "GET") || "GET").toUpperCase();
+    const rawHeaders = (data.headers && typeof data.headers === "object" ? data.headers : {}) as Record<string, unknown>;
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawHeaders)) {
+      if (typeof value === "string") headers[key.toLowerCase()] = value;
+    }
+    const body = typeof data.body === "string" ? data.body : "";
+    if (body && !headers["content-type"]) headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    const cookie = this.cookieHeaderForUrl(url);
+    if (cookie) headers["cookie"] = cookie;
+    const reply = (status: number, statusText: string, outHeaders: Record<string, string>, text: string) => {
+      (frame as HTMLIFrameElement).contentWindow?.postMessage({ mwvBridge: "fetch-result", requestId: Number(data.requestId ?? 0), status, statusText, headers: outHeaders, body: text }, "*");
+    };
+    try {
+      const response = await requestUrl({ url, method, headers: { ...this.requestHeaders("*/*"), ...headers }, body: method === "GET" || method === "HEAD" ? undefined : body });
+      this.captureSetCookies(url, response.headers);
+      reply(response.status, "", this.outHeadersForProxy(response.headers), response.text);
+    } catch (error) {
+      const err = error as { status?: number; headers?: Record<string, string>; text?: string };
+      if (typeof err?.status === "number" && err.status > 0) {
+        this.captureSetCookies(url, err.headers);
+        reply(err.status, "HTTP error", this.outHeadersForProxy(err.headers), typeof err.text === "string" ? err.text : "");
+      } else {
+        reply(0, "Network error", {}, "");
+      }
+    }
+  }
+
+  /** Submits a proxied POST form via requestUrl and renders the result as a proxied document. */
+  async submitProxyForm(frame: BrowserSurfaceElement, url: string, entries: unknown, callbacks: BrowserSurfaceCallbacks): Promise<void> {
+    if (!/^https?:\/\//i.test(url) || !frame.isConnected) return;
+    const pairs: [string, string][] = Array.isArray(entries)
+      ? entries.map((item): [string, string] => {
+          const pair = Array.isArray(item) ? item : [];
+          return [String(pair[0] ?? ""), typeof pair[1] === "string" ? pair[1] : String(pair[1] ?? "")];
+        })
+      : [];
+    const body = pairs.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
+    const headers = this.requestHeaders("text/html,application/xhtml+xml,*/*");
+    headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    const cookie = this.cookieHeaderForUrl(url);
+    if (cookie) headers["Cookie"] = cookie;
+    void callbacks.onLoading?.(true, url);
+    try {
+      const response = await requestUrl({ url, method: "POST", headers, body });
+      this.captureSetCookies(url, response.headers);
+      this.renderProxyDocument(frame, url, response.text, callbacks);
+    } catch (error) {
+      const err = error as { status?: number; text?: string; headers?: Record<string, string> };
+      const text = typeof err?.text === "string" && err.text ? err.text : "";
+      if (text) {
+        this.captureSetCookies(url, err.headers);
+        this.renderProxyDocument(frame, url, text, callbacks);
+      } else {
+        void callbacks.onConsole?.("warn", `${this.tr("postFormUnsupported")}: ${url}`, url);
+        void callbacks.onLoading?.(false, url);
+      }
+    }
+    void callbacks.onNavigate?.(url);
   }
 
   renderProxyDocument(frame: BrowserSurfaceElement, url: string, rawHtml: string, callbacks: BrowserSurfaceCallbacks = {}): void {
@@ -18567,6 +19179,196 @@ export default class MobileWebviewerPlugin extends Plugin {
       "Upgrade-Insecure-Requests": "1",
       "User-Agent": this.getUserAgentHeader()
     };
+  }
+
+  private static cookieKey(domain: string, path: string, name: string): string {
+    return `${domain.toLowerCase()}|${path || "/"}|${name}`;
+  }
+
+  private pruneExpiredCookies(): void {
+    const now = Date.now();
+    for (const [key, cookie] of Object.entries(this.settings.cookieJar)) {
+      if (cookie.expires > 0 && cookie.expires < now) delete this.settings.cookieJar[key];
+    }
+  }
+
+  /** Parses Set-Cookie header values (one per entry; multi headers may be newline-joined). */
+  captureSetCookies(pageUrl: string, headers: Record<string, string> | undefined): number {
+    if (!headers || this.settings.incognitoMode) return 0;
+    const raw = headerValue(headers, "set-cookie");
+    if (!raw) return 0;
+    let stored = 0;
+    for (const line of raw.split(/\r?\n/)) {
+      if (this.storeCookieFromSetCookie(pageUrl, line.trim())) stored++;
+    }
+    if (stored) void this.saveSettings();
+    return stored;
+  }
+
+  storeCookieFromSetCookie(pageUrl: string, raw: string): boolean {
+    if (!raw) return false;
+    let host = "";
+    try {
+      host = new URL(pageUrl).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    const parts = raw.split(";");
+    const first = parts[0] ?? "";
+    const eq = first.indexOf("=");
+    if (eq <= 0) return false;
+    const name = first.slice(0, eq).trim();
+    const value = first.slice(eq + 1).trim();
+    if (!name) return false;
+    let domain = host;
+    let path = "/";
+    let expires = 0;
+    let secure = false;
+    let hostOnly = true;
+    for (let i = 1; i < parts.length; i++) {
+      const attr = parts[i].trim();
+      const aeq = attr.indexOf("=");
+      const akey = (aeq >= 0 ? attr.slice(0, aeq) : attr).trim().toLowerCase();
+      const avalue = aeq >= 0 ? attr.slice(aeq + 1).trim() : "";
+      if (akey === "domain" && avalue) {
+        domain = avalue.replace(/^\./, "").toLowerCase();
+        hostOnly = false;
+      } else if (akey === "path" && avalue) {
+        path = avalue.startsWith("/") ? avalue : `/${avalue}`;
+      } else if (akey === "expires" && avalue) {
+        const parsed = Date.parse(avalue);
+        if (!Number.isNaN(parsed)) expires = parsed;
+      } else if (akey === "max-age" && avalue) {
+        const seconds = Number(avalue);
+        if (Number.isFinite(seconds)) expires = seconds <= 0 ? 1 : Date.now() + seconds * 1000;
+      } else if (akey === "secure") {
+        secure = true;
+      }
+    }
+    if (expires > 0 && expires < Date.now()) {
+      delete this.settings.cookieJar[MobileWebviewerPlugin.cookieKey(domain, path, name)];
+      return true;
+    }
+    this.settings.cookieJar[MobileWebviewerPlugin.cookieKey(domain, path, name)] = { name, value, domain, path, expires, secure, hostOnly };
+    return true;
+  }
+
+  /** Stores a document.cookie write coming from a proxied page (relative to that page's URL). */
+  storeCookieFromDocument(pageUrl: string, raw: string): void {
+    if (this.settings.incognitoMode || !raw) return;
+    const eq = raw.indexOf("=");
+    if (eq <= 0) return;
+    const name = raw.slice(0, eq).trim();
+    const rest = raw.slice(eq + 1);
+    const attrs = rest.split(";");
+    const value = (attrs[0] ?? "").trim();
+    let domain = "";
+    let path = "/";
+    let expires = 0;
+    for (let i = 1; i < attrs.length; i++) {
+      const attr = attrs[i].trim();
+      const aeq = attr.indexOf("=");
+      const akey = (aeq >= 0 ? attr.slice(0, aeq) : attr).trim().toLowerCase();
+      const avalue = aeq >= 0 ? attr.slice(aeq + 1).trim() : "";
+      if (akey === "domain" && avalue) domain = avalue.replace(/^\./, "").toLowerCase();
+      else if (akey === "path" && avalue) path = avalue.startsWith("/") ? avalue : `/${avalue}`;
+      else if (akey === "expires" && avalue) {
+        const parsed = Date.parse(avalue);
+        if (!Number.isNaN(parsed)) expires = parsed;
+      } else if (akey === "max-age" && avalue) {
+        const seconds = Number(avalue);
+        if (Number.isFinite(seconds)) expires = seconds <= 0 ? 1 : Date.now() + seconds * 1000;
+      }
+    }
+    try {
+      const host = domain || new URL(pageUrl).hostname.toLowerCase();
+      const key = MobileWebviewerPlugin.cookieKey(host, path, name);
+      if (value === "" || (expires > 0 && expires < Date.now())) delete this.settings.cookieJar[key];
+      else this.settings.cookieJar[key] = { name, value, domain: host, path, expires, secure: /^https:/i.test(pageUrl), hostOnly: !domain };
+      void this.saveSettings();
+    } catch {
+      // Ignore cookies for unparsable page URLs.
+    }
+  }
+
+  /** RFC-6265-style domain/path/secure matching for the outgoing Cookie header. */
+  cookieHeaderForUrl(url: string): string {
+    if (this.settings.incognitoMode) return "";
+    this.pruneExpiredCookies();
+    let host = "";
+    let urlPath = "/";
+    let isHttps = false;
+    try {
+      const parsed = new URL(url);
+      host = parsed.hostname.toLowerCase();
+      urlPath = parsed.pathname || "/";
+      isHttps = parsed.protocol === "https:";
+    } catch {
+      return "";
+    }
+    const pairs: string[] = [];
+    for (const cookie of Object.values(this.settings.cookieJar)) {
+      if (cookie.hostOnly ? cookie.domain !== host : !(host === cookie.domain || host.endsWith(`.${cookie.domain}`))) continue;
+      if (cookie.path !== "/") {
+        if (!urlPath.startsWith(cookie.path)) continue;
+        if (cookie.path.endsWith("/") === false && urlPath.charAt(cookie.path.length) && urlPath.charAt(cookie.path.length) !== "/") continue;
+      }
+      if (cookie.secure && !isHttps) continue;
+      pairs.push(`${cookie.name}=${cookie.value}`);
+    }
+    return pairs.join("; ");
+  }
+
+  async clearProxyCookies(): Promise<void> {
+    this.settings.cookieJar = {};
+    await this.saveSettings();
+  }
+
+  private storageOriginOf(url: string): string {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return "";
+    }
+  }
+
+  storageMapForUrl(url: string): Record<string, string> {
+    return this.settings.proxyStorage[this.storageOriginOf(url)] ?? {};
+  }
+
+  handleProxyStorageSet(url: string, kind: string, key: string, value: string | null): void {
+    if (this.settings.incognitoMode) return;
+    const origin = this.storageOriginOf(url);
+    if (!origin || !key) return;
+    if (kind !== "local") return;
+    const map = this.settings.proxyStorage[origin] ?? (this.settings.proxyStorage[origin] = {});
+    if (key === "__mwv_clear__") {
+      this.settings.proxyStorage[origin] = {};
+    } else if (value === null) {
+      delete map[key];
+    } else {
+      map[key] = value;
+    }
+    void this.saveSettings();
+  }
+
+  private proxySeedScript(url: string): string {
+    if (this.settings.incognitoMode) return "window.__mwvInit = {};";
+    const cookies: Record<string, string> = {};
+    this.pruneExpiredCookies();
+    const host = this.storageOriginOf(url);
+    try {
+      const hostname = new URL(url).hostname.toLowerCase();
+      for (const cookie of Object.values(this.settings.cookieJar)) {
+        if (cookie.hostOnly ? cookie.domain !== hostname : hostname === cookie.domain || hostname.endsWith(`.${cookie.domain}`)) {
+          cookies[cookie.name] = cookie.value;
+        }
+      }
+    } catch {
+      // No seed cookies for unparsable URLs.
+    }
+    void host;
+    return `window.__mwvInit = ${JSON.stringify({ cookies, storage: this.storageMapForUrl(url) })};`;
   }
 
   applyBrowserRuntimeClasses(root: HTMLElement): void {
