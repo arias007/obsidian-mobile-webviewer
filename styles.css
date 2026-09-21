@@ -4168,6 +4168,42 @@
   display: none;
 }
 
+/* --- RealWeb: browser tabs share the header row with the native buttons --- */
+.workspace-leaf-content.mwv-realweb-immersive .view-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.workspace-leaf-content.mwv-realweb-immersive .view-header-title-container,
+.workspace-leaf-content.mwv-realweb-immersive .view-header-nav-buttons {
+  display: none;
+}
+.workspace-leaf-content.mwv-realweb-immersive .view-header .mwv-embed-tabstrip {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 2px;
+  padding: 0;
+  align-items: center;
+}
+
+/* --- RealWeb immersive: chrome collapses to a single address row --- */
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-chrome {
+  grid-template-areas: "address actions" !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+.workspace-leaf-content.mwv-realweb-immersive .markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.workspace-leaf-content.mwv-realweb-immersive .markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  grid-template-areas: "address actions" !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+
 /* --- Compact RealWeb chrome: tabstrip on top, nav buttons inside the address row --- */
 .mwv-browser-chrome {
   grid-template-areas:

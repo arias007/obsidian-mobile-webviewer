@@ -10954,7 +10954,16 @@ export default class MobileWebviewerPlugin extends Plugin {
   ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
     if (!surface.isConnected || !this.isNoteDrawSurfaceElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
     const anchor = this.ensureNoteDrawStableAnchor(surface);
+    // A retained native NoteDraw button already occupies the anchor — never
+    // resurrect a proxy wand next to it (other surfaces' sync passes would
+    // otherwise re-create the proxy and duplicate the wand).
+    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(":scope > button:not([data-mwv-noteweb-wand='true'])");
     let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
+    if (button && nativeInAnchor) {
+      button.remove();
+      button = null;
+    }
+    if (nativeInAnchor) return nativeInAnchor;
     if (!button) {
       button = anchor.createEl("button", {
         cls: "mwv-notedraw-web-wand mwv-notedraw-host-proxy clickable-icon",
@@ -13855,6 +13864,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       binding.guardedPaneMenu = guardedPaneMenu;
       view.onPaneMenu = guardedPaneMenu;
       if (typeof view.addAction === "function") {
+        // Bindings can be recreated while Obsidian keeps the header DOM (plugin
+        // reload, leaf reuse). Remove previously added mode actions first so
+        // duplicates never accumulate in the header.
+        const actionHostBeforeAdd = (leaf.view.containerEl?.closest<HTMLElement>(".workspace-leaf") ?? leaf.view.containerEl)
+          ?.querySelector<HTMLElement>(".view-actions");
+        actionHostBeforeAdd?.querySelectorAll<HTMLElement>(".mwv-note-browser-mode-action").forEach((stale) => stale.remove());
         const modeAction = view.addAction("file-text", this.tr("note"), () => undefined);
         modeAction.addClass("mwv-note-browser-mode-action");
         // Obsidian's Markdown view listens for toolbar clicks as well. Keep
@@ -15010,10 +15025,22 @@ export default class MobileWebviewerPlugin extends Plugin {
   /** Tab strip for RealWeb — the shared browser tabs rendered inside the embed chrome. */
   renderEmbedTabstrip(embed: HTMLElement, chrome: HTMLElement): void {
     if (!chrome?.isConnected) return;
-    chrome.querySelector(":scope > .mwv-embed-tabstrip")?.remove();
+    // The strip can live in two places: Obsidian's view-header row (RealWeb
+    // immersive mode — same row as the native header buttons) or the top of
+    // the embed chrome (fallback / note mode). Remove stale strips from both
+    // hosts so re-renders never duplicate tabs.
+    const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
+    leafContent?.querySelectorAll<HTMLElement>(".mwv-embed-tabstrip").forEach((stale) => stale.remove());
     if (this.settings.browserTabs.length === 0) return;
     const strip = chrome.createDiv({ cls: "mwv-embed-tabstrip" });
-    chrome.insertBefore(strip, chrome.firstChild);
+    const header = leafContent?.querySelector<HTMLElement>(".view-header");
+    const headerActions = header?.querySelector<HTMLElement>(".view-actions");
+    if (leafContent?.hasClass("mwv-realweb-immersive") && header && headerActions) {
+      strip.addClass("mwv-embed-tabstrip-in-header");
+      header.insertBefore(strip, headerActions);
+    } else {
+      chrome.insertBefore(strip, chrome.firstChild);
+    }
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
     for (const tab of this.settings.browserTabs.slice(0, 12)) {
       const item = strip.createDiv({ cls: "mwv-embed-tab" + (tab.id === activeId ? " is-active" : "") });
