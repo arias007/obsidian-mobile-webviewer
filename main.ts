@@ -384,7 +384,7 @@ interface DownloadEntry {
   path: string;
   mime: string;
   status: "queued" | "downloading" | "completed" | "error";
-  format: "file" | "html" | "mhtml";
+  format: "file" | "html" | "mhtml" | "png" | "pdf";
   bytesReceived: number;
   bytesTotal: number;
   progress: number;
@@ -765,7 +765,15 @@ type UiTextKey =
   | "proxyModeActive"
   | "postFormUnsupported"
   | "clearCookies"
-  | "cookiesCleared";
+  | "cookiesCleared"
+  | "screenshotPage"
+  | "screenshotSaved"
+  | "savePdf"
+  | "pdfSaved"
+  | "muteTab"
+  | "unmuteTab"
+  | "webDarkMode"
+  | "closeWebDarkMode";
 
 type UiDictionary = Partial<Record<UiTextKey, string>>;
 
@@ -1110,7 +1118,15 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   proxyModeActive: "Site refuses embedding — real page loaded via built-in proxy",
   postFormUnsupported: "POST form submissions are not supported in proxy mode",
   clearCookies: "Clear site cookies",
-  cookiesCleared: "Site cookies cleared"
+  cookiesCleared: "Site cookies cleared",
+  screenshotPage: "Screenshot page",
+  screenshotSaved: "Screenshot saved: {path}",
+  savePdf: "Save as PDF",
+  pdfSaved: "PDF saved: {path}",
+  muteTab: "Mute tab",
+  unmuteTab: "Unmute tab",
+  webDarkMode: "Web dark mode",
+  closeWebDarkMode: "Close web dark mode"
 };
 
 const UI_TEXT_ZH_HANS: UiDictionary = {
@@ -1454,7 +1470,15 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   proxyModeActive: "网站拒绝内嵌，已用内置代理加载真实页面",
   postFormUnsupported: "代理模式暂不支持 POST 表单提交",
   clearCookies: "清除站点 Cookie",
-  cookiesCleared: "已清除站点 Cookie"
+  cookiesCleared: "已清除站点 Cookie",
+  screenshotPage: "网页截图",
+  screenshotSaved: "截图已保存：{path}",
+  savePdf: "存为 PDF",
+  pdfSaved: "PDF 已保存：{path}",
+  muteTab: "静音标签页",
+  unmuteTab: "取消静音",
+  webDarkMode: "网页深色",
+  closeWebDarkMode: "关闭网页深色"
 };
 
 const UI_TEXT_ZH_HANT: UiDictionary = {
@@ -6518,6 +6542,8 @@ interface MobileWebviewerSettings {
   fullScreenMode: boolean;
   jsDisabled: boolean;
   rotatedMode: boolean;
+  audioMuted: boolean;
+  webDarkMode: boolean;
   readerFontScale: number;
   userAgentMode: "mobile" | "desktop";
   translateTarget: string;
@@ -6625,6 +6651,13 @@ interface BrowserConsoleEntry {
   url?: string;
 }
 
+interface MwvNativeImage {
+  isEmpty?: () => boolean;
+  toPNG?: () => Buffer;
+  toDataURL?: () => string;
+  getSize?: () => { width: number; height: number };
+}
+
 interface ElectronWebviewElement extends HTMLElement {
   _mwvReady?: boolean;
   _mwvDestroyed?: boolean;
@@ -6647,6 +6680,11 @@ interface ElectronWebviewElement extends HTMLElement {
   openDevTools?: () => void;
   getWebContentsId?: () => number;
   isLoading?: () => boolean;
+  setAudioMuted?: (muted: boolean) => void;
+  insertCSS?: (css: string) => Promise<string>;
+  removeInsertedCSS?: (key: string) => Promise<void>;
+  capturePage?: () => Promise<MwvNativeImage>;
+  printToPDF?: (options?: { printBackground?: boolean; pageSize?: string; landscape?: boolean }) => Promise<Uint8Array>;
   _mwvRawElementEditorEnabled?: boolean;
 }
 
@@ -6830,6 +6868,12 @@ interface NoteBrowserNativeBinding {
   guardedSetState?: (state: Record<string, unknown>, result?: unknown) => Promise<void>;
 }
 
+const MWV_WEB_DARK_CSS = [
+  "html{filter:invert(1) hue-rotate(180deg);background:#101112;}",
+  "img,video,picture,canvas,svg,iframe,embed,object,[style*=\"background-image\"]{filter:invert(1) hue-rotate(180deg);}",
+  "video::cue{filter:invert(1) hue-rotate(180deg);}"
+].join("\n");
+
 const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   homeUrl: DEFAULT_HOME,
   searchUrl: DEFAULT_SEARCH,
@@ -6866,6 +6910,8 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   fullScreenMode: false,
   jsDisabled: false,
   rotatedMode: false,
+  audioMuted: false,
+  webDarkMode: false,
   readerFontScale: 100,
   userAgentMode: "mobile",
   translateTarget: DEFAULT_TRANSLATE_TARGET,
@@ -10167,12 +10213,22 @@ class MobileWebviewerView extends ItemView {
     });
     addAction(viewActions, "rotate-cw", this.plugin.settings.rotatedMode ? this.plugin.tr("closeLandscape") : this.plugin.tr("landscape"), () => this.plugin.toggleBooleanMode("rotatedMode", this.containerEl, "Rotate"));
     addAction(viewActions, "type", this.plugin.tr("fontSize", { value: this.plugin.settings.readerFontScale }), () => this.plugin.adjustReaderFont(10, this.containerEl));
+    addAction(viewActions, "volume-x", this.plugin.settings.audioMuted ? this.plugin.tr("unmuteTab") : this.plugin.tr("muteTab"), () => this.plugin.toggleTabMute(this.containerEl));
+    addAction(viewActions, "moon-star", this.plugin.settings.webDarkMode ? this.plugin.tr("closeWebDarkMode") : this.plugin.tr("webDarkMode"), () => this.plugin.toggleWebDarkMode(this.containerEl));
 
     addAction(saveActions, "download", this.plugin.tr("downloadFile"), async () => {
       const entry = await this.plugin.downloadUrlFile(url);
       setFeedback(this.plugin.tr("downloadFinished", { path: entry.path || entry.message }));
       this.closeMorePanel();
       await this.openUtilityTab("downloads");
+    });
+    addAction(saveActions, "camera", this.plugin.tr("screenshotPage"), async () => {
+      const entry = await this.plugin.captureWebviewScreenshot(this.surfaceEl, url, title);
+      setFeedback(this.plugin.tr("screenshotSaved", { path: entry.path || entry.message }));
+    });
+    addAction(saveActions, "printer", this.plugin.tr("savePdf"), async () => {
+      const entry = await this.plugin.printWebviewToPdf(this.surfaceEl, url, title);
+      setFeedback(this.plugin.tr("pdfSaved", { path: entry.path || entry.message }));
     });
     addAction(saveActions, "file-code", this.plugin.tr("saveHtml"), async () => {
       const entry = await this.plugin.downloadCurrentPageHtml(url, title);
@@ -10325,6 +10381,7 @@ class MobileWebviewerView extends ItemView {
 export default class MobileWebviewerPlugin extends Plugin {
   disposed = false;
   settings: MobileWebviewerSettings = DEFAULT_SETTINGS;
+  private webDarkCssKeys = new WeakMap<object, string>();
   processorSeq = 0;
   processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   embedRenderTokens = new WeakMap<HTMLElement, number>();
@@ -15975,11 +16032,29 @@ export default class MobileWebviewerPlugin extends Plugin {
     addAction(viewActions, "type", this.tr("fontSize", { value: this.settings.readerFontScale }), async () => {
       await this.adjustReaderFont(10, embed);
     }, false);
+    addAction(viewActions, "volume-x", this.settings.audioMuted ? this.tr("unmuteTab") : this.tr("muteTab"), async () => {
+      await this.toggleTabMute(embed);
+    }, false);
+    addAction(viewActions, "moon-star", this.settings.webDarkMode ? this.tr("closeWebDarkMode") : this.tr("webDarkMode"), async () => {
+      await this.toggleWebDarkMode(embed);
+    }, false);
 
     addAction(saveActions, "download", this.tr("downloadFile"), async () => {
       await this.downloadUrlFile(url);
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
+    addAction(saveActions, "camera", this.tr("screenshotPage"), async () => {
+      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+      if (!frame) return;
+      const entry = await this.captureWebviewScreenshot(frame, url, title || hostName(url));
+      setFeedback(this.tr("screenshotSaved", { path: entry.path || entry.message }));
+    }, false);
+    addAction(saveActions, "printer", this.tr("savePdf"), async () => {
+      const frame = embed.querySelector<BrowserSurfaceElement>(".mwv-live-frame");
+      if (!frame) return;
+      const entry = await this.printWebviewToPdf(frame, url, title || hostName(url));
+      setFeedback(this.tr("pdfSaved", { path: entry.path || entry.message }));
+    }, false);
     addAction(saveActions, "file-code", this.tr("saveHtml"), async () => {
       await this.downloadCurrentPageHtml(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
@@ -17126,8 +17201,128 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.addConsole("info", "Offline page saved", url);
   }
 
-  async createShortcutFile(url: string, title: string): Promise<string> {
+  async captureWebviewScreenshot(frame: BrowserSurfaceElement, url: string, title: string): Promise<DownloadEntry> {
+    if (!this.isElectronWebview(frame) || !this.isBrowserSurfaceReady(frame)) {
+      throw new Error("Screenshot needs a ready webview surface");
+    }
+    const image = await frame.capturePage?.();
+    if (!image || (typeof image.isEmpty === "function" && image.isEmpty())) {
+      throw new Error("Capture returned an empty image");
+    }
+    const png = typeof image.toPNG === "function" ? image.toPNG() : null;
+    if (!png || !png.byteLength) throw new Error("Capture produced no PNG bytes");
+    const bytes = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer;
     const folder = this.normalizeDownloadFolder();
+    await this.ensureVaultFolder(folder);
+    const fileName = appendFileExtension(sanitizeFileName(`${title || hostName(url)} screenshot`, "screenshot"), "png");
+    const path = await this.uniqueVaultPath(folder, fileName);
+    const entry = this.createDownloadEntry(url, fileName, path, "png", "image/png");
+    await this.upsertDownload({ ...entry, status: "downloading", message: "Saving screenshot" });
+    try {
+      await this.app.vault.adapter.writeBinary(path, bytes);
+      await this.updateDownload(entry.id, {
+        status: "completed",
+        bytesReceived: bytes.byteLength,
+        bytesTotal: bytes.byteLength,
+        progress: 100,
+        path,
+        message: "Screenshot saved"
+      });
+      await this.addConsole("info", `Screenshot saved: ${path}`, url);
+      return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.updateDownload(entry.id, { status: "error", message, progress: 0 });
+      await this.addConsole("error", `Screenshot failed: ${message}`, url);
+      throw error;
+    }
+  }
+
+  async printWebviewToPdf(frame: BrowserSurfaceElement, url: string, title: string): Promise<DownloadEntry> {
+    if (!this.isElectronWebview(frame) || !this.isBrowserSurfaceReady(frame)) {
+      throw new Error("Save as PDF needs a ready webview surface");
+    }
+    const pdf = await frame.printToPDF?.({ printBackground: true, pageSize: "A4" });
+    if (!pdf || !pdf.byteLength) throw new Error("printToPDF produced no bytes");
+    const bytes = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) as ArrayBuffer;
+    const folder = this.normalizeDownloadFolder();
+    await this.ensureVaultFolder(folder);
+    const fileName = appendFileExtension(sanitizeFileName(title || hostName(url), "page"), "pdf");
+    const path = await this.uniqueVaultPath(folder, fileName);
+    const entry = this.createDownloadEntry(url, fileName, path, "pdf", "application/pdf");
+    await this.upsertDownload({ ...entry, status: "downloading", message: "Saving PDF" });
+    try {
+      await this.app.vault.adapter.writeBinary(path, bytes);
+      await this.updateDownload(entry.id, {
+        status: "completed",
+        bytesReceived: bytes.byteLength,
+        bytesTotal: bytes.byteLength,
+        progress: 100,
+        path,
+        message: "PDF saved"
+      });
+      await this.addConsole("info", `PDF saved: ${path}`, url);
+      return this.settings.downloads.find((item) => item.id === entry.id) ?? entry;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.updateDownload(entry.id, { status: "error", message, progress: 0 });
+      await this.addConsole("error", `PDF save failed: ${message}`, url);
+      throw error;
+    }
+  }
+
+  async toggleTabMute(root?: HTMLElement): Promise<void> {
+    this.settings.audioMuted = !this.settings.audioMuted;
+    await this.saveSettings();
+    if (root) {
+      root.querySelectorAll<ElectronWebviewElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
+        if (!this.isElectronWebview(frame)) return;
+        try {
+          frame.setAudioMuted?.(this.settings.audioMuted);
+        } catch {
+          // Frame not ready; dom-ready reapplies mute.
+        }
+      });
+    }
+    new Notice(this.settings.audioMuted ? this.tr("muteTab") : this.tr("unmuteTab"));
+    await this.addConsole("info", `Tab audio ${this.settings.audioMuted ? "muted" : "unmuted"}`);
+  }
+
+  async toggleWebDarkMode(root?: HTMLElement): Promise<void> {
+    this.settings.webDarkMode = !this.settings.webDarkMode;
+    await this.saveSettings();
+    if (root) {
+      root.querySelectorAll<ElectronWebviewElement>(".mwv-frame, .mwv-live-frame").forEach((frame) => {
+        if (this.isElectronWebview(frame)) void this.applyWebviewDarkMode(frame);
+      });
+    }
+    new Notice(this.settings.webDarkMode ? this.tr("webDarkMode") : this.tr("closeWebDarkMode"));
+    await this.addConsole("info", `Web dark mode ${this.settings.webDarkMode ? "enabled" : "disabled"}`);
+  }
+
+  async applyWebviewDarkMode(webview: ElectronWebviewElement): Promise<void> {
+    if (!this.isElectronWebview(webview)) return;
+    const previous = this.webDarkCssKeys.get(webview);
+    if (previous) {
+      this.webDarkCssKeys.delete(webview);
+      try {
+        await webview.removeInsertedCSS?.(previous);
+      } catch {
+        // Page may have navigated; nothing to clean.
+      }
+    }
+    if (!this.settings.webDarkMode) return;
+    if (!this.isBrowserSurfaceReady(webview)) return;
+    if (!webview.insertCSS) return;
+    try {
+      const key = await webview.insertCSS(MWV_WEB_DARK_CSS);
+      if (key) this.webDarkCssKeys.set(webview, key);
+    } catch {
+      await this.addConsole("warn", "Web dark mode limited", this.safeWebviewUrl(webview));
+    }
+  }
+
+  async createShortcutFile(url: string, title: string): Promise<string> {    const folder = this.normalizeDownloadFolder();
     await this.ensureVaultFolder(folder);
     const fileName = appendFileExtension(sanitizeFileName(title || hostName(url), "shortcut"), "url");
     const path = await this.uniqueVaultPath(folder, fileName);
@@ -18989,6 +19184,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Keep a real webpage exactly as delivered by its site. Delayed CSS,
     // ad-observer mutations, and page zoom changes otherwise alter the page
     // after first paint and make its layout appear to jump or collapse.
+    // Audio mute and the explicit web dark mode are the only user-requested
+    // overlays allowed on raw surfaces: neither changes layout, and both are
+    // opt-in toggles rather than ambient styling.
+    try {
+      webview.setAudioMuted?.(this.settings.audioMuted);
+    } catch {
+      // Not ready yet; dom-ready re-runs this.
+    }
+    void this.applyWebviewDarkMode(webview);
     if (this.isRawRealWebview(webview)) return;
     if (!this.isBrowserSurfaceReady(webview)) return;
     const zoom = clampNumber(this.settings.pageZoom || 100, 50, 200) / 100;
@@ -20138,6 +20342,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.fullScreenMode = typeof this.settings.fullScreenMode === "boolean" ? this.settings.fullScreenMode : false;
     this.settings.jsDisabled = typeof this.settings.jsDisabled === "boolean" ? this.settings.jsDisabled : false;
     this.settings.rotatedMode = typeof this.settings.rotatedMode === "boolean" ? this.settings.rotatedMode : false;
+    this.settings.audioMuted = typeof this.settings.audioMuted === "boolean" ? this.settings.audioMuted : false;
+    this.settings.webDarkMode = typeof this.settings.webDarkMode === "boolean" ? this.settings.webDarkMode : false;
     this.settings.readerFontScale = clampNumber(
       typeof this.settings.readerFontScale === "number" ? Math.round(this.settings.readerFontScale) : 100,
       80,
