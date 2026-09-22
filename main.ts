@@ -14178,6 +14178,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.queueNoteDrawButtonDedupe(embed);
       this.queueNoteDrawControllerSync(embed, true);
       this.queueNoteDrawControllerRestore(embed);
+      // The guest may have navigated while Web mode owned the viewport; the
+      // NoteWeb document only re-renders on demand, so it must follow the
+      // live URL here. The live surface itself is never navigated or
+      // re-URL-assigned during the switch (see the retained-surface contract).
+      this.reconcileNoteWebDocumentWithLiveSurface(embed);
     }
     embed.querySelectorAll<HTMLElement>("[data-mwv-embed-mode]").forEach((button) => {
       button.toggleClass("is-active", button.dataset.mwvEmbedMode === mode);
@@ -14511,6 +14516,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.setAttribute("data-url", nextUrl);
       void this.persistEmbedState(embed);
     }
+    // Note/Split mode keeps the live guest mounted (see
+    // setNoteBrowserEmbedMode). Navigating from the NoteWeb document must
+    // drag that retained guest along, otherwise switching back to Web mode
+    // resurrects the pre-navigation page and the site visibly "changes".
+    this.syncRetainedLiveSurface(embed, nextUrl);
     const obsidianLink = parseObsidianOpenLink(nextUrl);
     if (obsidianLink) {
       await this.renderObsidianNoteEmbed(embed, obsidianLink, nextUrl);
@@ -14559,6 +14569,44 @@ export default class MobileWebviewerPlugin extends Plugin {
       console.error("[mobile-webviewer] render embed failed", error);
       void this.addConsole("error", `Render failed: ${error instanceof Error ? error.message : String(error)}`, nextUrl);
       this.renderEmbedFallback(embed, nextUrl, hostName(nextUrl));
+    }
+  }
+
+  /**
+   * The guest may have navigated while Web mode owned the viewport. The
+   * NoteWeb document only re-renders on demand, so without reconciliation the
+   * note would still show the pre-navigation page after a view switch while
+   * the address bar already reports the new URL — the site would appear to
+   * "change" between toggles. Bring the note to the live URL. The live
+   * surface itself is never navigated or URL-assigned here: it is the source
+   * of truth for the retained-surface contract.
+   */
+  reconcileNoteWebDocumentWithLiveSurface(embed: HTMLElement): void {
+    const retainedFrame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
+    const liveUrl = retainedFrame ? this.safeBrowserSurfaceUrl(retainedFrame) : "";
+    if (!liveUrl || !/^https?:\/\//i.test(liveUrl)) return;
+    if (this.sameWebPage(embed.dataset.url || "", liveUrl)) return;
+    void this.openUrlInEmbed(embed, liveUrl, false);
+  }
+
+  /**
+   * Note/Split mode retains the live guest surface. When a navigation was
+   * performed from the NoteWeb document (reader links, search box, home
+   * button), the retained guest must follow so both presentations keep
+   * showing the same page. Web mode handles its own sync inside
+   * openUrlInEmbed; this helper covers every other mode.
+   */
+  syncRetainedLiveSurface(embed: HTMLElement, url: string): void {
+    if (embed.hasClass("is-web-front")) return;
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    const liveSurface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
+    if (!liveSurface) return;
+    try {
+      if (!this.isBrowserSurfaceReady(liveSurface)) return;
+      if (this.sameWebPage(this.safeBrowserSurfaceUrl(liveSurface), url)) return;
+      this.setBrowserSurfaceUrl(liveSurface, url);
+    } catch {
+      // Frame mid-load or detached; the next navigation re-syncs it.
     }
   }
 
