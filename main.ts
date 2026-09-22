@@ -8893,41 +8893,61 @@ class MobileWebviewerView extends ItemView {
 
   renderTabStrip(): void {
     if (!this.tabStripEl) return;
-    this.tabStripEl.empty();
     const tabs = this.plugin.settings.browserTabs.length
       ? this.plugin.settings.browserTabs
       : [this.plugin.ensureBrowserTab()];
-
-    for (const tab of tabs.slice(0, MAX_BROWSER_TABS)) {
-      const item = this.tabStripEl.createEl("button", {
-        cls: tab.id === this.activeBrowserTabId ? "mwv-browser-tab is-active" : "mwv-browser-tab",
-        attr: { type: "button", title: tab.url }
+    const wanted = tabs.slice(0, MAX_BROWSER_TABS);
+    const wantedIds = new Set(wanted.map((tab) => tab.id));
+    const activeId = this.activeBrowserTabId || this.plugin.settings.activeBrowserTabId;
+    // Reconcile in place. Emptying the row and rebuilding it on every
+    // navigation let a tap put its pointerdown on a tab that no longer existed
+    // by the time the click was dispatched, so the tab appeared dead.
+    for (const node of Array.from(this.tabStripEl.querySelectorAll<HTMLElement>(":scope > .mwv-browser-tab"))) {
+      if (!wantedIds.has(node.dataset.mwvTabId ?? "")) node.remove();
+    }
+    let add = this.tabStripEl.querySelector<HTMLButtonElement>(":scope > .mwv-browser-tab-add");
+    if (!add) {
+      add = this.tabStripEl.createEl("button", {
+        cls: "mwv-browser-tab-add",
+        attr: { type: "button", title: this.plugin.tr("newObsidianTab"), "aria-label": this.plugin.tr("newObsidianTab") }
       });
-      item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
-      const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
-      setIcon(close, "x");
-      item.addEventListener("click", (event) => {
-        const target = event.target as HTMLElement | null;
+      setIcon(add, "plus");
+      add.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (target?.closest(".mwv-browser-tab-close")) {
-          runAsync(() => this.closeBrowserTab(tab.id));
-        } else {
-          runAsync(() => this.switchBrowserTab(tab.id));
-        }
+        void this.newBrowserTab();
       });
     }
-
-    const add = this.tabStripEl.createEl("button", {
-      cls: "mwv-browser-tab-add",
-      attr: { type: "button", title: this.plugin.tr("newObsidianTab"), "aria-label": this.plugin.tr("newObsidianTab") }
-    });
-    setIcon(add, "plus");
-    add.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.newBrowserTab();
-    });
+    let cursor: ChildNode | null = this.tabStripEl.firstChild;
+    for (const tab of wanted) {
+      let item = Array.from(this.tabStripEl.querySelectorAll<HTMLElement>(":scope > .mwv-browser-tab"))
+        .find((node) => node.dataset.mwvTabId === tab.id);
+      if (!item) {
+        item = this.tabStripEl.createEl("button", { cls: "mwv-browser-tab", attr: { type: "button" } });
+        item.dataset.mwvTabId = tab.id;
+        item.createSpan({ cls: "mwv-browser-tab-title" });
+        const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
+        setIcon(close, "x");
+        item.addEventListener("click", (event) => {
+          const target = event.target as HTMLElement | null;
+          event.preventDefault();
+          event.stopPropagation();
+          if (target?.closest(".mwv-browser-tab-close")) {
+            runAsync(() => this.closeBrowserTab(tab.id));
+          } else {
+            runAsync(() => this.switchBrowserTab(tab.id));
+          }
+        });
+      }
+      const label = tab.title || hostName(tab.url) || "New tab";
+      const titleNode = item.querySelector<HTMLElement>(".mwv-browser-tab-title");
+      if (titleNode && titleNode.textContent !== label) titleNode.textContent = label;
+      item.setAttribute("title", tab.url || label);
+      item.toggleClass("is-active", tab.id === activeId);
+      if (item !== cursor) this.tabStripEl.insertBefore(item, cursor);
+      cursor = item.nextSibling;
+    }
+    if (add.parentElement !== this.tabStripEl || this.tabStripEl.lastElementChild !== add) this.tabStripEl.appendChild(add);
   }
 
   async syncActiveBrowserTab(): Promise<void> {
@@ -8965,6 +8985,10 @@ class MobileWebviewerView extends ItemView {
     this.plugin.settings.browserTabs = this.plugin.settings.browserTabs.slice(0, MAX_BROWSER_TABS);
     this.plugin.settings.activeBrowserTabId = tab.id;
     await this.plugin.saveSettings();
+    // Sibling paths (switch / close) repaint the row here; this one used to
+    // leave it to activateBrowserView, which is a compat shim that can return
+    // before anything repaints.
+    this.renderTabStrip();
     await this.plugin.activateBrowserView(url, true, tab.id);
     this.plugin.emitApiEvent({ type: "tab-change", tabId: tab.id, url: tab.url, title: tab.title, detail: { operation: "new" } });
   }
@@ -9291,7 +9315,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   goBack(): void {
-    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoBack?.()) {
+    if (this.plugin.canDriveBrowserSurface(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoBack?.()) {
       this.surfaceNavMode = "back";
       this.surfaceEl.goBack?.();
       return;
@@ -9306,7 +9330,7 @@ class MobileWebviewerView extends ItemView {
   }
 
   goForward(): void {
-    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoForward?.()) {
+    if (this.plugin.canDriveBrowserSurface(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.canGoForward?.()) {
       this.surfaceNavMode = "forward";
       this.surfaceEl.goForward?.();
       return;
@@ -9371,7 +9395,7 @@ class MobileWebviewerView extends ItemView {
       }
       return;
     }
-    if (this.plugin.isBrowserSurfaceReady(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.reload) {
+    if (this.plugin.canDriveBrowserSurface(this.surfaceEl) && this.plugin.isElectronWebview(this.surfaceEl) && this.surfaceEl.reload) {
       this.surfaceNavMode = "reload";
       this.surfaceEl.reload();
       return;
@@ -13569,6 +13593,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (embed && embed.dataset.mwvBrowserMode !== "web") {
       this.setNoteBrowserEmbedMode(embed, "web");
     }
+    // The caller has already recorded the tab change (or created the tab); make
+    // the row reflect it. openNoteBrowser is not guaranteed to repaint the
+    // strip — its render tokens can supersede each other — so the repaint
+    // cannot be left to it.
+    this.refreshEmbedTabstrips();
   }
 
   async openNoteBrowser(input?: string, newTab = false): Promise<void> {
@@ -14143,7 +14172,17 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation?.();
-        if (!this.canNavigateEmbed(current, direction)) return;
+        // Re-derive the state before giving up. A jump made inside the page
+        // never passes through the host, so this flag is regularly one
+        // navigation behind; returning silently there is what made the header
+        // arrows appear to do nothing at all.
+        if (!this.canNavigateEmbed(current, direction)) {
+          this.syncEmbedChromeNavState(current);
+          if (!this.canNavigateEmbed(current, direction)) {
+            new Notice(direction === "forward" ? this.tr("noNextPage") : this.tr("noPreviousPage"));
+            return;
+          }
+        }
         if (direction === "back") void this.navigateEmbedBack(current);
         else void this.navigateEmbedForward(current);
       };
@@ -14239,6 +14278,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.syncNoteBrowserNativeIdentity(embed, embed.dataset.url || this.settings.homeUrl);
     this.alignEmbedChromeToLiveUrl(embed);
+    // A mode switch toggles the leaf classes that decide where the tab strip
+    // lives, so reconcile it (once, in place) and re-derive the nav state
+    // instead of leaving the toolbar showing the previous presentation.
+    this.renderEmbedTabstrip(embed);
+    this.syncEmbedChromeNavState(embed);
   }
 
   /**
@@ -14276,9 +14320,12 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   canNavigateEmbed(embed: HTMLElement, direction: "back" | "forward"): boolean {
     const surface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
-    if (this.isElectronWebview(surface)) {
+    if (this.isElectronWebview(surface) && this.canDriveBrowserSurface(surface)) {
+      // The guest owns the real page history, so it decides first — and it must
+      // be asked even while it is still reporting "not ready" after a
+      // detach/re-attach cycle. Gating this on isBrowserSurfaceReady() left the
+      // controls permanently disabled on any re-adopted surface.
       try {
-        if (!this.isBrowserSurfaceReady(surface)) return false;
         if (direction === "back" && surface.canGoBack?.()) return true;
         if (direction === "forward" && surface.canGoForward?.()) return true;
       } catch {
@@ -14286,6 +14333,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     }
     return this.getEmbedStack(embed, direction === "back" ? "mwvBack" : "mwvForward").length > 0;
+  }
+
+  /**
+   * True while a browser surface is attached and may still be driven. A surface
+   * that is mid-teardown must not be asked to navigate, but one that merely
+   * reports "not ready" yet is still the page the user is looking at.
+   */
+  canDriveBrowserSurface(element: Element | null | undefined): boolean {
+    return Boolean(element && element.isConnected);
   }
 
   // Routes a clicked note link to the configured default view. "noteweb"
@@ -14617,6 +14673,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       void this.addConsole("error", `Render failed: ${error instanceof Error ? error.message : String(error)}`, nextUrl);
       this.renderEmbedFallback(embed, nextUrl, hostName(nextUrl));
     }
+    // The ordinary article path used to skip this, so the shared tab record kept
+    // the previous url/title while the page, the address bar and the history had
+    // already moved on. The tab strip renders from that record, and switching
+    // back to a tab navigates to its stored url — a stale entry made the row
+    // look broken.
+    await this.syncEmbedActiveTab(embed, nextUrl, this.getEmbedSurfaceTitle(embed) || hostName(nextUrl));
   }
 
   /**
@@ -14671,6 +14733,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async syncEmbedActiveTab(embed: HTMLElement, url = embed.dataset.url || this.settings.homeUrl, title = ""): Promise<void> {
+    // Every navigation, tab switch and mode change funnels through here, so this
+    // is the one place that guarantees the chrome's back/forward state matches
+    // the history the user can actually see.
+    this.syncEmbedChromeNavState(embed);
     const tab = this.getEmbedActiveTab(embed);
     await this.updateBrowserTab(tab.id, {
       title: title || this.getEmbedSurfaceTitle(embed) || hostName(url),
@@ -14696,6 +14762,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.noteBrowserForward = [...(tab.forward ?? [])];
     await this.saveSettings();
     await this.openUrlInEmbed(embed, tab.url, false);
+    // Whatever the navigation did (including bailing out), the row must show
+    // the tab the user just tapped as the active one.
+    this.settleEmbedTabs(embed);
     this.emitApiEvent({ type: "tab-change", tabId: id, url: tab.url, title: tab.title, detail: { operation: "switch" } });
   }
 
@@ -14712,7 +14781,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.setEmbedStack(embed, "mwvBack", []);
     this.setEmbedStack(embed, "mwvForward", []);
     await this.saveSettings();
+    // Paint the new entry immediately. The navigation below is allowed to bail
+    // (superseded render token / reader flush re-entry), and when it does
+    // nothing else would ever have refreshed the row: the tab would sit in the
+    // record while the strip kept showing the previous one as active.
+    this.settleEmbedTabs(embed);
     await this.openUrlInEmbed(embed, tab.url, false);
+    this.settleEmbedTabs(embed);
     this.emitApiEvent({ type: "tab-change", tabId: tab.id, url: tab.url, title: tab.title, detail: { operation: "new" } });
   }
 
@@ -14729,6 +14804,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.dataset.mwvActiveTabId = replacement.id;
       await this.saveSettings();
       await this.openUrlInEmbed(embed, replacement.url, false);
+      this.settleEmbedTabs(embed);
       this.emitApiEvent({ type: "tab-close", tabId: id, detail: { activeTabId: replacement.id } });
       return;
     }
@@ -14740,10 +14816,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.activeBrowserTabId = next.id;
       await this.saveSettings();
       await this.openUrlInEmbed(embed, next.url, false);
+      this.settleEmbedTabs(embed);
       return;
     }
     await this.saveSettings();
-    this.renderEmbedTabStrip(embed);
+    this.settleEmbedTabs(embed);
   }
 
   async navigateEmbedBack(embed: HTMLElement): Promise<void> {
@@ -14814,43 +14891,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  /**
+   * Legacy name, kept for existing callers. The `.mwv-embed-tab-strip` element
+   * this used to target is no longer rendered by the chrome (the strip moved
+   * into the RealWeb chrome / Obsidian header as `.mwv-embed-tabstrip`), so the
+   * body was dead: it returned on its first line every time. Closing a
+   * background tab was the visible casualty — the tab row never changed.
+   */
   renderEmbedTabStrip(embed: HTMLElement): void {
-    const strip = embed.querySelector<HTMLElement>(".mwv-embed-tab-strip");
-    if (!strip) return;
-    strip.empty();
-    const activeTab = this.getEmbedActiveTab(embed);
-    const tabs = this.settings.browserTabs.length ? this.settings.browserTabs : [activeTab];
-    for (const tab of tabs.slice(0, MAX_BROWSER_TABS)) {
-      const item = strip.createEl("button", {
-        cls: tab.id === activeTab.id ? "mwv-browser-tab is-active" : "mwv-browser-tab",
-        attr: { type: "button", title: tab.url }
-      });
-      item.createSpan({ cls: "mwv-browser-tab-title", text: tab.title || hostName(tab.url) || "New tab" });
-      const close = item.createSpan({ cls: "mwv-browser-tab-close", attr: { "aria-hidden": "true" } });
-      setIcon(close, "x");
-      item.addEventListener("click", (event) => {
-        runAsync(async () => {
-        const target = event.target as HTMLElement | null;
-        event.preventDefault();
-        event.stopPropagation();
-        if (target?.closest(".mwv-browser-tab-close")) {
-          await this.closeEmbedBrowserTab(embed, tab.id);
-        } else {
-          await this.switchEmbedBrowserTab(embed, tab.id);
-        }
-        });
-      });
-    }
-    const add = strip.createEl("button", {
-      cls: "mwv-browser-tab-add",
-      attr: { type: "button", title: this.tr("newTab"), "aria-label": this.tr("newTab") }
-    });
-    setIcon(add, "plus");
-    add.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.newEmbedBrowserTab(embed);
-    });
+    this.renderEmbedTabstrip(embed);
   }
 
   renderUtilityEmbed(embed: HTMLElement, kind: UtilityPageKind, url = utilityPageUrl(kind)): void {
@@ -15326,53 +15375,221 @@ export default class MobileWebviewerPlugin extends Plugin {
       more.dataset.mwvTitle = title;
     }
     const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-    if (chrome) this.renderEmbedTabstrip(embed, chrome);
+    if (chrome) {
+      // Re-claim on every update, not only when the chrome is rebuilt. After a
+      // plugin reload the chrome is still "healthy", so ensureEmbedChrome takes
+      // this branch and the row would keep the unloaded instance's handlers.
+      this.bindEmbedChrome(embed, chrome);
+      this.renderEmbedTabstrip(embed, chrome);
+      // The enabled state depends on the live history, which changes on every
+      // navigation and on every guest-initiated jump. Refreshing it here (and
+      // never rebuilding the toolbar to do it) is what keeps back/forward
+      // honest without making the controls unclickable.
+      this.syncEmbedChromeNavState(embed);
+    }
     this.syncNoteBrowserNativeIdentity(embed, url);
   }
 
-  /** Tab strip for RealWeb — the shared browser tabs rendered inside the embed chrome. */
-  renderEmbedTabstrip(embed: HTMLElement, chrome: HTMLElement): void {
-    if (!chrome?.isConnected) return;
-    // The strip can live in two places: Obsidian's view-header row (RealWeb
-    // immersive mode — same row as the native header buttons) or the top of
-    // the embed chrome (fallback / note mode). Remove stale strips from both
-    // hosts so re-renders never duplicate tabs.
+  /**
+   * Re-evaluate every back/forward control for this embed, in place. There are
+   * two sets: the buttons the plugin draws in the chrome, and Obsidian's own
+   * header arrows, which the plugin re-binds (bindNoteBrowserNativeNav). Both
+   * used to have their enabled state decided once — when the toolbar or the leaf
+   * binding was built — so a navigation that happened afterwards left them
+   * showing a stale state forever.
+   */
+  syncEmbedChromeNavState(embed: HTMLElement): void {
+    const back = this.canNavigateEmbed(embed, "back");
+    const forward = this.canNavigateEmbed(embed, "forward");
+    const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+    for (const button of Array.from(chrome?.querySelectorAll<HTMLButtonElement>("button[data-mwv-browser-nav]") ?? [])) {
+      const action = button.dataset.mwvBrowserNav;
+      if (action !== "back" && action !== "forward") continue;
+      const enabled = action === "back" ? back : forward;
+      button.disabled = !enabled;
+      button.toggleClass("is-disabled", !enabled);
+      button.setAttribute("aria-disabled", String(!enabled));
+    }
+    const leaf = this.findWorkspaceLeafForElement(embed);
+    const binding = leaf ? this.noteBrowserNativeBindings.get(leaf) : undefined;
+    if (!binding) return;
+    for (const entry of binding.navButtons) {
+      if (!entry.element.isConnected) continue;
+      const enabled = entry.direction === "back" ? back : forward;
+      entry.element.toggleClass("is-disabled", !enabled);
+      entry.element.setAttribute("aria-disabled", String(!enabled));
+      if (entry.element instanceof HTMLButtonElement) entry.element.disabled = !enabled;
+    }
+  }
+
+  /**
+   * Tab strip for RealWeb — the shared browser tabs rendered inside the embed
+   * chrome (or sharing Obsidian's header row in NoteWeb).
+   *
+   * This reconciles the existing strip *in place*. The previous version deleted
+   * every `.mwv-embed-tabstrip` in the leaf and built a fresh one on every
+   * chrome update — including the 1.2 s heartbeat — and moved it between the
+   * header and the chrome depending on a class that toggles with the front
+   * mode. On a real tap the pointerdown then landed on a node that no longer
+   * existed by the time the click was dispatched, so tabs did nothing; and the
+   * row visibly jumped between two hosts. One strip, one host, update only what
+   * changed.
+   */
+  renderEmbedTabstrip(embed: HTMLElement, chrome?: HTMLElement | null): void {
+    const chromeEl = chrome ?? embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+    if (!chromeEl?.isConnected) return;
     const leafContent = embed.closest<HTMLElement>(".workspace-leaf-content");
-    leafContent?.querySelectorAll<HTMLElement>(".mwv-embed-tabstrip").forEach((stale) => stale.remove());
-    if (this.settings.browserTabs.length === 0) return;
-    const strip = chrome.createDiv({ cls: "mwv-embed-tabstrip" });
     const header = leafContent?.querySelector<HTMLElement>(".view-header");
     const headerActions = header?.querySelector<HTMLElement>(".view-actions");
-    if (leafContent?.hasClass("mwv-note-browser-view") && header && headerActions) {
-      // NoteWeb (both Note and Web fronts): the browser tabs replace the URL
-      // title in the header row, sharing it with the native header buttons.
-      strip.addClass("mwv-embed-tabstrip-in-header");
-      header.insertBefore(strip, headerActions);
-    } else {
-      chrome.insertBefore(strip, chrome.firstChild);
+    const useHeader = Boolean(leafContent?.hasClass("mwv-note-browser-view") && header && headerActions);
+    const scope = leafContent ?? chromeEl;
+    const strips = Array.from(scope.querySelectorAll<HTMLElement>(".mwv-embed-tabstrip"));
+    if (this.settings.browserTabs.length === 0) {
+      for (const stale of strips) stale.remove();
+      return;
     }
+    let strip = strips.find((candidate) => (useHeader ? candidate.parentElement === header : candidate.parentElement === chromeEl)) ?? null;
+    for (const stale of strips) {
+      // Exactly one strip, living in exactly one host.
+      if (stale !== strip) stale.remove();
+    }
+    if (!strip) {
+      if (useHeader && header && headerActions) {
+        strip = header.createDiv({ cls: "mwv-embed-tabstrip" });
+        header.insertBefore(strip, headerActions);
+      } else {
+        strip = chromeEl.createDiv({ cls: "mwv-embed-tabstrip" });
+        chromeEl.insertBefore(strip, chromeEl.firstChild);
+      }
+    }
+    strip.toggleClass("mwv-embed-tabstrip-in-header", strip.parentElement === header);
+    this.bindEmbedTabstrip(strip, embed);
+
+    const wantedTabs = this.settings.browserTabs.slice(0, 12);
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
-    for (const tab of this.settings.browserTabs.slice(0, 12)) {
-      const item = strip.createDiv({ cls: "mwv-embed-tab" + (tab.id === activeId ? " is-active" : "") });
-      item.createSpan({ cls: "mwv-embed-tab-title", text: tab.title || hostName(tab.url || "") });
-      const close = item.createSpan({ cls: "mwv-embed-tab-close", attr: { "aria-label": this.tr("close") } });
-      setIcon(close, "x");
-      item.addEventListener("click", (event) => {
+    const wantedIds = new Set(wantedTabs.map((tab) => tab.id));
+    for (const node of Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab"))) {
+      if (!wantedIds.has(node.dataset.mwvTabId ?? "")) node.remove();
+    }
+    const addButton = this.ensureEmbedTabstripAdd(embed, strip);
+    let cursor: ChildNode | null = strip.firstChild;
+    for (const tab of wantedTabs) {
+      let item = this.findEmbedTabstripItem(strip, tab.id);
+      if (!item) {
+        item = strip.createDiv({ cls: "mwv-embed-tab" });
+        item.dataset.mwvTabId = tab.id;
+        item.createSpan({ cls: "mwv-embed-tab-title" });
+        const close = item.createSpan({
+          cls: "mwv-embed-tab-close",
+          attr: { "aria-label": this.tr("close"), role: "button", "data-mwv-tab-action": "close" }
+        });
+        setIcon(close, "x");
+      }
+      const label = tab.title || hostName(tab.url || "");
+      const titleNode = item.querySelector<HTMLElement>(".mwv-embed-tab-title");
+      if (titleNode && titleNode.textContent !== label) titleNode.textContent = label;
+      item.setAttribute("title", tab.url || label);
+      item.toggleClass("is-active", tab.id === activeId);
+      // Reordering moves the existing node; it never recreates it.
+      if (item !== cursor) strip.insertBefore(item, cursor);
+      cursor = item.nextSibling;
+    }
+    if (addButton.parentElement !== strip || strip.lastElementChild !== addButton) strip.appendChild(addButton);
+  }
+
+  /**
+   * Re-assert the tab row from the shared record, unconditionally.
+   *
+   * Creating, switching and closing a tab all change `settings.browserTabs`
+   * and `settings.activeBrowserTabId`, but the row itself is painted by
+   * renderEmbedTabstrip — and the only thing that used to call it was the
+   * navigation that followed the mutation. That navigation can bail before it
+   * touches the chrome (a superseded render token, an early return, a reader
+   * flush that re-enters openUrlInEmbed), and the note layer restores saved
+   * `dataset.*` snapshots over the live embed, which put the old active id
+   * back. The result: the tab existed in the record but not in the row, the
+   * previous tab stayed highlighted, and tapping a tab looked like a no-op.
+   * Called after every tab mutation so the row can never drift from the record.
+   */
+  settleEmbedTabs(embed: HTMLElement): void {
+    if (!embed.isConnected) return;
+    const tabs = this.settings.browserTabs;
+    const wanted = this.settings.activeBrowserTabId;
+    if (wanted && tabs.some((tab) => tab.id === wanted)) {
+      embed.dataset.mwvActiveTabId = wanted;
+    } else if (!tabs.some((tab) => tab.id === embed.dataset.mwvActiveTabId)) {
+      embed.dataset.mwvActiveTabId = tabs[0]?.id ?? "";
+    }
+    this.renderEmbedTabstrip(embed);
+    this.syncEmbedChromeNavState(embed);
+  }
+
+  /**
+   * Repaint every live NoteWeb toolbar from the shared tab record. Tab
+   * mutations happen in three places — the chrome row, the retired standalone
+   * view, and the automation API — and only some of them are followed by a
+   * navigation that repaints the chrome. One central repaint is what keeps the
+   * row and the record in step for the paths that have no navigation at all.
+   */
+  refreshEmbedTabstrips(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const embed = this.getNoteBrowserEmbed(leaf);
+      if (embed) this.settleEmbedTabs(embed);
+    }
+  }
+
+  /**
+   * Own the tab row with one delegated listener.
+   *
+   * The row lives in the leaf header (or the chrome), so it is not owned by the
+   * plugin: it survives a plugin reload while the listeners the previous
+   * instance attached do not. Those stale listeners stayed on the nodes and
+   * kept closing over the unloaded instance, so after an update the "+" button
+   * and the tabs were wired to a plugin that no longer ran — the tap arrived,
+   * and the live settings store never saw it. One delegated listener, guarded
+   * by the owning instance, makes the row self-healing: a new instance claims
+   * the strip, and every older listener bows out.
+   */
+  bindEmbedTabstrip(strip: HTMLElement, embed: HTMLElement): void {
+    const owned = strip as HTMLElement & { _mwvTabOwner?: unknown };
+    if (owned._mwvTabOwner === this) return;
+    owned._mwvTabOwner = this;
+    strip.addEventListener("click", (event) => {
+      if (owned._mwvTabOwner !== this) return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".mwv-embed-tab-new")) {
         event.preventDefault();
         event.stopPropagation();
-        const hitClose = (event.target as HTMLElement | null)?.closest(".mwv-embed-tab-close");
-        const rerender = () => this.renderEmbedTabstrip(embed, chrome);
-        if (hitClose) void this.closeEmbedBrowserTab(embed, tab.id).then(rerender);
-        else void this.switchEmbedBrowserTab(embed, tab.id).then(rerender);
-      });
-    }
-    const plus = strip.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
-    setIcon(plus, "plus");
-    plus.addEventListener("click", (event) => {
+        void this.newEmbedBrowserTab(embed);
+        return;
+      }
+      const item = target.closest<HTMLElement>(".mwv-embed-tab");
+      if (!item || !strip.contains(item)) return;
+      const tabId = item.dataset.mwvTabId;
+      if (!tabId) return;
       event.preventDefault();
       event.stopPropagation();
-      void this.newEmbedBrowserTab(embed).then(() => this.renderEmbedTabstrip(embed, chrome));
+      if (target.closest(".mwv-embed-tab-close")) void this.closeEmbedBrowserTab(embed, tabId);
+      else void this.switchEmbedBrowserTab(embed, tabId);
     });
+  }
+
+  findEmbedTabstripItem(strip: HTMLElement, tabId: string): HTMLElement | null {
+    return Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab")).find((node) => node.dataset.mwvTabId === tabId) ?? null;
+  }
+
+  ensureEmbedTabstripAdd(embed: HTMLElement, strip: HTMLElement): HTMLElement {
+    void embed;
+    let add = strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-new");
+    if (!add) {
+      add = strip.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
+      setIcon(add, "plus");
+      // The click is handled by the strip's delegated listener
+      // (bindEmbedTabstrip) so a reloaded plugin can reclaim the row instead of
+      // inheriting a listener bound to the instance that no longer runs.
+    }
+    return add;
   }
 
   updateEmbedStatus(embed: HTMLElement, url: string, title = ""): void {
@@ -15767,33 +15984,40 @@ export default class MobileWebviewerPlugin extends Plugin {
     const setMode = (mode: "note" | "web" | "split") => {
       this.setNoteBrowserEmbedMode(embed, mode);
     };
-    const makeNavButton = (icon: string, label: string, onClick: () => void, disabled = false) => {
+    const makeNavButton = (icon: string, label: string, disabled = false, action = "") => {
       const button = controls.createEl("button", {
         cls: "mwv-browser-nav",
-        attr: { type: "button", title: label, "aria-label": label }
+        attr: {
+          type: "button",
+          title: label,
+          "aria-label": label,
+          ...(action ? { "data-mwv-browser-nav": action } : {})
+        }
       });
       button.disabled = disabled;
+      button.toggleClass("is-disabled", disabled);
+      button.setAttribute("aria-disabled", String(disabled));
       setIcon(button, icon);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!button.disabled) onClick();
-      });
+      // The click is handled by the chrome's delegated listener
+      // (bindEmbedChrome). A per-button listener would be bound to this plugin
+      // instance, and the toolbar outlives a plugin reload — every control then
+      // stays wired to an instance that no longer runs, which is exactly how a
+      // freshly updated plugin ends up with a row that ignores every tap.
       return button;
     };
 
-    makeNavButton("arrow-left", this.tr("back"), () => void this.navigateEmbedBack(embed), this.getEmbedStack(embed, "mwvBack").length === 0);
-    makeNavButton("arrow-right", this.tr("forward"), () => void this.navigateEmbedForward(embed), this.getEmbedStack(embed, "mwvForward").length === 0);
+    makeNavButton("arrow-left", this.tr("back"), !this.canNavigateEmbed(embed, "back"), "back");
+    makeNavButton("arrow-right", this.tr("forward"), !this.canNavigateEmbed(embed, "forward"), "forward");
+    // Home stays in the row: it is the quickest way back to the configured
+    // start page, and it is the one control that behaves identically on desktop
+    // (guest src) and on mobile (frame load).
+    makeNavButton("home", this.tr("home"), false, "home");
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
     });
     setIcon(save, "file-down");
-    save.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.exportEmbedWebNote(embed);
-    });
+    // Handled by the chrome's delegated listener (bindEmbedChrome).
     // The More button lives beside the NoteDraw wand in the leaf header
     // (view-actions) instead of the chrome row, with its own icon.
     this.ensureNoteBrowserMoreButton(embed, url, title);
@@ -15822,11 +16046,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       attr: { type: "submit", title: this.tr("go"), "aria-label": this.tr("go") }
     });
     setIcon(go, "arrow-right");
-    address.addEventListener("submit", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.openUrlInEmbed(embed, addressInput.value);
-    });
+    // The submit is handled by the chrome's delegated listener
+    // (bindEmbedChrome) so a reloaded plugin can claim the row.
     // Back / forward / reload join the address row's left side, removing the
     // separate controls row so the content area grows.
     for (const button of Array.from(controls.querySelectorAll<HTMLElement>(".mwv-browser-nav")).reverse()) {
@@ -15834,6 +16055,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     controls.remove();
 
+    this.bindEmbedChrome(embed, chrome);
     this.renderBookmarksBar(embed);
     this.renderEmbedTabstrip(embed, chrome);
     const initialMode = ["note", "web", "split"].includes(embed.dataset.mwvBrowserMode ?? "")
@@ -15842,6 +16064,78 @@ export default class MobileWebviewerPlugin extends Plugin {
     setMode(initialMode || "note");
     this.watchEmbedChrome(embed);
     this.syncNoteBrowserNativeIdentity(embed, url);
+  }
+
+  /**
+   * Own the toolbar with delegated listeners, guarded by the owning instance.
+   *
+   * The chrome lives in the note's DOM, so it outlives a plugin reload while
+   * the listeners the previous instance attached do not. Per-button listeners
+   * kept closing over the unloaded instance, so after an update back, forward,
+   * home, go and save were all wired to a plugin that no longer ran: the tap
+   * arrived and nothing happened. One delegated listener per chrome, claimed by
+   * the live instance, lets a reloaded plugin take the toolbar back instead of
+   * inheriting dead handlers — the same contract as bindEmbedTabstrip.
+   */
+  bindEmbedChrome(embed: HTMLElement, chrome: HTMLElement): void {
+    const owned = chrome as HTMLElement & { _mwvChromeOwner?: unknown };
+    if (owned._mwvChromeOwner === this) return;
+    owned._mwvChromeOwner = this;
+    const stillMine = () => owned._mwvChromeOwner === this;
+    chrome.addEventListener("click", (event) => {
+      if (!stillMine()) return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const nav = target.closest<HTMLButtonElement>("button[data-mwv-browser-nav]");
+      if (nav) {
+        event.preventDefault();
+        event.stopPropagation();
+        const action = nav.dataset.mwvBrowserNav;
+        if (nav.disabled) {
+          // The flag can be one navigation behind: a jump made inside the guest
+          // never runs through the host, so the host stack looks empty while the
+          // guest can still go back. Re-derive the state before deciding the
+          // control is dead — a button that looks enabled must never do nothing.
+          this.syncEmbedChromeNavState(embed);
+          if (nav.disabled) {
+            new Notice(action === "forward" ? this.tr("noNextPage") : this.tr("noPreviousPage"));
+            return;
+          }
+        }
+        if (action === "back") this.runBrowserAction("back", this.navigateEmbedBack(embed));
+        else if (action === "forward") this.runBrowserAction("forward", this.navigateEmbedForward(embed));
+        else if (action === "home") this.runBrowserAction("home", this.openUrlInEmbed(embed, this.settings.homeUrl));
+        return;
+      }
+      if (target.closest(".mwv-browser-action")) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.runBrowserAction("save", this.exportEmbedWebNote(embed));
+      }
+    });
+    chrome.querySelector<HTMLElement>(".mwv-browser-address")?.addEventListener("submit", (event) => {
+      if (!stillMine()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const input = chrome.querySelector<HTMLInputElement>(".mwv-browser-url");
+      this.runBrowserAction("open", this.openUrlInEmbed(embed, input?.value ?? ""));
+    });
+  }
+
+  /**
+   * Run a toolbar action and surface the failure.
+   *
+   * Every control on the row used to `void` its async work, so a rejection — a
+   * reader flush that failed, a detached embed, a superseded token — vanished
+   * without a trace: the row looked wired while the action never happened. A
+   * control that cannot do its job has to say so.
+   */
+  runBrowserAction(label: string, work: Promise<unknown> | void): void {
+    void Promise.resolve(work).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[mobile-webviewer] ${label} failed`, error);
+      void this.addConsole("error", `${label}: ${message}`);
+    });
   }
 
   // The More entry used to be a chrome-row action; it now lives in the leaf
@@ -15864,7 +16158,15 @@ export default class MobileWebviewerPlugin extends Plugin {
         }
       });
       setIcon(button, "wrench");
+    }
+    // Re-claimed on every call: the button lives in Obsidian's leaf header and
+    // survives a plugin reload, so the handler must belong to the live
+    // instance. A stale listener bows out through the owner check below.
+    const ownedMore = button as MoreButton & { _mwvMoreOwner?: unknown };
+    if (ownedMore._mwvMoreOwner !== this) {
+      ownedMore._mwvMoreOwner = this;
       button.addEventListener("click", (event) => {
+        if (ownedMore._mwvMoreOwner !== this) return;
         event.preventDefault();
         event.stopPropagation();
         const moreButton = event.currentTarget as MoreButton | null;
@@ -15945,7 +16247,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     const url = embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const title = embed.dataset.mwvCurrentTitle || this.getEmbedSurfaceTitle(embed) || hostName(url);
     const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-    if (chrome?.querySelector(".mwv-browser-more")) {
+    // "Is the chrome still healthy" must be answered with something that really
+    // lives inside it. This used to probe for the More button, which is anchored
+    // beside the NoteDraw wand in the leaf header (view-actions) and is
+    // therefore never a descendant of the chrome: the test could not pass, so
+    // the heartbeat rebuilt the entire toolbar every 1.2 s. Tearing the address
+    // row, the nav buttons and the tab strip down dozens of times a minute is
+    // exactly why those controls appeared to ignore taps.
+    if (chrome?.querySelector(".mwv-browser-address .mwv-browser-url")) {
       this.updateEmbedChrome(embed, url, title);
       this.pinEmbedChrome(embed);
       return;
@@ -15953,7 +16262,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     const scrollTop = embed.scrollTop;
     this.renderBrowserChrome(embed, url, title);
     this.pinEmbedChrome(embed);
-    embed.scrollTop = scrollTop;
+    // Only write scrollTop back when it actually moved: the write needs the
+    // scroll extent and forces a synchronous relayout inside the observer tick.
+    if (embed.scrollTop !== scrollTop) embed.scrollTop = scrollTop;
     void this.addConsole("warn", "NoteWeb navigation toolbar restored", url);
   }
 
@@ -15963,9 +16274,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed.querySelector<HTMLElement>(":scope > .mwv-bookmarks-bar")
     ].filter((node): node is HTMLElement => Boolean(node));
     let anchor: ChildNode | null = embed.firstChild;
+    // Skip the whitespace text nodes that Markdown rendering leaves between
+    // elements, otherwise the "already in place" test below never matches and
+    // every tick re-inserts nodes that were already first.
+    while (anchor && anchor.nodeType === Node.TEXT_NODE && !(anchor.textContent ?? "").trim()) anchor = anchor.nextSibling;
     for (const node of nodes) {
       if (anchor === node) {
         anchor = node.nextSibling;
+        while (anchor && anchor.nodeType === Node.TEXT_NODE && !(anchor.textContent ?? "").trim()) anchor = anchor.nextSibling;
         continue;
       }
       embed.insertBefore(node, anchor);
@@ -19156,6 +19472,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       const next = this.ensureBrowserTab(this.settings.activeBrowserTabId === id ? "" : this.settings.activeBrowserTabId);
       this.settings.activeBrowserTabId = next.id;
       await this.saveSettings();
+      // No navigation follows on this path, so the repaint has to be explicit.
+      this.refreshEmbedTabstrips();
     }
     const activeTabId = this.settings.activeBrowserTabId;
     this.emitApiEvent({ type: "tab-close", tabId: id, detail: { activeTabId } });

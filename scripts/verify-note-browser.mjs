@@ -55,7 +55,12 @@ const classifiesAsChrome = (className) => !!noisePattern && noisePattern.test(cl
 const checks = [
   ["standalone results use the available workspace width", styles.includes('.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results') && styles.includes("max-width: none")],
   ["NoteWeb embeds opt out of Obsidian readable line width", source.includes("prepareWebviewerDocumentLayout(embed)") && styles.includes(".mwv-note-browser-document .markdown-preview-sizer")],
-  ["fast reload rebuilds stale or incomplete NoteWeb toolbars", source.includes("processorSessionId") && source.includes('chrome?.querySelector(".mwv-browser-more")')],
+  // The chrome-health probe has to look at something that really lives inside
+  // the chrome. Probing for the More button (anchored beside the NoteDraw wand
+  // in the leaf header) could never pass, so the 1.2 s heartbeat rebuilt the
+  // whole toolbar instead of updating it — which made every control inside it
+  // unclickable. Assert the live probe and the absence of the dead one.
+  ["fast reload rebuilds stale or incomplete NoteWeb toolbars", source.includes("processorSessionId") && source.includes('chrome?.querySelector(".mwv-browser-address .mwv-browser-url")') && !source.includes('chrome?.querySelector(".mwv-browser-more")')],
   ["missing Markdown blocks recover the visible NoteWeb root", source.includes("restoreMissingNoteBrowserEmbed(root)") && source.includes('root.matches(\".markdown-preview-view\")') && source.includes('sizer.createDiv({ cls: \"el-div\" })')],
   ["late Markdown restoration cannot duplicate the NoteWeb root", source.includes("dedupeNoteBrowserEmbedRoots(root)") && source.includes('controller?.previewEl === embed') && source.includes('embed.dataset.mwvRecovered = \"true\"')],
   ["detached Electron webviews cannot throw from delayed events", source.includes("safeWebviewUrl(webview") && source.includes("isBrowserSurfaceReady(webview)") && source.includes("_mwvDispose") && source.includes('listen("destroyed"')],

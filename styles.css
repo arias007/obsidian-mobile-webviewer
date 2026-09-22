@@ -2730,6 +2730,10 @@
   background: transparent;
   color: var(--text-muted);
   padding: 0;
+  /* Touch devices: fire the tap without the double-tap-zoom delay, and without
+     the synthetic-500 ms window in which a rebuild can steal the gesture. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mwv-browser-nav:hover,
@@ -4149,14 +4153,11 @@
 }
 
 /* --- RealWeb tab strip (shared browser tabs inside NoteWeb chrome) --- */
-.mwv-browser-chrome .mwv-embed-tabstrip {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  overflow-x: auto;
-  padding: 2px 6px 4px;
-  scrollbar-width: none;
-}
+/* The layout for this strip lives in the compact-chrome block further down.
+   Keeping a second, earlier copy of the same selector here made the row's
+   padding and alignment depend on CSS order, which showed up as a visible jump
+   every time the chrome was rebuilt. Only the scrollbar rule is unique to this
+   block, so that is all that is left. */
 .mwv-browser-chrome .mwv-embed-tabstrip::-webkit-scrollbar {
   display: none;
 }
@@ -4171,6 +4172,8 @@
   border: 1px solid var(--background-modifier-border);
   cursor: pointer;
   flex: 0 0 auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .mwv-embed-tab.is-active {
   background: var(--interactive-accent);
@@ -4206,6 +4209,8 @@
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* --- NoteWeb (Note + Web fronts): browser tabs share the header row with the native buttons --- */
@@ -4231,6 +4236,14 @@
 .workspace-leaf-content.mwv-realweb-immersive .mwv-browser-chrome {
   grid-template-areas: "address actions" !important;
   grid-template-columns: minmax(0, 1fr) auto !important;
+}
+/* In this presentation the tabs live in the Obsidian header row (NoteWeb
+   replaces the header title with them). This chrome defines only the
+   address/actions areas, so a strip left inside it would reference an undefined
+   grid area and be pushed into an implicit row — which is what pushed the tabs
+   over the address bar. Hide it there rather than misplacing it. */
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-chrome > .mwv-embed-tabstrip {
+  display: none;
 }
 .workspace-leaf-content.mwv-realweb-immersive .mwv-browser-actions {
   display: flex;
