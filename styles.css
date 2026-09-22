@@ -3995,6 +3995,18 @@
   z-index: 1300;
 }
 
+/* NoteDraw positions its toolbar from viewport coordinates measured in its
+   own shell. Inside an embed that math can land far outside the window
+   (measured live: position fixed, left 1221px in a 1229px viewport, width
+   285px -> only 8px visible), which reads as "the magic wand does nothing":
+   the click works, the toolbar is simply off-screen. The host owns the
+   visible area here, so pin the toolbar back inside it. */
+.mwv-embed.notedraw-shell > .notedraw-toolbar {
+  left: auto !important;
+  right: 8px !important;
+  max-width: calc(100vw - 16px);
+}
+
 .mwv-embed.notedraw-shell > .notedraw-palette-panel,
 .mwv-embed.notedraw-shell > .notedraw-text-panel {
   z-index: 1301;

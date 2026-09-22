@@ -10533,6 +10533,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.installNoteDrawRawSurfaceGuard();
     this.installNoteDrawDedupeObserver();
+    this.scheduleNoteDrawRebindAfterReload();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.installNoteDrawRawSurfaceGuard();
       this.disposeAllRawNoteDrawControllers();
@@ -13124,6 +13125,29 @@ export default class MobileWebviewerPlugin extends Plugin {
     return match;
   }
 
+  /**
+   * After this plugin reloads, embeds already sitting in open notes keep
+   * their DOM but lose every bookkeeping pass that ran when they were first
+   * rendered. NoteDraw's wand button then toggles a controller whose surface
+   * registration is stale: toggle() resolves and mounts nothing, which reads
+   * as "the magic wand is broken". Reconcile every live embed shortly after
+   * load so the native wand path works again without intercepting its clicks.
+   */
+  scheduleNoteDrawRebindAfterReload(): void {
+    for (const delay of [400, 1200, 2600, 5000]) {
+      window.setTimeout(() => {
+        this.app.workspace.containerEl
+          .querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR)
+          .forEach((embed) => {
+            if (!embed.isConnected) return;
+            if (!this.isNoteWebOwnedElement(embed)) return;
+            this.refreshNoteDrawWorkspaceBinding(embed, true, true);
+            this.queueNoteWebWandAdopt(embed);
+          });
+      }, delay);
+    }
+  }
+
   refreshNoteDrawWorkspaceBinding(root?: HTMLElement, forceEditMode = false, emitWorkspaceEvents = true): void {
     if (!root?.isConnected || !this.isNoteDrawSurfaceElement(root)) return;
     if (this.isNoteBrowserWebMode(root) && !this.isNoteBrowserRawEditingMode(root)) return;
@@ -14430,7 +14454,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const openTarget =
       event.type === "click" || event.type === "auxclick"
-        ? target.closest<HTMLElement>("[data-mwv-open-url], .mwv-bing-shortcuts a[href]")
+        ? target.closest<HTMLElement>("[data-mwv-open-url], .mwv-bing-shortcuts a[href], a[href]")
         : null;
 
     if (embed && openTarget) {
@@ -14438,6 +14462,10 @@ export default class MobileWebviewerPlugin extends Plugin {
         openTarget.dataset.mwvOpenUrl ??
         (isAnchorElement(openTarget) ? openTarget.href : "");
       if (!url) return;
+      // Only take over real web navigation. In-page anchors, scripts and
+      // non-web schemes belong to the document (or to Obsidian) as before.
+      if (!/^https?:\/\//i.test(url)) return;
+      if (isAnchorElement(openTarget) && openTarget.classList.contains("internal-link")) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -15167,6 +15195,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       } catch (error) {
         console.error("[mobile-webviewer] reader extraction failed", error);
         void this.addConsole("warn", "Reader extraction skipped", url);
+        const livePage = await this.extractLiveReaderPage(embed, url);
+        if (livePage) {
+          const note = await this.ensureWebNote(livePage);
+          if (embed.isConnected && embed.dataset.url === url) {
+            this.renderReaderPanel(reader, livePage, note, embed);
+          }
+          return;
+        }
         const fallback = await this.fetchFallbackNotePage(url, error instanceof Error ? error.message : "Reader extraction skipped");
         const note = await this.ensureWebNote(fallback);
         if (embed.isConnected && embed.dataset.url === url) {
@@ -15290,6 +15326,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       console.error("[mobile-webviewer] reader sync failed", error);
       reader.removeClass("is-loading");
       void this.addConsole("warn", "Reader sync skipped", url);
+      const livePage = await this.extractLiveReaderPage(embed, url);
+      if (!livePage || !embed.isConnected || embed.dataset.url !== url) return;
+      const note = await this.ensureWebNote(livePage);
+      this.renderReaderPanel(reader, livePage, note, embed);
+      this.notifyNoteDrawWebviewChanged(embed, true);
     }
   }
 
@@ -20622,6 +20663,71 @@ export default class MobileWebviewerPlugin extends Plugin {
         links: []
       };
     }
+  }
+
+  /**
+   * Reader fallback driven by the live page itself. requestUrl sees the raw
+   * HTML, so app-shell and bot-walled pages (baike.baidu.com among them)
+   * extract to nothing and the reader layer degrades to "No readable
+   * document body". Edge's read: mode reads the rendered DOM, and so does
+   * this: when the fetch-based pass produced nothing, ask the already-loaded
+   * webview for its own readable text. Returns null when there is no ready
+   * live surface or the text is too thin to be worth rendering.
+   */
+  async extractLiveReaderPage(embed: HTMLElement, url: string): Promise<NotePage | null> {
+    const readFrame = (): BrowserSurfaceElement | null =>
+      embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame") ??
+      embed.querySelector<BrowserSurfaceElement>("webview, iframe");
+    const attempt = async (): Promise<NotePage | null> => {
+      const frame = readFrame();
+      if (!frame || !this.isElectronWebview(frame)) return null;
+      if (!this.isBrowserSurfaceReady(frame) || typeof frame.executeJavaScript !== "function") return null;
+      const liveUrl = this.safeWebviewUrl(frame);
+      if (liveUrl && !/^https?:\/\//i.test(liveUrl)) return null;
+      if (liveUrl && url && !equivalentEmbedUrl(liveUrl, url) && hostName(liveUrl) !== hostName(url)) return null;
+      const code = [
+        "(() => {",
+        "  const body = document.body;",
+        "  if (!body) return null;",
+        "  const clone = body.cloneNode(true);",
+        "  clone.querySelectorAll('script, style, noscript, svg, canvas, iframe, nav, footer, aside, form, header, [aria-hidden=\"true\"]').forEach((n) => n.remove());",
+        "  const main = clone.querySelector(\"article, main, [role='main'], .article-content, .post-content, .entry-content, #content, .content\") || clone;",
+        "  const raw = main.innerText || body.innerText || '';",
+        "  const text = raw.replace(/\\n{3,}/g, '\\n\\n').replace(/[ \\t]{2,}/g, ' ').trim();",
+        "  if (text.length < 120) return null;",
+        "  return { title: (document.title || '').trim(), byline: location.hostname || '', text: text.slice(0, 60000) };",
+        "})()"
+      ].join("\n");
+      try {
+        const raw = await frame.executeJavaScript(code, true) as { title?: unknown; byline?: unknown; text?: unknown } | null | undefined;
+        if (!raw || typeof raw !== "object") return null;
+        const text = String(raw.text ?? "").trim();
+        if (text.length < 120) return null;
+        const title = String(raw.title ?? "").trim() || hostName(url) || "Web page";
+        const byline = String(raw.byline ?? "").trim() || hostName(url);
+        const content = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join("\n\n");
+        if (!content.trim()) return null;
+        return {
+          title,
+          url,
+          byline,
+          excerpt: content.slice(0, 420),
+          images: [],
+          content,
+          links: []
+        };
+      } catch (error) {
+        console.warn("[mobile-webviewer] live reader extraction skipped", error);
+        return null;
+      }
+    };
+    const first = await attempt();
+    if (first) return first;
+    // The live surface may still be settling when the fetch-based pass fails
+    // fast; give it one settled retry before giving up.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 2500));
+    if (!embed.isConnected) return null;
+    return attempt();
   }
 
   openSettings(): void {
