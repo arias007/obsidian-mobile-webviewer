@@ -15599,10 +15599,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (owned._mwvTabOwner !== this) return;
       const target = event.target as HTMLElement | null;
       if (!target) return;
+      // The closure's embed is frozen at first-bind time; resolve the live
+      // surface at tap time instead (see resolveTabstripEmbed).
+      const surface = this.resolveTabstripEmbed(strip, embed);
+      if (!surface) return;
       if (target.closest(".mwv-embed-tab-new")) {
         event.preventDefault();
         event.stopPropagation();
-        void this.newEmbedBrowserTab(embed);
+        void this.newEmbedBrowserTab(surface);
         return;
       }
       const item = target.closest<HTMLElement>(".mwv-embed-tab");
@@ -15611,9 +15615,48 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!tabId) return;
       event.preventDefault();
       event.stopPropagation();
-      if (target.closest(".mwv-embed-tab-close")) void this.closeEmbedBrowserTab(embed, tabId);
-      else void this.switchEmbedBrowserTab(embed, tabId);
+      if (target.closest(".mwv-embed-tab-close")) void this.closeEmbedBrowserTab(surface, tabId);
+      else void this.switchEmbedBrowserTab(surface, tabId);
     });
+  }
+
+  /**
+   * Resolve the embed a tab-row tap should act on, at tap time.
+   *
+   * The strip lives in the leaf header (or the chrome), so it outlives any one
+   * embed element: note re-renders recreate embeds, and one leaf can hold
+   * several connected copies at once — the CodeMirror widget copy in the editor
+   * and the reading-view copy. The strip binds its delegated listener once per
+   * instance (`_mwvTabOwner`), so the closure's embed is frozen at first-bind
+   * time. Every tap after a re-render then flushed, synced and navigated the
+   * hidden copy while the visible embed never moved: tapping another tab made
+   * it vanish from the row (the record switched behind a dead surface), and
+   * the close button looked dead. Resolve from the DOM instead: the leaf's own
+   * note-browser embed while it is connected, else a connected embed with real
+   * size inside the strip's leaf, else the closure's embed while it survives.
+   */
+  resolveTabstripEmbed(strip: HTMLElement, preferred: HTMLElement): HTMLElement | null {
+    const leaf = this.findWorkspaceLeafForElement(strip);
+    const authoritative = leaf ? this.getNoteBrowserEmbed(leaf) : null;
+    if (authoritative?.isConnected) return authoritative;
+    const scope = leaf?.view?.containerEl ?? strip.closest<HTMLElement>(".workspace-leaf-content");
+    const candidates: HTMLElement[] = [];
+    if (scope) {
+      for (const node of Array.from(scope.querySelectorAll<HTMLElement>(".mwv-embed[data-url]"))) {
+        if (node.isConnected) candidates.push(node);
+      }
+    }
+    if (preferred.isConnected && !candidates.includes(preferred)) candidates.push(preferred);
+    const visible = candidates.filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    const pool = visible.length > 0 ? visible : candidates;
+    if (pool.length === 0) return null;
+    return (
+      pool.find((node) => !node.closest(".cm-editor-embed") && !node.closest(".cm-html-embed"))
+      ?? pool[0]
+    );
   }
 
   findEmbedTabstripItem(strip: HTMLElement, tabId: string): HTMLElement | null {

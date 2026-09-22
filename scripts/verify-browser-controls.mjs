@@ -79,6 +79,7 @@ const METHODS = [
   "findEmbedTabstripItem",
   "ensureEmbedTabstripAdd",
   "bindEmbedTabstrip",
+  "resolveTabstripEmbed",
   "bindEmbedChrome",
   "runBrowserAction",
   "settleEmbedTabs",
@@ -726,6 +727,55 @@ check("tab taps route through the delegated strip listener", () => {
   click(win, second.querySelector(".mwv-embed-tab-title"));
   assert(calls.switchTab.length === 1 && calls.switchTab[0] === "t2", `switch not delegated: ${JSON.stringify(calls.switchTab)}`);
   return "close and switch both handled by the strip listener";
+});
+
+check("tab taps resolve the live embed at tap time, not the first-bound copy", () => {
+  const { win, embed, ctx, doc, calls, leafContent } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "One", url: "https://one.example/", back: [], forward: [] },
+    { id: "t2", title: "Two", url: "https://two.example/", back: [], forward: [] }
+  ];
+  // The real-world shape: the header strip was first bound while an older
+  // embed element existed; a note re-render created a NEW live embed, and the
+  // leaf now holds both copies (the old one stays connected but hidden).
+  const stale = doc.createElement("div");
+  stale.className = "mwv-embed";
+  stale.dataset.url = "https://stale.example/";
+  const cmWrap = doc.createElement("div");
+  cmWrap.className = "cm-html-embed";
+  cmWrap.appendChild(stale);
+  leafContent.appendChild(cmWrap);
+  const live = doc.createElement("div");
+  live.className = "mwv-embed mwv-note-embed";
+  live.dataset.url = "https://live.example/";
+  leafContent.appendChild(live);
+  // The leaf's authoritative accessor reports the live copy.
+  ctx.getNoteBrowserEmbed = () => live;
+
+  const seen = { switch: [], close: [] };
+  ctx.switchEmbedBrowserTab = (el, id) => { seen.switch.push(el === live ? "live" : el === stale ? "stale" : "other"); };
+  ctx.closeEmbedBrowserTab = (el, id) => { seen.close.push(el === live ? "live" : el === stale ? "stale" : "other"); };
+
+  // Repaint from the first-bound embed (the strip is reused; bindEmbedTabstrip
+  // early-returns, so the listener's closure still holds the first embed).
+  ctx.renderEmbedTabstrip(embed);
+  const strip = stripOf(doc);
+  assert(strip._mwvTabOwner === ctx, "the strip was not reused across re-renders");
+  const second = Array.from(strip.querySelectorAll(".mwv-embed-tab")).find((n) => n.dataset.mwvTabId === "t2");
+  click(win, second.querySelector(".mwv-embed-tab-title"));
+  click(win, second.querySelector(".mwv-embed-tab-close"));
+  assert(seen.switch.length === 1 && seen.switch[0] === "live", `switch acted on ${JSON.stringify(seen.switch)}`);
+  assert(seen.close.length === 1 && seen.close[0] === "live", `close acted on ${JSON.stringify(seen.close)}`);
+  return "both branches acted on the live embed, not the first-bound copy";
+});
+
+check("resolveTabstripEmbed falls back to a connected preferred embed", () => {
+  const { embed, ctx, doc } = createWorld();
+  const strip = stripOf(doc);
+  // No note-browser document copy: the chrome-hosted strip's own embed wins.
+  ctx.getNoteBrowserEmbed = () => null;
+  assert(ctx.resolveTabstripEmbed(strip, embed) === embed, "the connected preferred embed was not used");
+  return "chrome-hosted strips keep acting on their own embed";
 });
 
 check("a reloaded plugin reclaims the toolbar from stale nav listeners", () => {
