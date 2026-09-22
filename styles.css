@@ -1573,6 +1573,30 @@
   pointer-events: none !important;
 }
 
+/* The wand belongs to NoteDraw, so NoteDraw keeps its controller (and its
+   native button) mounted for the live guest. Its drawing layers must stay
+   invisible until the user turns element editing on with that wand. This rule
+   is state-driven on purpose: a layer NoteDraw mounts later is hidden the
+   moment it appears, so no per-mount bookkeeping (and no flicker) is needed.
+   The wand button itself is not in the list — only the drawing surface. */
+.mwv-note-browser-document .mwv-embed.is-web-front:not([data-mwv-noteweb-element-edit="true"]) :is(
+    .notedraw-canvas,
+    .notedraw-static-canvas,
+    .notedraw-embed-layer,
+    .notedraw-underlay-embed-layer,
+    .notedraw-underlay-canvas,
+    .notedraw-toolbar,
+    .notedraw-palette-panel,
+    .notedraw-brush-panel,
+    .notedraw-text-panel,
+    .notedraw-selection-menu,
+    .notedraw-format-toolbar
+  ) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* Markdown preview roots can be rebuilt by Obsidian without giving the
    post-processor another chance to add mwv-note-browser-document. Keep the
    editable address row reachable from the structural marker as well, so the

@@ -10382,6 +10382,7 @@ export default class MobileWebviewerPlugin extends Plugin {
   disposed = false;
   settings: MobileWebviewerSettings = DEFAULT_SETTINGS;
   private webDarkCssKeys = new WeakMap<object, string>();
+  private noteWebWandAdoptSeq = 0;
   processorSeq = 0;
   processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   embedRenderTokens = new WeakMap<HTMLElement, number>();
@@ -11060,6 +11061,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     anchor?.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
   }
 
+  /**
+   * The wand belongs to NoteDraw — this sync only *recognizes* NoteDraw's own
+   * button, never fabricates one. Without the NoteDraw plugin there is no
+   * element editor to open, so nothing is rendered at all.
+   *
+   * A host-fabricated fallback wand used to exist for the RealWeb guest, on
+   * the assumption that NoteDraw never mounts a button for a live page. That
+   * assumption was wrong: NoteDraw does mount its own button for the guest, so
+   * the fallback only ever produced a second wand sitting next to the native
+   * one — and because each sync pass created or removed it while the native
+   * button was adopted in and out of the anchor, the two visibly fought over
+   * the toolbar position (duplicate wand + constant flicker).
+   */
   ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
     if (!surface.isConnected || !this.isNoteDrawSurfaceElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
     // The wand is NoteDraw's entry point — without the NoteDraw plugin there
@@ -11069,10 +11083,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       return null;
     }
     const anchor = this.ensureNoteDrawStableAnchor(surface);
-    // NoteDraw's own wand always wins. NoteDraw mounts it itself (a
-    // <div class="notedraw-webview-button"> in the view-actions host since
-    // 4.x) and this sync only *recognizes* it — never restyled, never
-    // relabeled. Any fallback wand yields the moment the native one shows up.
+    // NoteDraw's own wand always wins. NoteDraw mounts it itself and this sync
+    // only recognizes it — never restyled, never relabeled, never cloned.
     const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(
       ":scope > .notedraw-webview-button:not([data-mwv-browser-more='true'])"
     );
@@ -11100,51 +11112,40 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       return adopted;
     }
-    // RealWeb only: NoteDraw never mounts a button for a live guest page, so
-    // keep a minimal fallback wand there (one clean wand icon, nothing else)
-    // that opens the cross-webview element editor. It disappears as soon as
-    // NoteDraw's native wand appears. Note/reader mode relies on NoteDraw's
-    // own header button instead — this sync must not fabricate one.
-    if (!this.isNoteBrowserWebMode(surface)) {
-      anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
-      return null;
-    }
-    let button = anchor.querySelector<NoteDrawButtonElement>("[data-mwv-noteweb-wand='true']");
-    if (!button) {
-      button = anchor.createEl("button", {
-        cls: "mwv-notedraw-web-wand mwv-notedraw-host-proxy clickable-icon",
-        attr: {
-          type: "button",
-          "data-mwv-noteweb-wand": "true",
-          "aria-label": "Web notedraw",
-          title: "Web notedraw"
+    // Nothing native yet. Leave the toolbar empty and let NoteDraw's own mount
+    // pass deliver the wand (queueNoteWebWandAdopt keeps asking for it). Any
+    // legacy fabricated button is cleaned up so it can never linger as a
+    // second wand.
+    anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
+    return null;
+  }
+
+  /**
+   * NoteDraw mounts its wand asynchronously during its own layout passes. Web
+   * mode has no other sync pass of its own, so ask NoteDraw to mount and retry
+   * adoption a few times. Nothing is fabricated while waiting, so these
+   * retries can never produce a second wand or a visible flicker — they only
+   * pick up the native button once NoteDraw has mounted it.
+   */
+  queueNoteWebWandAdopt(embed: HTMLElement): void {
+    if (!embed.isConnected || !this.isNoteDrawSurfaceElement(embed)) return;
+    const token = ++this.noteWebWandAdoptSeq;
+    for (const delay of [0, 120, 320, 700, 1300, 2200]) {
+      window.setTimeout(() => {
+        if (!embed.isConnected || this.noteWebWandAdoptSeq !== token) return;
+        if (!this.isNoteBrowserWebMode(embed)) return;
+        const native = this.findNoteDrawWebviewSourceButton(embed) ||
+          embed.querySelector(":scope > .notedraw-webview-button");
+        if (!native) {
+          try {
+            this.getNoteDrawPlugin()?.syncWebviewControllers?.();
+          } catch (error) {
+            console.warn("[mobile-webviewer] NoteDraw wand sync skipped", error);
+          }
         }
-      }) as NoteDrawButtonElement;
-      setIcon(button, "wand-sparkles");
-      // Keep the wand first: the relocated More button sits right beside it.
-      const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
-      if (moreButton) anchor.insertBefore(button, moreButton);
-      button._mwvNoteWebWandBound = true;
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation?.();
-        const current = button?._mwvNoteWebWandSurface;
-        if (!current?.isConnected || !this.isNoteDrawSurfaceElement(current)) return;
-        if (!this.isNoteBrowserWebMode(current)) return;
-        void this.toggleNoteWebRawElementEditing(current);
-      }, true);
+        this.ensureNoteWebWandProxy(embed);
+      }, delay);
     }
-    // Rebind on every pass: the owning surface may have been rebuilt while
-    // the anchor (outside the embed subtree) survived.
-    button._mwvNoteWebWandSurface = surface;
-    button.addClass("mwv-notedraw-top-button");
-    button.removeAttribute("aria-hidden");
-    button.tabIndex = 0;
-    const rawEditing = this.isNoteBrowserRawEditingMode(surface);
-    button.toggleClass("is-active", rawEditing);
-    button.setAttribute("aria-pressed", String(rawEditing));
-    return button;
   }
 
   async toggleNoteWebRawElementEditing(embed: HTMLElement): Promise<void> {
@@ -12731,6 +12732,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       // A user explicitly opened the NoteDraw editor for this one raw page.
       // Keep all other raw Web surfaces excluded before NoteDraw mounts.
       if (rawRoot instanceof HTMLElement && rawRoot.dataset.mwvNotewebElementEdit === "true") return false;
+      // NoteDraw owns the wand. Its own webview button must therefore exist for
+      // the live guest too, so a NoteWeb browser surface is no longer
+      // hard-excluded while NoteDraw is installed: NoteDraw mounts its
+      // controller (and with it its native wand), while this plugin keeps the
+      // drawing layers hidden through state-based CSS until that wand turns
+      // element editing on. Without NoteDraw nothing is mounted or shown.
+      const noteWebSurface = element.matches(".mwv-embed, .mwv-note-embed, .mwv-bing-home")
+        ? element
+        : element.closest(".mwv-embed, .mwv-note-embed, .mwv-bing-home");
+      if (noteWebSurface && this.getNoteDrawPlugin()) return false;
       return Boolean(
         element.matches(selector) ||
         element.closest(selector) ||
@@ -12968,10 +12979,22 @@ export default class MobileWebviewerPlugin extends Plugin {
     (root as NoteDrawSurfaceElement)._noteDrawController = undefined;
   }
 
+  /**
+   * Legacy standalone raw leaves (`.mwv-root.is-raw-web`) still hand their
+   * drawing controls back to the guest page.
+   *
+   * NoteWeb browser surfaces are deliberately NOT swept any more. The wand is
+   * NoteDraw's own button; destroying its controller here made the host
+   * fabricate a replacement wand while NoteDraw remounted its own on the next
+   * pass — that cycle (this method runs after every NoteDraw sync) was the
+   * duplicate wand and the constant flicker the user saw.
+   */
   disposeAllRawNoteDrawControllers(): void {
+    const isWandOwnerSurface = (element?: Element | null): boolean =>
+      Boolean(element && element.matches?.(".mwv-embed, .mwv-note-embed, .mwv-bing-home"));
     const roots = new Set<HTMLElement>();
     for (const documentEl of this.getNoteDrawDocuments()) {
-      documentEl.querySelectorAll<HTMLElement>(".mwv-root.is-raw-web, .mwv-embed.is-web-front, .mwv-note-embed.is-web-front, .mwv-bing-home.is-web-front")
+      documentEl.querySelectorAll<HTMLElement>(".mwv-root.is-raw-web")
         .forEach((root) => {
           if (root.dataset.mwvNotewebElementEdit !== "true") roots.add(root);
         });
@@ -12981,6 +13004,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     const detached = new Set<NoteDrawControllerLike>();
     plugin?.webviewControllers?.forEach((controller, surface) => {
       const preview = controller?.previewEl;
+      if (isWandOwnerSurface(preview) || isWandOwnerSurface(surface)) return;
       const isRaw = this.isRawNoteDrawExcludedSurface(surface) || this.isRawNoteDrawExcludedSurface(preview);
       if (isRaw) detached.add(controller);
     });
@@ -14159,14 +14183,25 @@ export default class MobileWebviewerPlugin extends Plugin {
         this.refreshNoteDrawWorkspaceBinding(embed, true, false);
         this.queueNoteDrawControllerSync(embed, true);
       } else {
-        // Web mode owns the viewport and must not leave an active NoteDraw
-        // shell, header proxy, or stale toolbar mounted over the guest page.
-        this.disposeNoteDrawControllersForRawSurface(embed);
-        this.disposeAllRawNoteDrawControllers();
+        // Web mode owns the viewport: the drawing layers stay isolated by the
+        // CSS state rules, but NoteDraw's own wand is kept. Destroying its
+        // webview controller here (as this used to do) removed the native
+        // wand, so the host fabricated a replacement — and then every sync
+        // pass created/removed its button while NoteDraw remounted its own.
+        // That was the duplicate wand and the constant flicker. Now the raw
+        // surface keeps exactly one wand, and it is NoteDraw's.
+        delete embed.dataset.mwvNotewebDrawingVisible;
         this.cleanupStaleNoteDrawButtonResidue(leafContent);
+        try {
+          this.getNoteDrawPlugin()?.syncWebviewControllers?.();
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw wand sync skipped", error);
+        }
         this.hideNoteDrawHeaderButtonsForWebviewerLeaf(embed);
+        this.applyNoteBrowserWebIsolation(embed, !this.isNoteBrowserRawEditingMode(embed));
       }
       this.ensureNoteWebWandProxy(embed);
+      this.queueNoteWebWandAdopt(embed);
     } else {
       // Reconcile immediately when returning to Note/Split mode so buttons
       // hidden for Web mode are restored and the current controller is the
