@@ -13840,6 +13840,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       );
       const url = (liveSibling?.dataset.url || this.settings.noteBrowserUrl || embed.dataset.url || this.settings.homeUrl);
       embed.dataset.url = url;
+      // This rebuild paints the note document for `url` again, so record it as
+      // the note layer's rendered URL for later mode-switch reconciliation.
+      embed.dataset.mwvNoteRenderedUrl = url;
       void this.renderEmbed(embed, url)
         .catch((error) => {
           console.error("[mobile-webviewer] NoteWeb render failed", error);
@@ -14558,6 +14561,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.syncRetainedLiveSurface(embed, nextUrl);
     const obsidianLink = parseObsidianOpenLink(nextUrl);
     if (obsidianLink) {
+      embed.dataset.mwvNoteRenderedUrl = nextUrl;
       await this.renderObsidianNoteEmbed(embed, obsidianLink, nextUrl);
       const file = this.resolveObsidianOpenFile(obsidianLink);
       await this.syncEmbedActiveTab(embed, nextUrl, file?.basename || obsidianLink.file);
@@ -14576,6 +14580,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.syncEmbedActiveTab(embed, nextUrl, hostName(nextUrl));
       return;
     }
+    // From here on the note document itself is going to paint this URL
+    // (utility page, Bing shell, reader article, or fallback). Remember it:
+    // the note layer only re-renders on demand, so this marker is what tells a
+    // later mode switch whether the visible note still matches the live page.
+    // Without it, a RealWeb navigation updated data-url and the address bar
+    // while the note silently kept the previous page, so switching to NoteWeb
+    // showed content that did not match the URL.
+    embed.dataset.mwvNoteRenderedUrl = nextUrl;
     const utilityKind = internalUtilityKind(nextUrl);
     if (utilityKind) {
       this.renderUtilityEmbed(embed, utilityKind, nextUrl);
@@ -14620,7 +14632,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     const retainedFrame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
     const liveUrl = retainedFrame ? this.safeBrowserSurfaceUrl(retainedFrame) : "";
     if (!liveUrl || !/^https?:\/\//i.test(liveUrl)) return;
-    if (this.sameWebPage(embed.dataset.url || "", liveUrl)) return;
+    // Compare against the URL the note document was last painted for, not
+    // against data-url: data-url follows the live page, so comparing it would
+    // report "already in sync" while the visible note still showed an older
+    // page (exactly the reported mismatch: address bar on obsidian.md, note
+    // still showing the previous Bing results).
+    const renderedUrl = embed.dataset.mwvNoteRenderedUrl || embed.dataset.url || "";
+    if (!renderedUrl || this.sameWebPage(renderedUrl, liveUrl)) return;
     void this.openUrlInEmbed(embed, liveUrl, false);
   }
 
@@ -15038,6 +15056,11 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async renderEmbed(embed: HTMLElement, url: string): Promise<void> {
+    // Every path through here paints the note document for `url`. Recording it
+    // is what lets a later Note/Web switch tell whether the visible note still
+    // matches the live page instead of trusting data-url, which follows the
+    // guest and would wrongly report "already in sync".
+    embed.dataset.mwvNoteRenderedUrl = url;
     const renderToken = ++this.embedRenderSeq;
     this.embedRenderTokens.set(embed, renderToken);
     if (this.disposed || !embed.isConnected) return;
