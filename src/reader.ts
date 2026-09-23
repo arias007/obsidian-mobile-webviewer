@@ -115,6 +115,36 @@ export function isUsableReaderMarkdown(markdown: string, minChars = READER_MIN_C
   return markdown.replace(/\s+/g, " ").trim().length >= minChars;
 }
 
+/**
+ * Recognises the reader's own failure pages.
+ *
+ * A failed extraction used to be saved as a web note, and from then on the
+ * cached failure always won over a fresh extraction — the single most common
+ * report being "NoteWeb still cannot convert this page". The failure shape is
+ * deliberate and narrow (a heading, a quoted hint, a short tail ending in the
+ * URL), so real articles never match it.
+ */
+export function looksLikeReaderFailure(text: string | null | undefined): boolean {
+  const clean = (text ?? "").trim();
+  if (!clean) return true;
+  if (
+    /No readable document body|HTTP response is blocked|HTTP response yielded too little|reading the rendered page instead/i.test(
+      clean
+    )
+  ) {
+    return true;
+  }
+  const lines = clean
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  // A page whose whole body is a quoted hint followed by the bare URL.
+  if (lines.length <= 6 && /^https?:\/\//i.test(lines[lines.length - 1] ?? "") && lines.some((line) => line.startsWith(">"))) {
+    return true;
+  }
+  return false;
+}
+
 function createTurndownService(): TurndownService {
   const service = new TurndownService({
     headingStyle: "atx",

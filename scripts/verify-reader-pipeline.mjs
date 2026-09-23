@@ -170,6 +170,36 @@ check("markdown keeps GFM task lists", /^- \[x\] 已完成项$/m.test(markdown) 
 check("markdown keeps blockquotes", /^> 引用内容$/m.test(markdown));
 check("markdown has no triple blank lines", !/\n{3,}/.test(markdown));
 
+// Failure-page recognition: a saved failure used to shadow every later visit
+// of the same URL, so the guard must match the exact failure shapes the reader
+// produces and never a real article.
+check("failure guard: empty content counts as failure", reader.looksLikeReaderFailure("") && reader.looksLikeReaderFailure(null));
+check(
+  "failure guard: matches the quoted-hint fallback page",
+  reader.looksLikeReaderFailure([
+    "# baike.baidu.com",
+    "",
+    "> 加载失败，重试",
+    "",
+    "HTTP response is blocked or empty; reading the rendered page instead",
+    "",
+    "https://baike.baidu.com/item/x"
+  ].join("\n"))
+);
+check(
+  "failure guard: matches the legacy no-body error",
+  reader.looksLikeReaderFailure("# baike.baidu.com\n\nNo readable document body\n\nhttps://baike.baidu.com/item/x")
+);
+check(
+  "failure guard: a real article never matches",
+  !reader.looksLikeReaderFailure(markdown),
+  "the hand-written article fixture must not be treated as a failure page"
+);
+check(
+  "failure guard: a short page ending in a URL without a quote is kept",
+  !reader.looksLikeReaderFailure("联系方式\n\nadmin@example.com\n\nhttps://example.com/contact")
+);
+
 // ---------------------------------------------------------------------------
 // The guest-side path: this is the one that reads anti-bot and app-shell pages,
 // so it has to be proven to actually execute in a page context, not just to

@@ -28,6 +28,7 @@ import {
   extractArticleFromHtml,
   isUsableReaderMarkdown,
   looksLikeBlockedPage,
+  looksLikeReaderFailure,
   type LiveReaderPayload,
   type ReaderArticle
 } from "./src/reader";
@@ -64,7 +65,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.3.53";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.4.26";
 const NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION = 3;
 const AD_CANDIDATE_SELECTOR = [
   "[id='ad' i]",
@@ -7495,10 +7496,6 @@ function isAnchorElement(value: unknown): value is HTMLAnchorElement {
   return Boolean(win?.HTMLAnchorElement && value instanceof win.HTMLAnchorElement);
 }
 
-function createHostDiv(): HTMLDivElement {
-  return appDocument().createElement("div");
-}
-
 function runAsync(task: () => Promise<void>): void {
   void task().catch((error) => {
     console.error("[mobile-webviewer] async UI action failed", error);
@@ -10494,6 +10491,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   noteDrawControllerRestoreTokens = new WeakMap<HTMLElement, number>();
   noteDrawControllerRestoreSeq = 0;
   noteWebRawEditingSeq = 0;
+  // Markdown rendering into the reader panel is async; a fast navigation must
+  // not let a slow, stale render repaint the panel it was superseded by.
+  private readerMarkdownRenderSeq = 0;
   noteDrawHeaderActivationTokens = new WeakMap<HTMLElement, number>();
   noteDrawHeaderActivationSeq = 0;
   noteDrawLegacyMigrationTimer = 0;
@@ -16038,18 +16038,48 @@ export default class MobileWebviewerPlugin extends Plugin {
       cls: "mwv-md-content mwv-webnote-editor",
       attr: { contenteditable: "true", spellcheck: "true" }
     });
-    if (note?.noteHtml) {
+    // The stored noteHtml is only trusted when it is not a saved failure: a
+    // failed extraction used to be persisted as a note and then re-served
+    // forever, which read exactly like "NoteWeb still cannot convert pages".
+    const cachedNoteUsable = Boolean(note?.noteHtml && !looksLikeReaderFailure(note.noteText ?? note.noteHtml));
+    if (cachedNoteUsable && note) {
       appendSafeHtml(content, note.noteHtml);
     } else {
-      const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-      const visibleBlocks = blocks.length ? blocks : [page.excerpt].filter(Boolean);
-      if (!visibleBlocks.length && !page.images.length) {
-        panel.remove();
-        return;
-      }
-      for (const block of visibleBlocks.slice(0, 40)) {
-        const clean = block.replace(/^#{1,3}\s+/, "");
-        if (clean) content.createEl("p", { text: clean });
+      const markdown = (page.content ?? "").trim() || (page.excerpt ?? "").trim();
+      if (!markdown || looksLikeReaderFailure(markdown)) {
+        if (!page.images.length) {
+          panel.remove();
+          return;
+        }
+      } else {
+        // Render the whole page as Markdown — headings, tables, task lists,
+        // fenced code, images — instead of flattening the first 40 blocks into
+        // plain paragraphs. That flattening is what made NoteWeb look like it
+        // had no page-to-Markdown conversion at all. Links inside the embed are
+        // routed back through openUrlInEmbed by the shared click handler, so
+        // reading stays inside the plugin.
+        content.addClass("markdown-rendered");
+        content.empty();
+        const renderToken = ++this.readerMarkdownRenderSeq;
+        void MarkdownRenderer.renderMarkdown(markdown, content, "", this)
+          .then(() => {
+            if (!content.isConnected || renderToken !== this.readerMarkdownRenderSeq) return;
+            // Obsidian renders external links with target="_blank"; the embed's
+            // shared click handler owns web navigation, so drop the window
+            // target and let the handler decide where links go.
+            for (const anchor of Array.from(content.querySelectorAll<HTMLAnchorElement>("a[target]"))) {
+              anchor.removeAttribute("target");
+            }
+          })
+          .catch((error) => {
+            console.error("[mobile-webviewer] reader markdown render failed", error);
+            if (!content.isConnected || renderToken !== this.readerMarkdownRenderSeq) return;
+            content.empty();
+            for (const block of markdown.split(/\n{2,}/)) {
+              const clean = block.trim();
+              if (clean) content.createEl("p", { text: clean.replace(/^#{1,6}\s+/, "") });
+            }
+          });
       }
     }
     const doodleLayer = content.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -17611,6 +17641,12 @@ export default class MobileWebviewerPlugin extends Plugin {
   getCachedPage(url: string): NotePage | null {
     const entry = this.settings.pageCache.find((item) => item.url === url);
     if (!entry) return null;
+    // Entries saved by older versions can be nearly empty — a bot wall or an
+    // app shell that slipped through before the reader grew the live-DOM pass.
+    // Treating those as a cache miss forces a fresh extraction instead of
+    // re-serving the failure the user already saw.
+    const content = (entry.content ?? "").trim();
+    if (!content || looksLikeReaderFailure(content) || content.replace(/\s+/g, "").length < 80) return null;
     return {
       title: entry.title,
       url: entry.url,
@@ -17664,29 +17700,30 @@ export default class MobileWebviewerPlugin extends Plugin {
     const id = webNoteId(page.url);
     const existing = this.settings.webNotes.find((entry) => entry.id === id || entry.url === page.url);
     if (existing) {
+      // "Existing always wins" is what kept failure pages on screen forever: a
+      // failed extraction was saved as a note, and every later visit of the
+      // same URL re-rendered the error instead of the freshly extracted
+      // article. When the stored note IS a failure and this pass actually read
+      // the page, rebuild from the page — doodles survive, they are a separate
+      // field.
+      const pageUsable = (page.content ?? "").trim().length > 0 && !looksLikeReaderFailure(page.content);
+      const storedIsFailure = looksLikeReaderFailure(existing.noteText ?? "");
+      if (pageUsable && storedIsFailure) {
+        existing.noteHtml = "";
+        existing.noteText = page.content;
+        existing.title = page.title || existing.title;
+        existing.sourceTitle = page.title || existing.sourceTitle;
+        return await this.saveWebNote(existing);
+      }
       return existing;
     }
     const note = this.createWebNoteFromPage(page);
-    note.noteHtml = this.notePageToHtml(page);
     note.noteText = page.content || page.excerpt || "";
+    // noteHtml is deliberately left empty: the reader renders the full Markdown
+    // from the page content itself (see renderReaderPanel). A flattened HTML
+    // snapshot only materialises once the user actually edits the note, so a
+    // fresh conversion is never shadowed by an older, poorer rendering.
     return await this.saveWebNote(note);
-  }
-
-  notePageToHtml(page: NotePage): string {
-    const temp = createHostDiv();
-    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-    for (const block of blocks.slice(0, 100)) {
-      if (/^#{1,3}\s+/.test(block)) {
-        const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
-        temp.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
-      } else {
-        temp.createEl("p", { text: block });
-      }
-    }
-    if (!blocks.length && page.excerpt) {
-      temp.createEl("p", { text: page.excerpt });
-    }
-    return temp.innerHTML;
   }
 
   async saveWebNote(entry: WebNoteEntry): Promise<WebNoteEntry> {
@@ -21208,6 +21245,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.openOnStartup = false;
       this.settings.browserFrontendMode = "note";
       this.settings.noteBrowserStartupDefaultVersion = NOTE_BROWSER_STARTUP_DEFAULT_VERSION;
+      // One-time migration to 0.4.26: the reader renders the full page as
+      // Markdown now. Older versions saved a flattened HTML snapshot (first 40
+      // blocks, headings stripped) and that snapshot always won over a fresh
+      // conversion, which read as "NoteWeb still cannot convert pages". Drop
+      // only the flattened HTML — the Markdown text and the doodles stay.
+      for (const note of this.settings.webNotes) {
+        if (note.noteHtml) note.noteHtml = "";
+      }
       shouldSaveSettings = true;
     }
     this.settings.uiLanguage = typeof this.settings.uiLanguage === "string" && isUiLanguage(this.settings.uiLanguage)
