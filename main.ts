@@ -13649,8 +13649,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.noteBrowserBack = [];
       this.settings.noteBrowserForward = [];
       const tab = this.ensureBrowserTab(this.settings.activeBrowserTabId);
+      // Placeholder policy (see updateBrowserTab): the old page's real name
+      // stays on the tab until the new page reports its own; a hostname only
+      // fills in when the tab never had a real name.
+      if (!tab.title || tab.title === hostName(tab.url || "")) {
+        tab.title = hostName(this.settings.noteBrowserUrl);
+      }
       tab.url = this.settings.noteBrowserUrl;
-      tab.title = hostName(this.settings.noteBrowserUrl);
       tab.back = [];
       tab.forward = [];
       tab.time = Date.now();
@@ -17241,6 +17246,24 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Update in place: reordering (MRU-to-front) made tabs jump to the left
     // whenever the active tab was synced (switch/navigate). Tab positions
     // must stay stable; only creation/close may change the order.
+    //
+    // A tab's name may only change when its own page reports a real one.
+    // Callers pass `title || hostName(url)` and the surface title is empty
+    // whenever the webview is mid-restore or still loading, so a bare-hostname
+    // title is a PLACEHOLDER, not a name — it used to overwrite the real
+    // title the page had reported ("Bing: 你好" → "bing.com"), and when no
+    // later title event fired the downgrade stuck as the background name.
+    // A hostname placeholder may therefore never replace a real name; it may
+    // still replace another hostname placeholder, and a real reported name
+    // always wins.
+    if (
+      patch.title !== undefined &&
+      tab.title &&
+      patch.title === hostName(patch.url || tab.url || "") &&
+      tab.title !== hostName(tab.url || "")
+    ) {
+      patch = { ...patch, title: tab.title };
+    }
     Object.assign(tab, patch);
     await this.saveSettings();
   }

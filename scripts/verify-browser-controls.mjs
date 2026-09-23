@@ -143,7 +143,7 @@ const makeMethodTable = buildMethodTable(source);
  * Keeping them on a side table lets a test drive the real code with `call(ctx)`.
  */
 function buildTabMutationTable(src) {
-  const names = ["newEmbedBrowserTab", "switchEmbedBrowserTab", "closeEmbedBrowserTab", "syncEmbedActiveTab"];
+  const names = ["newEmbedBrowserTab", "switchEmbedBrowserTab", "closeEmbedBrowserTab", "syncEmbedActiveTab", "updateBrowserTab"];
   const entries = names.map((name) => {
     try {
       const { isAsync, paramsAndBody } = extractMethod(src, name);
@@ -155,16 +155,19 @@ function buildTabMutationTable(src) {
     }
   });
   // syncEmbedActiveTab compares URLs through the module-level
-  // equivalentEmbedUrl, so that function has to be in scope too.
+  // equivalentEmbedUrl — extracted here. hostName's real body pulls a deep
+  // utility-page dependency chain, so the suite's simple hostName (the same
+  // one the method table receives) is used instead.
   let eqJs = "function equivalentEmbedUrl() { throw new Error('equivalentEmbedUrl missing in this source'); }";
   try {
     eqJs = esbuild.transformSync(extractTopLevelFunction(src, "equivalentEmbedUrl"), { loader: "ts", format: "cjs", target: "es2020" }).code;
   } catch (error) {
     // keep the throwing stub
   }
+  const hostNameJs = "function hostName(url) { try { return new URL(url).hostname.replace(/^www\\./, ''); } catch { return String(url || ''); } }";
   const ts = `const __T = {\n${entries.join(",\n")}\n};\n__T;\n`;
   const js = esbuild.transformSync(ts, { loader: "ts", format: "cjs", target: "es2020" }).code;
-  return new Function("MAX_BROWSER_TABS", `${eqJs}\n${js}\nreturn __T;`)(MAX_BROWSER_TABS);
+  return new Function("MAX_BROWSER_TABS", `${eqJs}\n${hostNameJs}\n${js}\nreturn __T;`)(MAX_BROWSER_TABS);
 }
 
 const tabMutations = buildTabMutationTable(source);
@@ -704,14 +707,39 @@ check("a tab keeps its title when it goes background", async () => {
   // Drive the REAL sync (the fixture stub would bypass the code under test)
   // with an updateBrowserTab that actually mutates the record.
   ctx.syncEmbedActiveTab = tabMutations.syncEmbedActiveTab;
-  ctx.updateBrowserTab = async (id, patch) => {
-    const tab = ctx.settings.browserTabs.find((t) => t.id === id);
-    if (tab) Object.assign(tab, patch);
-  };
+  ctx.updateBrowserTab = tabMutations.updateBrowserTab;
+  ctx.saveSettings = async () => {};
   await tabMutations.switchEmbedBrowserTab.call(ctx, embed, "t2");
   const t1 = ctx.settings.browserTabs.find((t) => t.id === "t1");
   assert(t1.title === "Bing: 查询词", `the background tab's title was downgraded to "${t1.title}"`);
   return "the outgoing sync kept the recorded title instead of the hostname";
+});
+
+check("a hostname placeholder never overwrites a tab's real name", async () => {
+  const { ctx } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "bing.com", url: "https://www.bing.com/", back: [], forward: [] }
+  ];
+  ctx.updateBrowserTab = tabMutations.updateBrowserTab;
+  ctx.saveSettings = async () => {};
+  // A hostname placeholder may replace another hostname placeholder.
+  await tabMutations.updateBrowserTab.call(ctx, "t1", {
+    title: "bing.com", url: "https://www.bing.com/search?q=你好", back: [], forward: [], time: 1
+  });
+  assert(ctx.settings.browserTabs[0].title === "bing.com", `placeholder did not replace placeholder: ${ctx.settings.browserTabs[0].title}`);
+  // A real reported name wins.
+  await tabMutations.updateBrowserTab.call(ctx, "t1", {
+    title: "Bing: 你好", url: "https://www.bing.com/search?q=你好", back: [], forward: [], time: 2
+  });
+  assert(ctx.settings.browserTabs[0].title === "Bing: 你好", `a real reported name did not win: ${ctx.settings.browserTabs[0].title}`);
+  // The navigate-complete handler fires while the webview is mid-restore and
+  // passes the hostname as an EXPLICIT title: it must NOT clobber the real
+  // name (this downgrade used to stick when no later title event fired).
+  await tabMutations.updateBrowserTab.call(ctx, "t1", {
+    title: "bing.com", url: "https://www.bing.com/search?q=你好", back: [], forward: [], time: 3
+  });
+  assert(ctx.settings.browserTabs[0].title === "Bing: 你好", `real name replaced by the placeholder: ${ctx.settings.browserTabs[0].title}`);
+  return "placeholder-to-placeholder allowed, real name applied, placeholder blocked against real name";
 });
 
 check("settleEmbedTabs re-asserts the active id the note layer clobbered", () => {
