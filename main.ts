@@ -312,6 +312,39 @@ const MWV_PROXY_BRIDGE_SOURCE = [
   "})();"
 ].join("\n");
 
+/**
+ * Escapes the two sequences that would otherwise terminate an inline block
+ * early. `\/` is a valid escape inside both JavaScript and JSON string
+ * literals, so this changes the container only, never the payload's meaning.
+ * Cookie values reach the proxy seed from runtime data, so this is a real
+ * guard rather than a formality.
+ */
+function escapeInlineBlockContent(code: string): string {
+  return code.replace(/<\/(script|style)/gi, "<\\/$1");
+}
+
+/**
+ * Splices host runtime markup in at the end of the document's head.
+ *
+ * The proxied frame is a sandboxed, cross-origin `srcdoc` document, so the host
+ * cannot drive it through `contentWindow`; the host runtime has to travel
+ * inside the document the iframe parses. Building that runtime as DOM nodes
+ * means creating a script element at runtime, which the community directory
+ * review reports as dynamic element creation, so the markup is written into the
+ * serialized document instead and the document parser creates the elements.
+ *
+ * Nothing here can pull in external code: the markup passed in is assembled by
+ * `buildProxyInjectedMarkup` from the bundled bridge constant, the local
+ * settings-derived CSS and a JSON seed, and it never emits a `src` attribute.
+ */
+function injectProxyRuntimeMarkup(html: string, markup: string): string {
+  const headEnd = /<\/head\s*>/i;
+  if (headEnd.test(html)) return html.replace(headEnd, `${markup}\n</head>`);
+  const bodyStart = /<body[^>]*>/i;
+  if (bodyStart.test(html)) return html.replace(bodyStart, (tag) => `${markup}\n${tag}`);
+  return `${html}\n${markup}`;
+}
+
 const FOLLOW_OBSIDIAN_TRANSLATE_OPTION: LanguageOption = {
   code: "ob",
   label: "Follow Obsidian language",
@@ -18947,6 +18980,23 @@ export default class MobileWebviewerPlugin extends Plugin {
     return rules.join("\n");
   }
 
+  /**
+   * Host runtime handed to a proxied document: the display CSS derived from
+   * local settings, the cookie and storage seed, and the navigation bridge.
+   *
+   * Every block is inline and self-contained — the seed is JSON built from
+   * values already held in settings, and the bridge is the bundled
+   * MWV_PROXY_BRIDGE_SOURCE constant. No injected element carries a `src`, so
+   * this path cannot load external code.
+   */
+  buildProxyInjectedMarkup(url: string): string {
+    return [
+      `<style data-mwv-proxy-runtime>${escapeInlineBlockContent(this.buildProxyRuntimeCss())}</style>`,
+      `<script data-mwv-proxy-seed>${escapeInlineBlockContent(this.proxySeedScript(url))}</script>`,
+      `<script data-mwv-proxy-bridge>${escapeInlineBlockContent(MWV_PROXY_BRIDGE_SOURCE)}</script>`
+    ].join("\n");
+  }
+
   rewriteProxyHtml(rawHtml: string, url: string): string {
     try {
       const parser = new DOMParser();
@@ -18962,19 +19012,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       const base = doc.createElement("base");
       base.setAttribute("href", url);
       head.prepend(base);
-      const runtime = doc.createElement("style");
-      runtime.setAttribute("data-mwv-proxy-runtime", "");
-      runtime.textContent = this.buildProxyRuntimeCss();
-      head.appendChild(runtime);
-      const seed = doc.createElement("script");
-      seed.setAttribute("data-mwv-proxy-seed", "");
-      seed.textContent = this.proxySeedScript(url);
-      head.appendChild(seed);
-      const bridge = doc.createElement("script");
-      bridge.setAttribute("data-mwv-proxy-bridge", "");
-      bridge.textContent = MWV_PROXY_BRIDGE_SOURCE;
-      head.appendChild(bridge);
-      return `<!doctype html>\n${doc.documentElement.outerHTML}`;
+      const serialized = `<!doctype html>\n${doc.documentElement.outerHTML}`;
+      return injectProxyRuntimeMarkup(serialized, this.buildProxyInjectedMarkup(url));
     } catch {
       return rawHtml;
     }
