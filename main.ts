@@ -20,6 +20,17 @@ import {
   type IconName
 } from "obsidian";
 import * as qrcodeFactory from "qrcode-generator";
+import { isReadModeUrl, readModeTarget, resolveReadRequest } from "./src/read-mode";
+import {
+  READER_LIVE_SCRIPT,
+  READER_MIN_CONTENT_CHARS,
+  articleFromLivePayload,
+  extractArticleFromHtml,
+  isUsableReaderMarkdown,
+  looksLikeBlockedPage,
+  type LiveReaderPayload,
+  type ReaderArticle
+} from "./src/reader";
 
 const VIEW_TYPE = "mobile-webviewer-view";
 const MOBILE_WEBVIEWER_API_VERSION = "1.0.0";
@@ -6939,6 +6950,12 @@ function normalizeInput(input: string, searchUrl: string): string {
   const value = input.trim();
   if (!value) return DEFAULT_HOME;
 
+  // `read:` comes first: the target can itself be a bare host, a search phrase
+  // or a full URL, and it has to go through the same resolution as anything
+  // else before the reader marker is attached.
+  const readRequest = resolveReadRequest(value, (target) => (target ? normalizeInput(target, searchUrl) : DEFAULT_HOME));
+  if (readRequest.readRequested) return readRequest.marker;
+
   if (isInternalUtilityUrl(value)) {
     return value;
   }
@@ -7685,6 +7702,54 @@ function imageCandidatesFromDocument(root: ParentNode, baseUrl: string, limit = 
     }
   });
   return result;
+}
+
+/**
+ * Adapts an article produced by the Readability/Turndown pipeline
+ * (src/reader.ts) to the NotePage shape the reader panel renders.
+ *
+ * Both the HTTP pass and the live-DOM pass land here, so a page extracted from
+ * the rendered Chromium guest and a page extracted from fetched HTML are
+ * indistinguishable downstream — same title, byline, images and links.
+ */
+function notePageFromReaderArticle(article: ReaderArticle, url: string): NotePage {
+  const images: string[] = [];
+  const links: SearchResult[] = [];
+  const seenImages = new Set<string>();
+  const seenLinks = new Set<string>();
+  try {
+    const parsed = new DOMParser().parseFromString(`<div id="mwv-article-root">${article.html}</div>`, "text/html");
+    const root = parsed.getElementById("mwv-article-root");
+    for (const image of Array.from(root?.querySelectorAll<HTMLImageElement>("img[src]") ?? [])) {
+      const source = absoluteUrl(image.getAttribute("src") ?? "", url);
+      if (!/^https?:\/\//i.test(source) || seenImages.has(source)) continue;
+      seenImages.add(source);
+      images.push(source);
+      if (images.length >= 12) break;
+    }
+    for (const anchor of Array.from(root?.querySelectorAll<HTMLAnchorElement>("a[href]") ?? [])) {
+      const href = absoluteUrl(anchor.getAttribute("href") ?? "", url);
+      if (!/^https?:\/\//i.test(href) || seenLinks.has(href)) continue;
+      const label = textFromElement(anchor);
+      if (label.length < 3) continue;
+      seenLinks.add(href);
+      links.push({ title: label.slice(0, 120), url: href, snippet: hostName(href) });
+      if (links.length >= 12) break;
+    }
+  } catch (error) {
+    console.warn("[mobile-webviewer] reader article metadata pass skipped", error);
+  }
+
+  const bylineParts = [article.byline, article.siteName, article.publishedTime].filter(Boolean);
+  return {
+    title: article.title || hostName(url) || "Web page",
+    url,
+    byline: bylineParts.join(" · ") || hostName(url),
+    excerpt: article.excerpt,
+    images,
+    content: article.markdown,
+    links
+  };
 }
 
 /* ---------------------------------------------------------------------------
@@ -13620,7 +13685,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     // used to open that view now opens NoteWeb directly in RealWeb mode.
     void tabId;
     const target = url ?? this.settings.noteBrowserUrl ?? this.settings.homeUrl;
+    // read: asks for the reader, so the page must not be dragged into Web mode
+    // right after opening — which is what every other caller of this method
+    // wants, and what made the prefix look ignored.
+    const readRequest = isReadModeUrl(normalizeInput(target, this.settings.searchUrl));
     await this.openNoteBrowser(target, newTab);
+    if (readRequest) {
+      this.refreshEmbedTabstrips();
+      return;
+    }
     const leaf = this.app.workspace.getMostRecentLeaf();
     const container = leaf?.view?.containerEl;
     if (!container) return;
@@ -13647,8 +13720,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       isLegacyObsidianFileUrl(rememberedUrl) ||
       Boolean(parseObsidianOpenLink(rememberedUrl))
     );
+    const requestedInput = input ? normalizeInput(input, this.settings.searchUrl) : "";
+    // `read:` asks for the reader. Resolve the marker away before it can reach
+    // the persisted state, the tab record or the webview address.
+    const readRequest = isReadModeUrl(requestedInput);
     const requestedUrl = input
-      ? normalizeInput(input, this.settings.searchUrl)
+      ? (readRequest ? readModeTarget(requestedInput) : requestedInput)
       : staleInternalTarget
         ? this.settings.homeUrl
         : rememberedUrl;
@@ -13693,6 +13770,10 @@ export default class MobileWebviewerPlugin extends Plugin {
         boundToLeaf = true;
         if (!isCurrentOpen()) return;
         this.syncNoteBrowserNativeIdentity(embed, requestedUrl);
+        // A read: request has to land in the reader even when the embed already
+        // shows the same URL — otherwise the prefix would be a no-op on the one
+        // page the user most likely typed it for.
+        if (readRequest) this.setNoteBrowserEmbedMode(embed, "note");
         if (isCurrentOpen() && embed.dataset.url !== requestedUrl) {
           void this.openUrlInEmbed(embed, requestedUrl, false);
         }
@@ -14638,7 +14719,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     const requestToken = ++this.embedRenderSeq;
     this.embedRenderTokens.set(embed, requestToken);
     if (this.disposed || !embed.isConnected) return;
-    const nextUrl = normalizeInput(url, this.settings.searchUrl);
+    const request = normalizeInput(url, this.settings.searchUrl);
+    // A `read:` request outranks the current presentation: the user asked for
+    // the reader, so the embed drops to Note mode before the navigation below
+    // picks a rendering path, and everything downstream (guest navigation, tab
+    // record, history) sees the clean URL rather than the private marker.
+    const readRequest = isReadModeUrl(request);
+    const nextUrl = readRequest ? readModeTarget(request) : request;
+    if (readRequest) this.setNoteBrowserEmbedMode(embed, "note");
     const previousUrl = embed.dataset.url;
     if (nextUrl) this.syncCrossViewNavigation(nextUrl, "embed");
     await this.flushEmbedReaderNow(embed);
@@ -20852,8 +20940,35 @@ export default class MobileWebviewerPlugin extends Plugin {
       headers: this.requestHeaders("text/html,application/xhtml+xml")
     });
 
+    const fetchedHtml = typeof response.text === "string" ? response.text : "";
+
+    // Primary pass: Mozilla Readability, the algorithm Firefox's reader mode
+    // ships. It scores the DOM and picks the article, instead of keeping
+    // whichever container happens to be biggest — that heuristic is why a page
+    // with a fat sidebar used to read as a sidebar card.
+    const article = extractArticleFromHtml(fetchedHtml, url);
+    if (article && isUsableReaderMarkdown(article.markdown)) {
+      void this.addConsole(
+        "info",
+        `Readability picked the article (${article.markdown.length} chars)`,
+        url
+      );
+      const page = notePageFromReaderArticle(article, url);
+      await this.rememberPageCache(page);
+      return page;
+    }
+
+    // Nothing readable came back over HTTP. Two causes, both fatal to a fetch
+    // and both invisible to the user, who sees a perfectly good page in the
+    // guest: an anti-bot wall (baike.baidu.com answers 403 "百度安全验证") or a
+    // client-rendered app shell (36kr, mp.weixin.qq.com). Throwing here is what
+    // hands the caller over to the live-DOM path.
+    if (!fetchedHtml.trim() || looksLikeBlockedPage(fetchedHtml)) {
+      throw new Error("HTTP response is blocked or empty; reading the rendered page instead");
+    }
+
     const parser = new DOMParser();
-    const doc = parser.parseFromString(response.text, "text/html");
+    const doc = parser.parseFromString(fetchedHtml, "text/html");
     this.cleanDocumentForModes(doc);
     const images = imageCandidatesFromDocument(doc, url, 8);
 
@@ -20905,7 +21020,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     const linkRoot = bestRoot ?? doc.body;
-    if (!content.trim()) throw new Error("No readable document body");
+    if (!isUsableReaderMarkdown(content, READER_MIN_CONTENT_CHARS)) {
+      // A thin result is as useless as an empty one: the page is an app shell
+      // whose real content only exists once scripts have run. Hand it to the
+      // live-DOM pass instead of rendering three lines of navigation chrome.
+      throw new Error(
+        content.trim()
+          ? "HTTP response yielded too little readable content; reading the rendered page instead"
+          : "No readable document body"
+      );
+    }
 
     const plainText = content.replace(/[#>*`~|]/g, " ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
 
@@ -20941,17 +21065,23 @@ export default class MobileWebviewerPlugin extends Plugin {
       const cached = this.getCachedPage(url);
       if (cached) return cached;
       const title = hostName(url) || "Web page";
-      const message = reason || (error instanceof Error ? error.message : typeof error === "string" ? error : "Page load failed");
+      const detail = reason || (error instanceof Error ? error.message : typeof error === "string" ? error : "Page load failed");
+      // Say plainly that the reader came up empty. An internal exception used to
+      // be printed as the article body, which told the user nothing they could
+      // act on; the actionable step is the Web presentation, so name it.
+      const hint = this.tr("loadFailedRetry");
       return {
         title,
         url,
         byline: title,
-        excerpt: message,
+        excerpt: detail,
         images: [],
         content: [
           `# ${title}`,
           "",
-          message,
+          `> ${hint}`,
+          "",
+          detail,
           "",
           url
         ].join("\n"),
@@ -20961,56 +21091,78 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   /**
-   * Reader fallback driven by the live page itself. requestUrl sees the raw
-   * HTML, so app-shell and bot-walled pages (baike.baidu.com among them)
-   * extract to nothing and the reader layer degrades to "No readable
-   * document body". Edge's read: mode reads the rendered DOM, and so does
-   * this: when the fetch-based pass produced nothing, ask the already-loaded
-   * webview for its own readable text. Returns null when there is no ready
-   * live surface or the text is too thin to be worth rendering.
+   * Reader fallback driven by the live page itself.
+   *
+   * requestUrl sees the raw HTML, so anti-bot walls and client-rendered app
+   * shells extract to nothing — baike.baidu.com answers 403 "百度安全验证",
+   * 36kr and mp.weixin.qq.com ship a skeleton that fills in only after scripts
+   * run. Edge's read: mode reads the *rendered* DOM, and so does this: the same
+   * Readability algorithm runs inside the guest over the document the user is
+   * actually looking at, and the host converts the result to Markdown.
+   *
+   * Returns null when there is no ready live surface or the page really has
+   * nothing to read.
    */
   async extractLiveReaderPage(embed: HTMLElement, url: string): Promise<NotePage | null> {
     const readFrame = (): BrowserSurfaceElement | null =>
       embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame") ??
       embed.querySelector<BrowserSurfaceElement>("webview, iframe");
+
+    /**
+     * The guest is usually still navigating when the fetch-based pass gives up
+     * — that pass fails in milliseconds, a page takes seconds to render. Waiting
+     * for the surface to report ready is what makes the *first* open work;
+     * without it the reader quit before the page it needed had finished.
+     */
+    const waitForReady = async (frame: BrowserSurfaceElement, timeoutMs: number): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (!frame.isConnected) return false;
+        if (this.isBrowserSurfaceReady(frame)) return true;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+      }
+      return this.isBrowserSurfaceReady(frame);
+    };
+
     const attempt = async (): Promise<NotePage | null> => {
-      const frame = readFrame();
+      let frame = readFrame();
+      if (!frame && /^https?:\/\//i.test(url) && embed.isConnected) {
+        // Note mode is reader-first: it renders the note and only mounts the
+        // guest when the user switches to Web. But on a site that refuses HTTP
+        // fetches the reader has nothing to read *until* that guest exists, so
+        // the first open of such a page could never succeed. Mount it here —
+        // the same surface the Web button would have created, just earlier.
+        this.renderLiveBrowserSurface(embed, url);
+        frame = readFrame();
+      }
       if (!frame || !this.isElectronWebview(frame)) return null;
-      if (!this.isBrowserSurfaceReady(frame) || typeof frame.executeJavaScript !== "function") return null;
+      if (typeof frame.executeJavaScript !== "function") return null;
+      if (!this.isBrowserSurfaceReady(frame) && !(await waitForReady(frame, 6000))) return null;
+      if (!frame.isConnected) return null;
       const liveUrl = this.safeWebviewUrl(frame);
       if (liveUrl && !/^https?:\/\//i.test(liveUrl)) return null;
       if (liveUrl && url && !equivalentEmbedUrl(liveUrl, url) && hostName(liveUrl) !== hostName(url)) return null;
+      // The injected bundle carries Readability itself, so it has to be
+      // evaluated before the call; the trailing statement is the value
+      // Electron hands back.
       const code = [
-        "(() => {",
-        "  const body = document.body;",
-        "  if (!body) return null;",
-        "  const clone = body.cloneNode(true);",
-        "  clone.querySelectorAll('script, style, noscript, svg, canvas, iframe, nav, footer, aside, form, header, [aria-hidden=\"true\"]').forEach((n) => n.remove());",
-        "  const main = clone.querySelector(\"article, main, [role='main'], .article-content, .post-content, .entry-content, #content, .content\") || clone;",
-        "  const raw = main.innerText || body.innerText || '';",
-        "  const text = raw.replace(/\\n{3,}/g, '\\n\\n').replace(/[ \\t]{2,}/g, ' ').trim();",
-        "  if (text.length < 120) return null;",
-        "  return { title: (document.title || '').trim(), byline: location.hostname || '', text: text.slice(0, 60000) };",
-        "})()"
+        READER_LIVE_SCRIPT,
+        `(__mwvReadLive)(${JSON.stringify({ minChars: READER_MIN_CONTENT_CHARS, fallbackMinChars: 120 })});`
       ].join("\n");
       try {
-        const raw = await frame.executeJavaScript(code, true) as { title?: unknown; byline?: unknown; text?: unknown } | null | undefined;
-        if (!raw || typeof raw !== "object") return null;
-        const text = String(raw.text ?? "").trim();
-        if (text.length < 120) return null;
-        const title = String(raw.title ?? "").trim() || hostName(url) || "Web page";
-        const byline = String(raw.byline ?? "").trim() || hostName(url);
-        const content = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join("\n\n");
-        if (!content.trim()) return null;
-        return {
-          title,
-          url,
-          byline,
-          excerpt: content.slice(0, 420),
-          images: [],
-          content,
-          links: []
-        };
+        const raw = (await frame.executeJavaScript(code, true)) as LiveReaderPayload | null | undefined;
+        if (raw && raw.ok === false && raw.reason) {
+          void this.addConsole("warn", `Live reader found nothing: ${raw.reason}`, url);
+        }
+        const article = articleFromLivePayload(raw, url);
+        if (!article) return null;
+        if (!isUsableReaderMarkdown(article.markdown, 120)) return null;
+        void this.addConsole(
+          "info",
+          `Live reader read the rendered page (${article.markdown.length} chars via ${article.method})`,
+          url
+        );
+        return notePageFromReaderArticle(article, url);
       } catch (error) {
         console.warn("[mobile-webviewer] live reader extraction skipped", error);
         return null;

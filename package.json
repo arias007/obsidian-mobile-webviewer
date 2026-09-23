@@ -1,13 +1,16 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {
     "verify:cancip": "node scripts/verify-cancip-integration.mjs",
     "verify:note-browser": "node scripts/verify-note-browser.mjs",
     "verify:browser-controls": "node scripts/verify-browser-controls.mjs",
-    "build": "npm run verify:cancip && npm run verify:note-browser && npm run verify:browser-controls && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "verify:read-mode": "node scripts/verify-read-mode.mjs",
+    "verify:reader": "node scripts/verify-reader-pipeline.mjs",
+    "build:reader-live": "node scripts/build-reader-live.mjs",
+    "build": "npm run build:reader-live && npm run verify:cancip && npm run verify:note-browser && npm run verify:browser-controls && npm run verify:read-mode && npm run verify:reader && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs"
   },
   "keywords": [
@@ -20,6 +23,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/turndown": "^5.0.6",
     "esbuild": "^0.25.5",
     "jsdom": "^30.1.1",
     "obsidian": "^1.8.7",
@@ -27,6 +31,9 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "qrcode-generator": "^2.0.4"
+    "@mozilla/readability": "^0.6.0",
+    "qrcode-generator": "^2.0.4",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   }
 }

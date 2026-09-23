@@ -5,3 +5,6 @@ dist/
 releases/
 .env
 .env.*
+
+# Downloaded page fixtures for scripts/verify-reader-pipeline.mjs (fetch with --fetch)
+scripts/fixtures/

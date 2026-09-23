@@ -28,6 +28,57 @@ It now has two clearly named modes:
   deduped so Mobile Webviewer surfaces keep one visible magic-wand launcher
   while still using NoteDraw's real page controller behind it.
 
+## How NoteWeb reads a page
+
+NoteWeb is meant to be the best Markdown view of a web page you can get inside
+Obsidian, so it does not try to reimplement article extraction. It runs two
+production-grade libraries, both of them the same ones a browser reader mode
+would use:
+
+- **Readability** (Mozilla, Apache-2.0) — the algorithm Firefox's reader mode
+  ships. It scores the DOM and picks the actual article.
+- **Turndown** (MIT) — turns that article into Markdown with GFM tables,
+  strikethrough, task lists, fenced code with language tags, image alt text and
+  figure captions.
+
+There are two extraction passes, and which one runs depends on what the site
+allows:
+
+1. **Fetched HTML.** The page is fetched, Readability scores it, Turndown
+   converts it. This is fast and covers ordinary article sites.
+2. **Rendered DOM.** Many sites refuse step 1 outright: `baike.baidu.com`
+   answers a programmatic request with HTTP 403 "百度安全验证", and sites such as
+   `36kr.com`, `mp.weixin.qq.com` and `bilibili.com` ship an empty app shell that
+   only fills in once scripts run. For those, the same Readability build is
+   injected into the live Chromium guest and reads the document the user is
+   actually looking at — which is exactly what Edge's reading view does. The
+   result comes back as HTML and is converted to Markdown on the host.
+
+NoteWeb switches to pass 2 automatically whenever pass 1 hits a bot wall or
+returns too little text to be worth rendering, and it waits for the guest to
+finish loading before reading it. Reader mode therefore works on the first open
+of a page, not only after a manual refresh.
+
+### `read:` — open a page straight in the reader
+
+Type or paste `read:` in front of an address, exactly like Edge:
+
+```text
+read:baike.baidu.com/item/玉泽演/102526
+read:https://example.com/a/long/article?x=1
+read:量子计算
+```
+
+The page opens as a Markdown note in NoteWeb and never bounces into the raw Web
+surface. `read:`, `read：` (full-width colon) and `READ :` all work, and what
+follows can be a bare host, a full URL or a search phrase. The prefix is an
+instruction to the plugin — it is stripped before the address reaches the
+webview, the tab records, the history or the settings.
+
+**Platform note:** pass 2 needs an Electron Chromium guest, which desktop
+Obsidian provides. On mobile Obsidian the guest is a cross-origin iframe whose
+DOM cannot be read, so only pass 1 is available there.
+
 ## Install
 
 Copy these files into your vault:
@@ -76,6 +127,17 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
 - Add/remove bookmarks.
 - Save pages to the reading list.
 - Reuse cached reader pages.
+- Extract articles with Mozilla Readability — the algorithm Firefox's reader
+  mode ships — instead of picking the biggest container, so a page with a fat
+  sidebar reads as the article and not as the sidebar.
+- Read pages whose text only exists after scripts run by extracting from the
+  rendered Chromium DOM when the fetched HTML is a bot wall or an app shell
+  (baike.baidu.com, 36kr, mp.weixin.qq.com, bilibili.com).
+- Convert to Markdown with Turndown and GFM, keeping headings, nested and
+  ordered lists, task lists, tables, fenced code with language tags, image alt
+  text, figure captions and absolute links.
+- Open any address straight in the reader with the `read:` prefix:
+  `read:baike.baidu.com/item/玉泽演/102526`.
 - View or copy console/navigation logs from More.
 - Inspect the active browser surface from More, including whether the current
   page is using real Electron Chromium `webview` or iframe fallback, current

@@ -1,0 +1,255 @@
+/**
+ * End-to-end check of the new reader pipeline against real pages.
+ *
+ * It bundles src/reader.ts the same way the plugin build does, hands it a
+ * jsdom DOM (the host is a browser, but jsdom is enough to prove the article
+ * extraction and the Markdown conversion), and asserts on the output.
+ *
+ * Usage: node scripts/verify-reader-pipeline.mjs [--fetch]
+ *   --fetch  download the sample pages first (needs network)
+ */
+import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
+import { createRequire } from "node:module";
+import esbuild from "esbuild";
+import { JSDOM } from "jsdom";
+
+const require = createRequire(import.meta.url);
+const fixtureDir = path.resolve("scripts/fixtures");
+const shouldFetch = process.argv.includes("--fetch");
+
+const SAMPLES = [
+  {
+    id: "sspai",
+    url: "https://sspai.com/post/78900",
+    expect: { minChars: 400, needsHeading: true }
+  },
+  {
+    id: "mdn",
+    url: "https://developer.mozilla.org/en-US/docs/Web/API/Element/innerHTML",
+    expect: { minChars: 400, needsCode: true }
+  },
+  {
+    id: "runoob",
+    url: "https://www.runoob.com/markdown/md-tutorial.html",
+    expect: { minChars: 300, needsCode: true }
+  },
+  {
+    id: "baike-block",
+    url: "https://baike.baidu.com/item/%E7%8E%89%E6%B3%BD%E6%BC%94/102526",
+    expect: { blocked: true }
+  }
+];
+
+/**
+ * Node's fetch transparently decompresses whatever it advertised support for,
+ * and strips the header when it does. Asking for `identity` keeps the two
+ * layers from fighting: anything still compressed is decoded by hand below.
+ */
+function decodeBody(buffer, encoding) {
+  const kind = (encoding || "").toLowerCase();
+  if (!kind || kind.includes("identity")) return buffer.toString("utf8");
+  if (kind.includes("br")) return zlib.brotliDecompressSync(buffer).toString("utf8");
+  if (kind.includes("gzip")) return zlib.gunzipSync(buffer).toString("utf8");
+  if (kind.includes("deflate")) return zlib.inflateSync(buffer).toString("utf8");
+  return buffer.toString("utf8");
+}
+
+if (shouldFetch) {
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  for (const sample of SAMPLES) {
+    const file = path.join(fixtureDir, `${sample.id}.html`);
+    try {
+      const response = await fetch(sample.url, {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+          accept: "text/html,application/xhtml+xml",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "accept-encoding": "identity"
+        },
+        redirect: "follow"
+      });
+      const buffer = Buffer.from(await response.arrayBuffer());
+      let body = "";
+      try {
+        body = decodeBody(buffer, response.headers.get("content-encoding"));
+      } catch (error) {
+        console.log(`decode failed for ${sample.id}: ${error.message}`);
+        continue;
+      }
+      const plausible = /<html|<head|<body|<!doctype/i.test(body.slice(0, 4000));
+      if (!plausible) {
+        console.log(`skipped ${sample.id}: response is not HTML (${body.length} bytes) - keeping previous fixture`);
+        continue;
+      }
+      fs.writeFileSync(file, body, "utf8");
+      console.log(`fetched ${sample.id}: ${response.status} ${body.length} bytes`);
+    } catch (error) {
+      console.log(`fetch failed for ${sample.id}: ${error.message}`);
+    }
+  }
+}
+
+// Bundle the plugin's reader module to CJS so Node can run it directly.
+const build = await esbuild.build({
+  entryPoints: ["src/reader.ts"],
+  bundle: true,
+  format: "cjs",
+  platform: "browser",
+  target: "es2019",
+  write: false,
+  logLevel: "warning"
+});
+const bundled = build.outputFiles[0].text;
+const tmpFile = path.resolve(".tmp-reader-bundle.cjs");
+fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+fs.writeFileSync(tmpFile, bundled, "utf8");
+
+// jsdom stands in for the Obsidian renderer: DOMParser + NodeFilter are enough.
+const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", { url: "https://example.com/" });
+globalThis.DOMParser = dom.window.DOMParser;
+globalThis.NodeFilter = dom.window.NodeFilter;
+globalThis.Node = dom.window.Node;
+globalThis.document = dom.window.document;
+
+const reader = require(tmpFile);
+
+let failures = 0;
+const report = [];
+const check = (name, ok, detail = "") => {
+  if (!ok) failures++;
+  report.push(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` -- ${detail}` : ""}`);
+};
+
+check("reader module exposes htmlToMarkdown", typeof reader.htmlToMarkdown === "function");
+check("reader module exposes extractArticleFromHtml", typeof reader.extractArticleFromHtml === "function");
+check("reader module exposes live script bundle", typeof reader.READER_LIVE_SCRIPT === "string" && reader.READER_LIVE_SCRIPT.includes("__mwvReadLive"));
+check(
+  "live script bundle is self-contained",
+  !/require\(|import\s/.test(reader.READER_LIVE_SCRIPT.replace(/"[^"]*"/g, "")),
+  `${Math.round(reader.READER_LIVE_SCRIPT.length / 1024)} KB`
+);
+
+// The blocked-page detector must catch the wall baike.baidu.com actually serves.
+check("blocks the baidu 安全验证 interstitial", reader.looksLikeBlockedPage("<html><head><title>百度安全验证</title></head><body></body></html>"));
+check("does not flag a real article", !reader.looksLikeBlockedPage("<html><body><h1>标题</h1><p>正文内容</p></body></html>"));
+
+// Markdown conversion quality on a hand-written article.
+const articleHtml = `
+  <article>
+    <h1>测试标题</h1>
+    <p>第一段，包含<strong>加粗</strong>和<em>斜体</em>，以及<a href="/rel/path">一个相对链接</a>。</p>
+    <h2>代码</h2>
+    <pre><code class="language-python">def hello():
+    print("hi")</code></pre>
+    <figure>
+      <img src="/img/pic.png" alt="示意图">
+      <figcaption>图 1 说明</figcaption>
+    </figure>
+    <table>
+      <thead><tr><th>名称</th><th>值</th></tr></thead>
+      <tbody><tr><td>甲</td><td>1</td></tr><tr><td>乙</td><td>2</td></tr></tbody>
+    </table>
+    <ul><li>项目一</li><li>项目二</li></ul>
+    <ul><li><input type="checkbox" checked>已完成项</li><li><input type="checkbox">待办项</li></ul>
+    <blockquote><p>引用内容</p></blockquote>
+  </article>`;
+
+const markdown = reader.htmlToMarkdown(articleHtml, "https://example.com/post/1");
+check("markdown keeps headings as ATX", /^# 测试标题$/m.test(markdown) && /^## 代码$/m.test(markdown));
+check("markdown keeps bold and italic", markdown.includes("**加粗**") && markdown.includes("*斜体*"));
+check("markdown absolutises relative links", markdown.includes("(https://example.com/rel/path)"));
+check("markdown fences code with its language", /```python\n/.test(markdown));
+check("markdown prefixes an image", markdown.includes("![示意图](https://example.com/img/pic.png)"));
+check("markdown keeps figure captions", markdown.includes("*图 1 说明*"));
+check("markdown emits a GFM table", /\|\s*名称\s*\|\s*值\s*\|/.test(markdown) && /\|\s*---\s*\|/.test(markdown));
+check("markdown keeps list items compact", /^- 项目一$/m.test(markdown) && /^- 项目二$/m.test(markdown));
+check("markdown keeps GFM task lists", /^- \[x\] 已完成项$/m.test(markdown) && /^- \[ \] 待办项$/m.test(markdown));
+check("markdown keeps blockquotes", /^> 引用内容$/m.test(markdown));
+check("markdown has no triple blank lines", !/\n{3,}/.test(markdown));
+
+// ---------------------------------------------------------------------------
+// The guest-side path: this is the one that reads anti-bot and app-shell pages,
+// so it has to be proven to actually execute in a page context, not just to
+// bundle. jsdom stands in for the Chromium renderer; the script is evaluated
+// the way Electron evaluates it (one expression string, value returned).
+// ---------------------------------------------------------------------------
+const liveFixture = path.join(fixtureDir, "sspai.html");
+if (fs.existsSync(liveFixture)) {
+  const JSDOMLive = JSDOM;
+  const guest = new JSDOMLive(fs.readFileSync(liveFixture, "utf8"), {
+    url: "https://sspai.com/post/78900",
+    runScripts: "dangerously",
+    pretendToBeVisual: true
+  });
+  let payload = null;
+  try {
+    payload = guest.window.eval(
+      `${reader.READER_LIVE_SCRIPT}\n__mwvReadLive(${JSON.stringify({ minChars: 220, fallbackMinChars: 120 })});`
+    );
+  } catch (error) {
+    check("live script evaluates inside a page context", false, error.message);
+  }
+  if (payload) {
+    check("live script evaluates inside a page context", true);
+    check("live script reports success on a real article", payload.ok === true, `reason=${payload.reason ?? ""} method=${payload.method}`);
+    check("live script extracts a substantial article", (payload.text ?? "").length > 400, `${(payload.text ?? "").length} chars`);
+    check("live script returns article HTML for the host to convert", typeof payload.html === "string" && payload.html.length > 200);
+    check("live script reports the page base URL", payload.baseUrl === "https://sspai.com/post/78900", payload.baseUrl ?? "");
+    check(
+      "live script leaves no relative links behind",
+      !/(?:href|src)="\/(?!\/)/.test(payload.html ?? ""),
+      "relative href/src would break once rendered outside the guest"
+    );
+    check("live script keeps the page title", (payload.title ?? "").length > 0, (payload.title ?? "").slice(0, 50));
+    // The host must be able to turn that payload into the same Markdown as the
+    // HTTP path — that equivalence is what makes both paths interchangeable.
+    const liveArticle = reader.articleFromLivePayload(payload, "https://sspai.com/post/78900");
+    check("host converts the live payload to Markdown", !!liveArticle && liveArticle.markdown.length > 400, `${liveArticle?.markdown.length ?? 0} chars`);
+    check("live payload is marked as coming from the live page", liveArticle?.method === "live", liveArticle?.method ?? "");
+    check("live payload for a blocked page is rejected", reader.articleFromLivePayload({ ok: false, reason: "thin-content" }, "https://x/") === null);
+  }
+  guest.window.close();
+} else {
+  report.push("SKIP  live script execution (no sspai fixture; run with --fetch)");
+}
+
+for (const sample of SAMPLES) {
+  const file = path.join(fixtureDir, `${sample.id}.html`);
+  if (!fs.existsSync(file)) {
+    report.push(`SKIP  ${sample.id} (no fixture; run with --fetch)`);
+    continue;
+  }
+  const html = fs.readFileSync(file, "utf8");
+  if (sample.expect.blocked) {
+    const article = reader.extractArticleFromHtml(html, sample.url);
+    check(`${sample.id}: blocked page yields no article (host defers to live DOM)`, article === null);
+    continue;
+  }
+  const article = reader.extractArticleFromHtml(html, sample.url);
+  if (!article) {
+    check(`${sample.id}: article extracted`, false, "reader returned null");
+    continue;
+  }
+  check(`${sample.id}: article extracted`, true, `${article.markdown.length} markdown chars, method=${article.method}`);
+  check(
+    `${sample.id}: markdown is substantial`,
+    article.markdown.length >= sample.expect.minChars,
+    `${article.markdown.length} chars`
+  );
+  if (sample.expect.needsHeading) {
+    check(`${sample.id}: markdown has a heading`, /^#{1,3} /m.test(article.markdown));
+  }
+  if (sample.expect.needsCode) {
+    check(`${sample.id}: markdown has a code fence`, /```/.test(article.markdown));
+  }
+  check(`${sample.id}: title resolved`, article.title.length > 0, article.title.slice(0, 60));
+}
+
+fs.rmSync(tmpFile, { force: true });
+
+console.log(report.join("\n"));
+console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
+process.exit(failures === 0 ? 0 : 1);
