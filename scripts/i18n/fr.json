@@ -334,5 +334,21 @@
   "proxyModeActive": "Le site refuse l'intégration — vraie page chargée via le proxy intégré",
   "postFormUnsupported": "L'envoi de formulaires POST n'est pas pris en charge en mode proxy",
   "clearCookies": "Effacer les cookies du site",
-  "cookiesCleared": "Cookies du site effacés"
+  "cookiesCleared": "Cookies du site effacés",
+  "on": "Activé",
+  "off": "Désactivé",
+  "auto": "Auto",
+  "liveView": "Vue directe",
+  "liveViewDesc": "Surface de page directe dans le navigateur de notes.",
+  "readerViewDesc": "Couche de texte d'article et de médias.",
+  "cache": "Cache",
+  "cacheDesc": "Pages de lecture conservées pour un affichage interne plus rapide.",
+  "viewMode": "Mode d'affichage",
+  "viewModeDesc": "Change la largeur et le zoom de la page directe.",
+  "downloadsDesc": "Fichiers, HTML et MHT enregistrés dans le coffre.",
+  "userScripts": "Scripts utilisateur",
+  "userScriptsDesc": "Règles CSS/JavaScript correspondant à la couche de lecture.",
+  "readingListDesc": "Les pages enregistrées restent accessibles depuis la barre du navigateur.",
+  "modeLabel": "Mode",
+  "uaLabel": "UA"
 }

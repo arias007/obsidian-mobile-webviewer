@@ -334,5 +334,21 @@
   "proxyModeActive": "Site gömmeyi reddetti — gerçek sayfa yerleşik proxy ile yüklendi",
   "postFormUnsupported": "Proxy modunda POST form gönderimi desteklenmiyor",
   "clearCookies": "Site çerezlerini temizle",
-  "cookiesCleared": "Site çerezleri temizlendi"
+  "cookiesCleared": "Site çerezleri temizlendi",
+  "on": "Açık",
+  "off": "Kapalı",
+  "auto": "Otomatik",
+  "liveView": "Canlı Görünüm",
+  "liveViewDesc": "Not tarayıcısı içinde doğrudan sayfa yüzeyi.",
+  "readerViewDesc": "Makale metni ve medya katmanı.",
+  "cache": "Önbellek",
+  "cacheDesc": "Dahili gösterim için saklanan okuyucu sayfaları.",
+  "viewMode": "Görünüm modu",
+  "viewModeDesc": "Canlı sayfa genişliğini ve yakınlaştırmayı değiştirir.",
+  "downloadsDesc": "Kasa klasörüne kaydedilen dosya, HTML ve MHT.",
+  "userScripts": "Kullanıcı betikleri",
+  "userScriptsDesc": "Okuyucu katmanıyla eşleşen CSS/JavaScript kuralları.",
+  "readingListDesc": "Kaydedilen sayfalar tarayıcı çubuğundan açılır.",
+  "modeLabel": "Mod",
+  "uaLabel": "UA"
 }

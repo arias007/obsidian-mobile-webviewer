@@ -334,5 +334,21 @@
   "proxyModeActive": "Trang từ chối nhúng — đã tải trang thật qua proxy tích hợp",
   "postFormUnsupported": "Chế độ proxy không hỗ trợ gửi biểu mẫu POST",
   "clearCookies": "Xóa cookie của trang",
-  "cookiesCleared": "Đã xóa cookie của trang"
+  "cookiesCleared": "Đã xóa cookie của trang",
+  "on": "Bật",
+  "off": "Tắt",
+  "auto": "Tự động",
+  "liveView": "Xem trực tiếp",
+  "liveViewDesc": "Bề mặt trang hiển thị trực tiếp trong trình duyệt ghi chú.",
+  "readerViewDesc": "Lớp văn bản bài viết và phương tiện.",
+  "cache": "Bộ nhớ đệm",
+  "cacheDesc": "Các trang trình đọc được giữ lại để hiển thị nhanh hơn.",
+  "viewMode": "Chế độ xem",
+  "viewModeDesc": "Chuyển đổi chiều rộng và mức thu phóng của trang trực tiếp.",
+  "downloadsDesc": "Tệp, HTML và MHT đã lưu trong thư mục kho.",
+  "userScripts": "Kịch bản người dùng",
+  "userScriptsDesc": "Quy tắc CSS/JavaScript khớp với lớp trình đọc.",
+  "readingListDesc": "Trang đã lưu luôn mở được từ thanh trình duyệt.",
+  "modeLabel": "Chế độ",
+  "uaLabel": "UA"
 }

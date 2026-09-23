@@ -742,6 +742,22 @@ type UiTextKey =
   | "loadingValue"
   | "yes"
   | "no"
+  | "on"
+  | "off"
+  | "auto"
+  | "liveView"
+  | "liveViewDesc"
+  | "readerViewDesc"
+  | "cache"
+  | "cacheDesc"
+  | "viewMode"
+  | "viewModeDesc"
+  | "downloadsDesc"
+  | "userScripts"
+  | "userScriptsDesc"
+  | "readingListDesc"
+  | "modeLabel"
+  | "uaLabel"
   | "downloadDirectory"
   | "copiedLink"
   | "cancipAi"
@@ -1095,6 +1111,22 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   loadingValue: "Loading: {value}",
   yes: "Yes",
   no: "No",
+  on: "On",
+  off: "Off",
+  auto: "Auto",
+  liveView: "Live View",
+  liveViewDesc: "Direct page surface inside Note Browser.",
+  readerViewDesc: "Article text and media layer.",
+  cache: "Cache",
+  cacheDesc: "Reader pages retained for faster internal display.",
+  viewMode: "View Mode",
+  viewModeDesc: "Switches live page width and zoom surface.",
+  downloadsDesc: "Files, HTML, and MHT saves inside the vault folder.",
+  userScripts: "User Scripts",
+  userScriptsDesc: "Matched reader CSS/JavaScript rules.",
+  readingListDesc: "Saved pages stay available from the browser bar.",
+  modeLabel: "Mode",
+  uaLabel: "UA",
   downloadDirectory: "Download directory: {folder}",
   copiedLink: "Copied link",
   cancipAi: "Cancip AI",
@@ -1447,6 +1479,22 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   loadingValue: "加载中：{value}",
   yes: "是",
   no: "否",
+  on: "开启",
+  off: "关闭",
+  auto: "自动",
+  liveView: "实时视图",
+  liveViewDesc: "在笔记浏览器中直接渲染的页面表面。",
+  readerViewDesc: "正文文字与媒体阅读层。",
+  cache: "缓存",
+  cacheDesc: "保留的阅读器页面，加快内部显示。",
+  viewMode: "视图模式",
+  viewModeDesc: "切换实时页面的宽度与缩放。",
+  downloadsDesc: "保存在库文件夹内的文件、HTML 与 MHT。",
+  userScripts: "用户脚本",
+  userScriptsDesc: "匹配阅读层的 CSS/JavaScript 规则。",
+  readingListDesc: "保存的页面可从浏览器栏随时打开。",
+  modeLabel: "模式",
+  uaLabel: "UA",
   downloadDirectory: "下载目录：{folder}",
   copiedLink: "已复制链接",
   cancipAi: "Cancip AI",
@@ -1761,6 +1809,22 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
   loadingValue: "載入中：{value}",
   yes: "是",
   no: "否",
+  on: "開啟",
+  off: "關閉",
+  auto: "自動",
+  liveView: "即時檢視",
+  liveViewDesc: "在筆記瀏覽器中直接呈現的頁面表面。",
+  readerViewDesc: "內文文字與媒體閱讀層。",
+  cache: "快取",
+  cacheDesc: "保留的閱讀器頁面，加快內部顯示。",
+  viewMode: "檢視模式",
+  viewModeDesc: "切換即時頁面的寬度與縮放。",
+  downloadsDesc: "儲存在庫資料夾內的檔案、HTML 與 MHT。",
+  userScripts: "使用者指令碼",
+  userScriptsDesc: "符合閱讀層的 CSS/JavaScript 規則。",
+  readingListDesc: "儲存的頁面可從瀏覽器列隨時開啟。",
+  modeLabel: "模式",
+  uaLabel: "UA",
   downloadDirectory: "下載目錄：{folder}",
   cancipAi: "Cancip AI",
   currentOpen: "開啟目前頁面",
@@ -2055,6 +2119,22 @@ const UI_TEXT_UG: UiDictionary = {
   loadingValue: "يۈكلىنىۋاتىدۇ: {value}",
   yes: "ھەئە",
   no: "ياق",
+  on: "ئېچىق",
+  off: "ئېتىك",
+  auto: "ئاۆتوماتىك",
+  liveView: "جانلىق كۆرۈنۈش",
+  liveViewDesc: "خاتىرە توركۆرگۈچىدە بىۋاسىتە كۆرسىتىلىدىغان بەت يۈزى.",
+  readerViewDesc: "ماقالە تېكىستى ۋە مېدىيا ئوقۇش قاتلىمى.",
+  cache: "غەملەك",
+  cacheDesc: "ئىچكى كۆرسىتىش ئۈچۈن ساقلانغان ئوقۇغۇچ بەتلىرى.",
+  viewMode: "كۆرۈنۈش ھالىتى",
+  viewModeDesc: "جانلىق بەتنىڭ كەڭلىكى ۋە چوڭايتىلىشىنى ئۆزگەرتىدۇ.",
+  downloadsDesc: "گەمە قىسقۇچىدا ساقلانغان ھۆججەت، HTML ۋە MHT.",
+  userScripts: "ئىشلەتكۈچى قوليازمىلىرى",
+  userScriptsDesc: "ئوقۇغۇچ قاتلىمىغا ماس كېلىدىغان CSS/JavaScript قائىدىلىرى.",
+  readingListDesc: "ساقلانغان بەتلەر توركۆرگۈچ بالدىقىدىن ئېچىلىدۇ.",
+  modeLabel: "ھالەت",
+  uaLabel: "UA",
   downloadDirectory: "چۈشۈرۈش مۇندەرىجىسى: {folder}",
   cancipAi: "Cancip AI",
   currentOpen: "ھازىرقىنى ئېچىش",
@@ -2182,6 +2262,22 @@ function commonUi(values: UiDictionary): UiDictionary {
 }
 
 const UI_TEXT_AR = commonUi({
+  on: "مفعّل",
+  off: "معطّل",
+  auto: "تلقائي",
+  liveView: "عرض مباشر",
+  liveViewDesc: "سطح الصفحة مباشرة داخل متصفح الملاحظات.",
+  readerViewDesc: "طبقة نص المقال والوسائط.",
+  cache: "ذاكرة مؤقتة",
+  cacheDesc: "صفحات القارئ المحفوظة لعرض داخلي أسرع.",
+  viewMode: "وضع العرض",
+  viewModeDesc: "يبدّل عرض الصفحة المباشرة وتكبيرها.",
+  downloadsDesc: "ملفات وHTML وMHT محفوظة داخل مجلد الخزنة.",
+  userScripts: "سكربتات المستخدم",
+  userScriptsDesc: "قواعد CSS/JavaScript المطابقة لطبقة القارئ.",
+  readingListDesc: "الصفحات المحفوظة تبقى متاحة من شريط المتصفح.",
+  modeLabel: "الوضع",
+  uaLabel: "UA",
   clearCookies: "مسح كوكيز الموقع",
   cookiesCleared: "تم مسح كوكيز الموقع",
   uiLanguageDesc: "يتبع افتراضياً لغة Obsidian/النظام. يمكنك أيضاً تثبيت لغة ثابتة للإضافة.",
@@ -2521,6 +2617,22 @@ const UI_TEXT_AR = commonUi({
 });
 
 const UI_TEXT_RU = commonUi({
+  on: "Вкл.",
+  off: "Выкл.",
+  auto: "Авто",
+  liveView: "Живой просмотр",
+  liveViewDesc: "Прямая поверхность страницы внутри браузера заметок.",
+  readerViewDesc: "Слой текста статьи и медиа.",
+  cache: "Кэш",
+  cacheDesc: "Сохранённые страницы читалки для быстрого внутреннего показа.",
+  viewMode: "Режим просмотра",
+  viewModeDesc: "Переключает ширину и масштаб живой страницы.",
+  downloadsDesc: "Файлы, HTML и MHT, сохранённые в папке хранилища.",
+  userScripts: "Пользовательские скрипты",
+  userScriptsDesc: "Правила CSS/JavaScript, совпадающие с читалкой.",
+  readingListDesc: "Сохранённые страницы доступны из панели браузера.",
+  modeLabel: "Режим",
+  uaLabel: "UA",
   clearCookies: "Очистить cookie сайта",
   cookiesCleared: "Cookie сайта очищены",
   uiLanguageDesc: "По умолчанию следует языку Obsidian/системы. Можно закрепить фиксированный язык плагина.",
@@ -2860,6 +2972,22 @@ const UI_TEXT_RU = commonUi({
 });
 
 const UI_TEXT_TR = commonUi({
+  on: "Açık",
+  off: "Kapalı",
+  auto: "Otomatik",
+  liveView: "Canlı Görünüm",
+  liveViewDesc: "Not tarayıcısı içinde doğrudan sayfa yüzeyi.",
+  readerViewDesc: "Makale metni ve medya katmanı.",
+  cache: "Önbellek",
+  cacheDesc: "Dahili gösterim için saklanan okuyucu sayfaları.",
+  viewMode: "Görünüm modu",
+  viewModeDesc: "Canlı sayfa genişliğini ve yakınlaştırmayı değiştirir.",
+  downloadsDesc: "Kasa klasörüne kaydedilen dosya, HTML ve MHT.",
+  userScripts: "Kullanıcı betikleri",
+  userScriptsDesc: "Okuyucu katmanıyla eşleşen CSS/JavaScript kuralları.",
+  readingListDesc: "Kaydedilen sayfalar tarayıcı çubuğundan açılır.",
+  modeLabel: "Mod",
+  uaLabel: "UA",
   clearCookies: "Site çerezlerini temizle",
   cookiesCleared: "Site çerezleri temizlendi",
   uiLanguageDesc: "Varsayılan olarak Obsidian/sistem dilini izler. İsterseniz eklenti için sabit bir dil seçebilirsiniz.",
@@ -3199,6 +3327,22 @@ const UI_TEXT_TR = commonUi({
 });
 
 const UI_TEXT_JA = commonUi({
+  on: "オン",
+  off: "オフ",
+  auto: "自動",
+  liveView: "ライブビュー",
+  liveViewDesc: "ノートブラウザー内に直接表示されるページ表面。",
+  readerViewDesc: "本文テキストとメディアの閲覧レイヤー。",
+  cache: "キャッシュ",
+  cacheDesc: "内部表示を速くするため保存されたリーダーページ。",
+  viewMode: "表示モード",
+  viewModeDesc: "ライブページの幅とズームを切り替えます。",
+  downloadsDesc: "ボルトフォルダー内に保存されたファイル・HTML・MHT。",
+  userScripts: "ユーザースクリプト",
+  userScriptsDesc: "リーダーレイヤーに一致する CSS/JavaScript ルール。",
+  readingListDesc: "保存したページはブラウザーバーから開けます。",
+  modeLabel: "モード",
+  uaLabel: "UA",
   clearCookies: "サイトのCookieを消去",
   cookiesCleared: "サイトのCookieを消去しました",
   uiLanguageDesc: "デフォルトでは Obsidian/システムの言語に従います。プラグインの言語を固定することもできます。",
@@ -3538,6 +3682,22 @@ const UI_TEXT_JA = commonUi({
 });
 
 const UI_TEXT_KO = commonUi({
+  on: "켜짐",
+  off: "꺼짐",
+  auto: "자동",
+  liveView: "라이브 뷰",
+  liveViewDesc: "노트 브라우저 안에 직접 표시되는 페이지 표면.",
+  readerViewDesc: "본문 텍스트와 미디어 읽기 레이어.",
+  cache: "캐시",
+  cacheDesc: "내부 표시를 빠르게 하기 위해 저장된 리더 페이지.",
+  viewMode: "보기 모드",
+  viewModeDesc: "라이브 페이지 너비와 확대/축소를 전환합니다.",
+  downloadsDesc: "볼트 폴더에 저장된 파일, HTML, MHT.",
+  userScripts: "사용자 스크립트",
+  userScriptsDesc: "리더 레이어에 일치하는 CSS/JavaScript 규칙.",
+  readingListDesc: "저장된 페이지는 브라우저 바에서 열 수 있습니다.",
+  modeLabel: "모드",
+  uaLabel: "UA",
   clearCookies: "사이트 쿠키 지우기",
   cookiesCleared: "사이트 쿠키를 지웠습니다",
   uiLanguageDesc: "기본적으로 Obsidian/시스템 언어를 따릅니다. 플러그인 언어를 고정할 수도 있습니다.",
@@ -3877,6 +4037,22 @@ const UI_TEXT_KO = commonUi({
 });
 
 const UI_TEXT_FR = commonUi({
+  on: "Activé",
+  off: "Désactivé",
+  auto: "Auto",
+  liveView: "Vue directe",
+  liveViewDesc: "Surface de page directe dans le navigateur de notes.",
+  readerViewDesc: "Couche de texte d'article et de médias.",
+  cache: "Cache",
+  cacheDesc: "Pages de lecture conservées pour un affichage interne plus rapide.",
+  viewMode: "Mode d'affichage",
+  viewModeDesc: "Change la largeur et le zoom de la page directe.",
+  downloadsDesc: "Fichiers, HTML et MHT enregistrés dans le coffre.",
+  userScripts: "Scripts utilisateur",
+  userScriptsDesc: "Règles CSS/JavaScript correspondant à la couche de lecture.",
+  readingListDesc: "Les pages enregistrées restent accessibles depuis la barre du navigateur.",
+  modeLabel: "Mode",
+  uaLabel: "UA",
   clearCookies: "Effacer les cookies du site",
   cookiesCleared: "Cookies du site effacés",
   uiLanguageDesc: "Suit par défaut la langue d'Obsidian/du système. Vous pouvez aussi fixer une langue pour ce plugin.",
@@ -4216,6 +4392,22 @@ const UI_TEXT_FR = commonUi({
 });
 
 const UI_TEXT_DE = commonUi({
+  on: "Ein",
+  off: "Aus",
+  auto: "Auto",
+  liveView: "Live-Ansicht",
+  liveViewDesc: "Direkte Seitenoberfläche im Notiz-Browser.",
+  readerViewDesc: "Artikeltext- und Medienebene.",
+  cache: "Cache",
+  cacheDesc: "Gespeicherte Leserseiten für schnellere interne Anzeige.",
+  viewMode: "Ansichtsmodus",
+  viewModeDesc: "Wechselt Breite und Zoom der Live-Seite.",
+  downloadsDesc: "Dateien, HTML und MHT im Tresor-Ordner gespeichert.",
+  userScripts: "Benutzerskripte",
+  userScriptsDesc: "Passende CSS/JavaScript-Regeln für die Leseebene.",
+  readingListDesc: "Gespeicherte Seiten bleiben über die Browserleiste erreichbar.",
+  modeLabel: "Modus",
+  uaLabel: "UA",
   clearCookies: "Website-Cookies löschen",
   cookiesCleared: "Website-Cookies gelöscht",
   uiLanguageDesc: "Folgt standardmäßig der Obsidian-/Systemsprache. Sie können auch eine feste Sprache für dieses Plugin wählen.",
@@ -4555,6 +4747,22 @@ const UI_TEXT_DE = commonUi({
 });
 
 const UI_TEXT_ES = commonUi({
+  on: "Activado",
+  off: "Desactivado",
+  auto: "Auto",
+  liveView: "Vista directa",
+  liveViewDesc: "Superficie de página directa dentro del navegador de notas.",
+  readerViewDesc: "Capa de texto del artículo y medios.",
+  cache: "Caché",
+  cacheDesc: "Páginas del lector guardadas para una visualización interna más rápida.",
+  viewMode: "Modo de vista",
+  viewModeDesc: "Cambia el ancho y el zoom de la página directa.",
+  downloadsDesc: "Archivos, HTML y MHT guardados en la bóveda.",
+  userScripts: "Scripts de usuario",
+  userScriptsDesc: "Reglas CSS/JavaScript que coinciden con la capa del lector.",
+  readingListDesc: "Las páginas guardadas quedan disponibles desde la barra del navegador.",
+  modeLabel: "Modo",
+  uaLabel: "UA",
   clearCookies: "Borrar cookies del sitio",
   cookiesCleared: "Cookies del sitio borradas",
   uiLanguageDesc: "Sigue por defecto el idioma de Obsidian/sistema. También puedes fijar un idioma para el plugin.",
@@ -4964,6 +5172,22 @@ const UI_TEXT_IT = commonUi({
 });
 
 const UI_TEXT_HI = commonUi({
+  on: "चालू",
+  off: "बंद",
+  auto: "स्वतः",
+  liveView: "लाइव व्यू",
+  liveViewDesc: "नोट ब्राउज़र के भीतर सीधा पेज सतह।",
+  readerViewDesc: "लेख पाठ और मीडिया परत।",
+  cache: "कैश",
+  cacheDesc: "तेज़ आंतरिक प्रदर्शन के लिए सहेजे गए रीडर पेज।",
+  viewMode: "व्यू मोड",
+  viewModeDesc: "लाइव पेज की चौड़ाई और ज़ूम बदलता है।",
+  downloadsDesc: "वॉल्ट फ़ोल्डर में सहेजी गई फ़ाइलें, HTML और MHT।",
+  userScripts: "यूज़र स्क्रिप्ट",
+  userScriptsDesc: "रीडर परत से मेल खाते CSS/JavaScript नियम।",
+  readingListDesc: "सहेजे गए पेज ब्राउज़र बार से उपलब्ध रहते हैं।",
+  modeLabel: "मोड",
+  uaLabel: "UA",
   clearCookies: "साइट कुकीज़ मिटाएँ",
   cookiesCleared: "साइट कुकीज़ मिटा दी गईं",
   uiLanguageDesc: "डिफ़ॉल्ट रूप से Obsidian/सिस्टम भाषा का पालन करती है। आप प्लगइन के लिए निश्चित भाषा भी चुन सकते हैं।",
@@ -5303,6 +5527,22 @@ const UI_TEXT_HI = commonUi({
 });
 
 const UI_TEXT_FA = commonUi({
+  on: "روشن",
+  off: "خاموش",
+  auto: "خودکار",
+  liveView: "نمای زنده",
+  liveViewDesc: "سطح مستقیم صفحه درون مرورگر یادداشت.",
+  readerViewDesc: "لایه متن مقاله و رسانه.",
+  cache: "حافظه نهان",
+  cacheDesc: "صفحات خواننده ذخیره‌شده برای نمایش داخلی سریع‌تر.",
+  viewMode: "حالت نمایش",
+  viewModeDesc: "عرض و بزرگ‌نمایی صفحه زنده را تغییر می‌دهد.",
+  downloadsDesc: "فایل‌ها، HTML و MHT ذخیره‌شده در پوشهٔ خزانه.",
+  userScripts: "اسکریپت‌های کاربر",
+  userScriptsDesc: "قواعد CSS/JavaScript منطبق با لایهٔ خواننده.",
+  readingListDesc: "صفحات ذخیره‌شده از نوار مرورگر در دسترس می‌مانند.",
+  modeLabel: "حالت",
+  uaLabel: "UA",
   ...UI_TEXT_AR,
   uiLanguage: "زبان رابط",
   followObsidian: "پیروی از زبان Obsidian",
@@ -5451,6 +5691,22 @@ const UI_TEXT_UZ = commonUi({
 
 const UI_TEXT_ID = commonUi({
   ...UI_TEXT_EN,
+  on: "Aktif",
+  off: "Nonaktif",
+  auto: "Otomatis",
+  liveView: "Tampilan Langsung",
+  liveViewDesc: "Permukaan halaman langsung di dalam Peramban Catatan.",
+  readerViewDesc: "Lapisan teks artikel dan media.",
+  cache: "Cache",
+  cacheDesc: "Halaman pembaca yang disimpan untuk tampilan internal lebih cepat.",
+  viewMode: "Mode Tampilan",
+  viewModeDesc: "Mengubah lebar dan zoom halaman langsung.",
+  downloadsDesc: "File, HTML, dan MHT yang disimpan di dalam folder vault.",
+  userScripts: "Skrip Pengguna",
+  userScriptsDesc: "Aturan CSS/JavaScript yang cocok untuk lapisan pembaca.",
+  readingListDesc: "Halaman tersimpan tetap bisa dibuka dari bilah peramban.",
+  modeLabel: "Mode",
+  uaLabel: "UA",
   clearCookies: "Hapus cookie situs",
   cookiesCleared: "Cookie situs dihapus",
   uiLanguageDesc: "Secara baku mengikuti bahasa Obsidian/sistem. Anda juga dapat menetapkan bahasa tetap untuk plugin ini.",
@@ -5808,6 +6064,22 @@ const UI_TEXT_MS = commonUi({
 });
 
 const UI_TEXT_TH = commonUi({
+  on: "เปิด",
+  off: "ปิด",
+  auto: "อัตโนมัติ",
+  liveView: "มุมมองสด",
+  liveViewDesc: "พื้นผิวหน้าเว็บโดยตรงภายในเบราว์เซอร์โน้ต",
+  readerViewDesc: "ชั้นข้อความบทความและสื่อ",
+  cache: "แคช",
+  cacheDesc: "หน้าของตัวอ่านที่เก็บไว้เพื่อแสดงภายในได้เร็วขึ้น",
+  viewMode: "โหมดมุมมอง",
+  viewModeDesc: "สลับความกว้างและการซูมของหน้าเว็บสด",
+  downloadsDesc: "ไฟล์ HTML และ MHT ที่บันทึกไว้ในโฟลเดอร์ของห้องสมุด",
+  userScripts: "สคริปต์ผู้ใช้",
+  userScriptsDesc: "กฎ CSS/JavaScript ที่ตรงกับชั้นของตัวอ่าน",
+  readingListDesc: "หน้าที่บันทึกไว้เปิดได้จากแถบเบราว์เซอร์",
+  modeLabel: "โหมด",
+  uaLabel: "UA",
   clearCookies: "ล้างคุกกี้ของเว็บ",
   cookiesCleared: "ล้างคุกกี้ของเว็บแล้ว",
   uiLanguageDesc: "ตามภาษา Obsidian/ระบบโดยค่าเริ่มต้น คุณยังกำหนดภาษาคงที่ให้ปลั๊กอินได้",
@@ -6147,6 +6419,22 @@ const UI_TEXT_TH = commonUi({
 });
 
 const UI_TEXT_VI = commonUi({
+  on: "Bật",
+  off: "Tắt",
+  auto: "Tự động",
+  liveView: "Xem trực tiếp",
+  liveViewDesc: "Bề mặt trang hiển thị trực tiếp trong trình duyệt ghi chú.",
+  readerViewDesc: "Lớp văn bản bài viết và phương tiện.",
+  cache: "Bộ nhớ đệm",
+  cacheDesc: "Các trang trình đọc được giữ lại để hiển thị nhanh hơn.",
+  viewMode: "Chế độ xem",
+  viewModeDesc: "Chuyển đổi chiều rộng và mức thu phóng của trang trực tiếp.",
+  downloadsDesc: "Tệp, HTML và MHT đã lưu trong thư mục kho.",
+  userScripts: "Kịch bản người dùng",
+  userScriptsDesc: "Quy tắc CSS/JavaScript khớp với lớp trình đọc.",
+  readingListDesc: "Trang đã lưu luôn mở được từ thanh trình duyệt.",
+  modeLabel: "Chế độ",
+  uaLabel: "UA",
   clearCookies: "Xóa cookie của trang",
   cookiesCleared: "Đã xóa cookie của trang",
   uiLanguageDesc: "Mặc định theo ngôn ngữ Obsidian/hệ thống. Bạn cũng có thể cố định một ngôn ngữ cho plugin.",
@@ -16995,9 +17283,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, false);
     addAction(toolActions, "briefcase", this.tr("toolStatus"), () => {
       this.toggleToolsPanel(body, this.tr("toolStatus"), [
-        `Mode: ${this.settings.desktopMode ? this.tr("desktop") : this.tr("mobile")}`,
-        `UA: ${this.settings.userAgentMode}`,
-        `JavaScript: ${this.settings.jsDisabled ? this.tr("disabled") : this.tr("yes")}`,
+        `${this.tr("modeLabel")}: ${this.settings.desktopMode ? this.tr("desktop") : this.tr("mobile")}`,
+        `${this.tr("uaLabel")}: ${this.settings.userAgentMode}`,
+        `${this.tr("javascript")}: ${this.settings.jsDisabled ? this.tr("disabled") : this.tr("yes")}`,
         `${this.tr("adBlock")}: ${this.settings.adBlockEnabled ? this.tr("yes") : this.tr("no")}`
       ]);
     }, false);
@@ -17012,14 +17300,14 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     const enabled = body.createDiv({ cls: "mwv-extension-grid" });
     for (const item of [
-      ["Live View", "On", "Direct page surface inside Note Browser."],
-      ["Reader", "Auto", "Article text and media layer."],
-      ["Cache", `${this.settings.pageCache.length}`, "Reader pages retained for faster internal display."],
-      ["View Mode", this.settings.desktopMode ? "Desktop" : "Mobile", "Switches live page width and zoom surface."],
-      ["Downloads", `${this.settings.downloads.length}`, "Files, HTML, and MHT saves inside the vault folder."],
-      ["Autofill", "On", "Address suggestions and accessible form fill."],
-      ["User Scripts", this.settings.userScriptsEnabled ? String(activeScripts.length) : "Off", "Matched reader CSS/JavaScript rules."],
-      ["Reading List", `${this.settings.readingList.length}`, "Saved pages stay available from the browser bar."]
+      [this.tr("liveView"), this.tr("on"), this.tr("liveViewDesc")],
+      [this.tr("reader"), this.tr("auto"), this.tr("readerViewDesc")],
+      [this.tr("cache"), `${this.settings.pageCache.length}`, this.tr("cacheDesc")],
+      [this.tr("viewMode"), this.settings.desktopMode ? this.tr("desktop") : this.tr("mobile"), this.tr("viewModeDesc")],
+      [this.tr("downloads"), `${this.settings.downloads.length}`, this.tr("downloadsDesc")],
+      [this.tr("autofill"), this.tr("on"), this.tr("autofillDesc")],
+      [this.tr("userScripts"), this.settings.userScriptsEnabled ? String(activeScripts.length) : this.tr("off"), this.tr("userScriptsDesc")],
+      [this.tr("readingList"), `${this.settings.readingList.length}`, this.tr("readingListDesc")]
     ]) {
       const row = enabled.createDiv({ cls: "mwv-extension-row" });
       row.createDiv({ cls: "mwv-extension-name", text: item[0] });

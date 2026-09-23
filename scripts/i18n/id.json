@@ -334,5 +334,21 @@
   "proxyModeActive": "Situs menolak penyematan — halaman asli dimuat lewat proxy bawaan",
   "postFormUnsupported": "Pengiriman formulir POST tidak didukung dalam mode proxy",
   "clearCookies": "Hapus cookie situs",
-  "cookiesCleared": "Cookie situs dihapus"
+  "cookiesCleared": "Cookie situs dihapus",
+  "on": "Aktif",
+  "off": "Nonaktif",
+  "auto": "Otomatis",
+  "liveView": "Tampilan Langsung",
+  "liveViewDesc": "Permukaan halaman langsung di dalam Peramban Catatan.",
+  "readerViewDesc": "Lapisan teks artikel dan media.",
+  "cache": "Cache",
+  "cacheDesc": "Halaman pembaca yang disimpan untuk tampilan internal lebih cepat.",
+  "viewMode": "Mode Tampilan",
+  "viewModeDesc": "Mengubah lebar dan zoom halaman langsung.",
+  "downloadsDesc": "File, HTML, dan MHT yang disimpan di dalam folder vault.",
+  "userScripts": "Skrip Pengguna",
+  "userScriptsDesc": "Aturan CSS/JavaScript yang cocok untuk lapisan pembaca.",
+  "readingListDesc": "Halaman tersimpan tetap bisa dibuka dari bilah peramban.",
+  "modeLabel": "Mode",
+  "uaLabel": "UA"
 }

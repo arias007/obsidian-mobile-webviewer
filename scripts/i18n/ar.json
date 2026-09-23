@@ -334,5 +334,21 @@
   "proxyModeActive": "يرفض الموقع التضمين — حُمّلت الصفحة الحقيقية عبر الوكيل المدمج",
   "postFormUnsupported": "إرسال نماذج POST غير مدعوم في وضع الوكيل",
   "clearCookies": "مسح كوكيز الموقع",
-  "cookiesCleared": "تم مسح كوكيز الموقع"
+  "cookiesCleared": "تم مسح كوكيز الموقع",
+  "on": "مفعّل",
+  "off": "معطّل",
+  "auto": "تلقائي",
+  "liveView": "عرض مباشر",
+  "liveViewDesc": "سطح الصفحة مباشرة داخل متصفح الملاحظات.",
+  "readerViewDesc": "طبقة نص المقال والوسائط.",
+  "cache": "ذاكرة مؤقتة",
+  "cacheDesc": "صفحات القارئ المحفوظة لعرض داخلي أسرع.",
+  "viewMode": "وضع العرض",
+  "viewModeDesc": "يبدّل عرض الصفحة المباشرة وتكبيرها.",
+  "downloadsDesc": "ملفات وHTML وMHT محفوظة داخل مجلد الخزنة.",
+  "userScripts": "سكربتات المستخدم",
+  "userScriptsDesc": "قواعد CSS/JavaScript المطابقة لطبقة القارئ.",
+  "readingListDesc": "الصفحات المحفوظة تبقى متاحة من شريط المتصفح.",
+  "modeLabel": "الوضع",
+  "uaLabel": "UA"
 }

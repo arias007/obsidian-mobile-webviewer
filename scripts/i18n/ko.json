@@ -334,5 +334,21 @@
   "proxyModeActive": "사이트가 임베딩을 거부 — 내장 프록시로 실제 페이지를 불러왔습니다",
   "postFormUnsupported": "프록시 모드에서는 POST 양식 제출을 지원하지 않습니다",
   "clearCookies": "사이트 쿠키 지우기",
-  "cookiesCleared": "사이트 쿠키를 지웠습니다"
+  "cookiesCleared": "사이트 쿠키를 지웠습니다",
+  "on": "켜짐",
+  "off": "꺼짐",
+  "auto": "자동",
+  "liveView": "라이브 뷰",
+  "liveViewDesc": "노트 브라우저 안에 직접 표시되는 페이지 표면.",
+  "readerViewDesc": "본문 텍스트와 미디어 읽기 레이어.",
+  "cache": "캐시",
+  "cacheDesc": "내부 표시를 빠르게 하기 위해 저장된 리더 페이지.",
+  "viewMode": "보기 모드",
+  "viewModeDesc": "라이브 페이지 너비와 확대/축소를 전환합니다.",
+  "downloadsDesc": "볼트 폴더에 저장된 파일, HTML, MHT.",
+  "userScripts": "사용자 스크립트",
+  "userScriptsDesc": "리더 레이어에 일치하는 CSS/JavaScript 규칙.",
+  "readingListDesc": "저장된 페이지는 브라우저 바에서 열 수 있습니다.",
+  "modeLabel": "모드",
+  "uaLabel": "UA"
 }

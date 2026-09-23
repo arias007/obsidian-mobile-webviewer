@@ -334,5 +334,21 @@
   "proxyModeActive": "サイトが埋め込みを拒否 — 内蔵プロキシで実際のページを読み込みました",
   "postFormUnsupported": "プロキシモードでは POST フォーム送信に対応していません",
   "clearCookies": "サイトのCookieを消去",
-  "cookiesCleared": "サイトのCookieを消去しました"
+  "cookiesCleared": "サイトのCookieを消去しました",
+  "on": "オン",
+  "off": "オフ",
+  "auto": "自動",
+  "liveView": "ライブビュー",
+  "liveViewDesc": "ノートブラウザー内に直接表示されるページ表面。",
+  "readerViewDesc": "本文テキストとメディアの閲覧レイヤー。",
+  "cache": "キャッシュ",
+  "cacheDesc": "内部表示を速くするため保存されたリーダーページ。",
+  "viewMode": "表示モード",
+  "viewModeDesc": "ライブページの幅とズームを切り替えます。",
+  "downloadsDesc": "ボルトフォルダー内に保存されたファイル・HTML・MHT。",
+  "userScripts": "ユーザースクリプト",
+  "userScriptsDesc": "リーダーレイヤーに一致する CSS/JavaScript ルール。",
+  "readingListDesc": "保存したページはブラウザーバーから開けます。",
+  "modeLabel": "モード",
+  "uaLabel": "UA"
 }

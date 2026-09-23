@@ -334,5 +334,21 @@
   "proxyModeActive": "साइट ने एम्बेडिंग अस्वीकार की — वास्तविक पेज अंतर्निहित प्रॉक्सी से लोड हुआ",
   "postFormUnsupported": "प्रॉक्सी मोड में POST फ़ॉर्म सबमिशन समर्थित नहीं",
   "clearCookies": "साइट कुकीज़ मिटाएँ",
-  "cookiesCleared": "साइट कुकीज़ मिटा दी गईं"
+  "cookiesCleared": "साइट कुकीज़ मिटा दी गईं",
+  "on": "चालू",
+  "off": "बंद",
+  "auto": "स्वतः",
+  "liveView": "लाइव व्यू",
+  "liveViewDesc": "नोट ब्राउज़र के भीतर सीधा पेज सतह।",
+  "readerViewDesc": "लेख पाठ और मीडिया परत।",
+  "cache": "कैश",
+  "cacheDesc": "तेज़ आंतरिक प्रदर्शन के लिए सहेजे गए रीडर पेज।",
+  "viewMode": "व्यू मोड",
+  "viewModeDesc": "लाइव पेज की चौड़ाई और ज़ूम बदलता है।",
+  "downloadsDesc": "वॉल्ट फ़ोल्डर में सहेजी गई फ़ाइलें, HTML और MHT।",
+  "userScripts": "यूज़र स्क्रिप्ट",
+  "userScriptsDesc": "रीडर परत से मेल खाते CSS/JavaScript नियम।",
+  "readingListDesc": "सहेजे गए पेज ब्राउज़र बार से उपलब्ध रहते हैं।",
+  "modeLabel": "मोड",
+  "uaLabel": "UA"
 }

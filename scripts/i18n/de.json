@@ -334,5 +334,21 @@
   "proxyModeActive": "Seite lehnt Einbettung ab — echte Seite über integrierten Proxy geladen",
   "postFormUnsupported": "POST-Formularversand wird im Proxy-Modus nicht unterstützt",
   "clearCookies": "Website-Cookies löschen",
-  "cookiesCleared": "Website-Cookies gelöscht"
+  "cookiesCleared": "Website-Cookies gelöscht",
+  "on": "Ein",
+  "off": "Aus",
+  "auto": "Auto",
+  "liveView": "Live-Ansicht",
+  "liveViewDesc": "Direkte Seitenoberfläche im Notiz-Browser.",
+  "readerViewDesc": "Artikeltext- und Medienebene.",
+  "cache": "Cache",
+  "cacheDesc": "Gespeicherte Leserseiten für schnellere interne Anzeige.",
+  "viewMode": "Ansichtsmodus",
+  "viewModeDesc": "Wechselt Breite und Zoom der Live-Seite.",
+  "downloadsDesc": "Dateien, HTML und MHT im Tresor-Ordner gespeichert.",
+  "userScripts": "Benutzerskripte",
+  "userScriptsDesc": "Passende CSS/JavaScript-Regeln für die Leseebene.",
+  "readingListDesc": "Gespeicherte Seiten bleiben über die Browserleiste erreichbar.",
+  "modeLabel": "Modus",
+  "uaLabel": "UA"
 }
