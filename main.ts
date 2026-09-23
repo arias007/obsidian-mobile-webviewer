@@ -6953,9 +6953,13 @@ function normalizeInput(input: string, searchUrl: string): string {
 
   // `read:` comes first: the target can itself be a bare host, a search phrase
   // or a full URL, and it has to go through the same resolution as anything
-  // else before the reader marker is attached.
+  // else before the reader marker is attached. The resolver only runs for
+  // read-prefixed input — a plain address falls through to the normal handling
+  // below (wiring this callback straight back into normalizeInput used to
+  // recurse until the stack blew, killing every NoteWeb navigation).
   const readRequest = resolveReadRequest(value, (target) => (target ? normalizeInput(target, searchUrl) : DEFAULT_HOME));
   if (readRequest.readRequested) return readRequest.marker;
+  if (readRequest.url) return readRequest.url;
 
   if (isInternalUtilityUrl(value)) {
     return value;

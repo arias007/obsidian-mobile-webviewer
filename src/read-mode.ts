@@ -52,6 +52,11 @@ export function readModeTarget(url: string | undefined | null): string {
  * hands back both the marker and the clean URL. `resolve` is the host's own
  * address normaliser, so a bare host, a search phrase and a full URL all keep
  * behaving exactly as they do without the prefix.
+ *
+ * The resolver runs ONLY for read-prefixed input. A plain address is reported
+ * back with empty url/marker so the caller resolves it through its normal
+ * path — feeding it through `resolve` here used to recurse forever when the
+ * host's normaliser itself called resolveReadRequest.
  */
 export function resolveReadRequest(
   input: string,
@@ -59,8 +64,8 @@ export function resolveReadRequest(
 ): { readRequested: boolean; url: string; marker: string } {
   const target = stripReadPrefix(input);
   if (target === null) {
-    const url = resolve(input);
-    return { readRequested: false, url, marker: url };
+    // Not a read request: the caller owns this address.
+    return { readRequested: false, url: "", marker: "" };
   }
   if (!target) {
     // "read:" on its own is not a request for anything; fall back to the home
@@ -70,6 +75,8 @@ export function resolveReadRequest(
   }
   const resolved = resolve(target);
   if (!/^https?:\/\//i.test(resolved)) {
+    // A bare host became https, a phrase became a search URL: still a normal
+    // address, only the resolver already produced it (prefix stripped).
     return { readRequested: false, url: resolved, marker: resolved };
   }
   return { readRequested: true, url: resolved, marker: buildReadModeUrl(resolved) };

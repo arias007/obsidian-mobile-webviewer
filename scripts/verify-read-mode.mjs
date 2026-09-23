@@ -46,6 +46,40 @@ const resolve = (target) => {
 
 check("no prefix leaves the address untouched", readMode.stripReadPrefix("example.com") === null);
 
+// Regression guard: the host's normaliser feeds targets back through
+// resolveReadRequest (normalizeInput -> resolveReadRequest -> normalizeInput).
+// If the resolver ever runs for a non-read address, that wiring recurses until
+// the stack blows and every NoteWeb navigation dies.
+let resolverRuns = 0;
+const guarded = readMode.resolveReadRequest("example.com", () => {
+  resolverRuns += 1;
+  return "https://example.com/";
+});
+check(
+  "non-read input never invokes the resolver",
+  guarded.readRequested === false && guarded.url === "" && guarded.marker === "" && resolverRuns === 0,
+  `runs=${resolverRuns}`
+);
+// A faithful stand-in for normalizeInput: same read: wiring, same fall-through
+// resolution (protocol check, bare-host https, search fallback).
+const circularResolve = (target) => {
+  const value = String(target ?? "").trim();
+  const request = readMode.resolveReadRequest(value, circularResolve);
+  if (request.readRequested) return request.marker;
+  if (request.url) return request.url;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(value)) return `https://${value}`;
+  return value ? `https://www.bing.com/search?q=${encodeURIComponent(value)}` : "https://www.bing.com/";
+};
+check(
+  "circular host wiring terminates on a plain address",
+  circularResolve("example.com/post") === "https://example.com/post"
+);
+check(
+  "circular host wiring terminates on a bare read:",
+  circularResolve("read:") === "https://www.bing.com/"
+);
+
 const bare = readMode.resolveReadRequest("read:example.com/post", resolve);
 check("read:host resolves and requests the reader", bare.readRequested, bare.marker);
 check("read:host marks the resolved https URL", bare.url === "https://example.com/post", bare.url);
