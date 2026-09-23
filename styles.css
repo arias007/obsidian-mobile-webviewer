@@ -3738,6 +3738,18 @@
   background: var(--background-primary);
 }
 
+/*
+ * Tab keep-alive: a parked WebView stays mounted next to the live one so its
+ * document, history and scroll position survive tab switches. It must be fully
+ * out of layout and paint, but remain in the DOM — removing it would destroy
+ * the guest and reload the page on the next switch.
+ */
+.mwv-parked-frame {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 .mwv-reader-panel {
   display: grid;
   gap: 10px;

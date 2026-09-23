@@ -35,6 +35,11 @@ const MAX_READING_LIST = 120;
 const MAX_CACHE_ENTRIES = 40;
 const MAX_CONSOLE_ENTRIES = 120;
 const MAX_BROWSER_TABS = 16;
+// Live webview surfaces kept per embed. A parked tab surface keeps its guest
+// renderer alive, so switching back to it shows the page exactly as the user
+// left it instead of reloading. Going over the cap evicts the
+// least-recently-used parked surface; that tab reloads on its next activation.
+const MAX_LIVE_TAB_SURFACES = 5;
 const MAX_DOWNLOADS = 120;
 const MAX_WEB_NOTES = 500;
 const DEFAULT_DOWNLOAD_FOLDER = "Mobile Webviewer Downloads";
@@ -10415,6 +10420,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   embedRenderTokens = new WeakMap<HTMLElement, number>();
   embedRenderSeq = 0;
+  // Sequence for anonymous parked-surface ids (surfaces created before a tab
+  // record existed); only used for dataset bookkeeping, never persisted.
+  embedSurfaceSeq = 0;
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
   noteDrawControllerRepairs = new WeakSet<HTMLElement>();
@@ -14661,17 +14669,26 @@ export default class MobileWebviewerPlugin extends Plugin {
       return;
     }
     const liveSurface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
-    if (embed.hasClass("is-web-front") && liveSurface && /^https?:\/\//i.test(nextUrl)) {
+    if (embed.hasClass("is-web-front") && /^https?:\/\//i.test(nextUrl)) {
       // Raw Web mode navigates the already-mounted guest page. Do not render
       // a second reader/search document or replace the WebView while the user
-      // is switching between the two presentations.
-      this.updateEmbedChrome(embed, nextUrl, hostName(nextUrl));
-      if (!this.sameWebPage(this.safeBrowserSurfaceUrl(liveSurface), nextUrl)) {
-        this.setBrowserSurfaceUrl(liveSurface, nextUrl);
+      // is switching between the two presentations. When the switch parked
+      // every frame (the target tab had no preserved surface), mount a fresh
+      // guest first so Web mode never paints without a surface.
+      let activeSurface = liveSurface;
+      if (!activeSurface) {
+        this.renderLiveBrowserSurface(embed, nextUrl);
+        activeSurface = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
       }
-      void this.addHistory({ title: hostName(nextUrl), url: nextUrl, time: Date.now() });
-      await this.syncEmbedActiveTab(embed, nextUrl, hostName(nextUrl));
-      return;
+      if (activeSurface) {
+        this.updateEmbedChrome(embed, nextUrl, hostName(nextUrl));
+        if (!this.sameWebPage(this.safeBrowserSurfaceUrl(activeSurface), nextUrl)) {
+          this.setBrowserSurfaceUrl(activeSurface, nextUrl);
+        }
+        void this.addHistory({ title: hostName(nextUrl), url: nextUrl, time: Date.now() });
+        await this.syncEmbedActiveTab(embed, nextUrl, hostName(nextUrl));
+        return;
+      }
     }
     // From here on the note document itself is going to paint this URL
     // (utility page, Bing shell, reader article, or fallback). Remember it:
@@ -14804,6 +14821,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.activeBrowserTabId = tab.id;
     this.setEmbedStack(embed, "mwvBack", tab.back ?? []);
     this.setEmbedStack(embed, "mwvForward", tab.forward ?? []);
+    // Tab keep-alive: promote the target tab's parked WebView (if any) to the
+    // live surface BEFORE the navigation flow runs. openUrlInEmbed then sees
+    // an already-mounted guest sitting on the recorded url and the sameWebPage
+    // checks skip the reload — the background tab keeps its document, history
+    // and scroll position. Without a parked surface this parks every frame so
+    // renderLiveBrowserSurface creates a fresh one for the target.
+    this.activateEmbedSurfaceForTab(embed, tab.id);
     this.settings.noteBrowserUrl = tab.url;
     this.settings.noteBrowserBack = [...(tab.back ?? [])];
     this.settings.noteBrowserForward = [...(tab.forward ?? [])];
@@ -14830,6 +14854,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.dataset.mwvActiveTabId = tab.id;
     this.setEmbedStack(embed, "mwvBack", []);
     this.setEmbedStack(embed, "mwvForward", []);
+    // Tab keep-alive: the new tab has no surface yet, so this parks the
+    // outgoing tab's WebView instead of destroying it — the pool cap decides
+    // later which parked surfaces get evicted.
+    this.activateEmbedSurfaceForTab(embed, tab.id);
     await this.saveSettings();
     // Paint the new entry immediately. The navigation below is allowed to bail
     // (superseded render token / reader flush re-entry), and when it does
@@ -14852,6 +14880,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.settings.browserTabs = [replacement];
       this.settings.activeBrowserTabId = replacement.id;
       embed.dataset.mwvActiveTabId = replacement.id;
+      this.adoptEmbedSurfaceForSuccessor(embed, id, replacement.id);
       await this.saveSettings();
       await this.openUrlInEmbed(embed, replacement.url, false);
       this.settleEmbedTabs(embed);
@@ -14864,11 +14893,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       const next = tabs[Math.min(index, tabs.length - 1)];
       embed.dataset.mwvActiveTabId = next.id;
       this.settings.activeBrowserTabId = next.id;
+      this.adoptEmbedSurfaceForSuccessor(embed, id, next.id);
       await this.saveSettings();
       await this.openUrlInEmbed(embed, next.url, false);
       this.settleEmbedTabs(embed);
       return;
     }
+    // Background tab: nothing owns its surface anymore — free the renderer.
+    this.destroyEmbedSurfaceForTab(embed, id);
     await this.saveSettings();
     this.settleEmbedTabs(embed);
   }
@@ -14953,8 +14985,18 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   renderUtilityEmbed(embed: HTMLElement, kind: UtilityPageKind, url = utilityPageUrl(kind)): void {
-    this.disposeBrowserSurfacesIn(embed);
-    embed.empty();
+    // Keep-alive: a utility tab replaces the visible document, not the pooled
+    // WebViews. Keep the surface container (live + parked) so switching back
+    // to a content tab promotes its preserved page instead of reloading it.
+    const keptLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (keptLiveBrowser?.querySelector(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")) {
+      Array.from(embed.children).forEach((child) => {
+        if (child !== keptLiveBrowser) child.remove();
+      });
+    } else {
+      this.disposeBrowserSurfacesIn(embed);
+      embed.empty();
+    }
     embed.addClass("mwv-embed");
     embed.addClass("mwv-note-embed");
     embed.addClass("mwv-utility-embed");
@@ -15145,7 +15187,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     // mounted across host-side reader/search rerenders so session state,
     // history, cookies, and the current document are not forked.
     const liveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
-    if (liveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+    if (liveBrowser?.querySelector(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")) {
       Array.from(embed.children).forEach((child) => {
         if (child !== liveBrowser) child.remove();
       });
@@ -15185,7 +15227,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     await this.prepareEmbedForRerender(embed);
     const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
-    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")) {
       Array.from(embed.children).forEach((child) => {
         if (child !== retainedLiveBrowser) child.remove();
       });
@@ -15203,6 +15245,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), url)) {
         this.setBrowserSurfaceUrl(retainedFrame, url);
       }
+      // Keep-alive: only parked surfaces survived a tab switch — recreate the
+      // live guest for the tab that owns this paint.
+      if (!retainedFrame) this.renderLiveBrowserSurface(embed, url);
     }
     this.notifyNoteDrawWebviewChanged(embed);
 
@@ -15277,23 +15322,58 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.disposeBrowserSurfacesIn(duplicate);
       duplicate.remove();
     }
-    if (surface.querySelector(":scope > .mwv-live-frame")) {
+    const activeFrame = surface.querySelector<HTMLElement>(":scope > .mwv-live-frame");
+    if (activeFrame) {
+      // The active surface is already mounted — a same-tab navigation or a
+      // reactivated parked tab. Callers drive url-sync through the active
+      // frame (the sameWebPage checks), so nothing is reloaded here and the
+      // page keeps its live document, history and scroll position.
       this.notifyNoteDrawWebviewChanged(embed);
       return;
     }
     surface.addClass("mwv-live-browser");
+    this.evictParkedEmbedSurfaces(surface);
+    // Park every remaining live frame: from here on exactly ONE frame — the
+    // one this call creates — carries .mwv-live-frame, so every existing
+    // single-surface selector keeps resolving to the active surface.
+    for (const parked of Array.from(surface.querySelectorAll<HTMLElement>(":scope > .mwv-live-frame"))) {
+      parked.addClass("mwv-parked-frame");
+      parked.removeClass("mwv-live-frame");
+    }
     const frame = this.createBrowserSurface(surface, url, "mwv-live-frame", hostName(url), {
       raw: true,
+      // Ownership test for the event callbacks below: a surface owns the
+      // embed view exactly while it carries .mwv-live-frame. Parked surfaces
+      // fire late events (a pending redirect, a slow title update) that must
+      // never write the shared embed state — they record into their own tab.
       onReady: () => {
         void this.applyAccessibleFrameFilters(frame, embed.dataset.url || url);
-        if (this.isNoteBrowserRawEditingMode(embed) && embed.dataset.mwvNotewebElementSelector === "true") {
-          void this.setNoteWebRawElementSelector(embed, true);
+        if (this.ownsEmbedSurfaceView(frame)) {
+          if (this.isNoteBrowserRawEditingMode(embed) && embed.dataset.mwvNotewebElementSelector === "true") {
+            void this.setNoteWebRawElementSelector(embed, true);
+          }
+          this.notifyNoteDrawWebviewChanged(embed);
         }
-        this.notifyNoteDrawWebviewChanged(embed);
       },
-      onNavigate: (nextUrl) => { void this.handleEmbedSurfaceNavigate(embed, nextUrl); },
-      onTitle: (title) => this.handleEmbedSurfaceTitle(embed, title),
+      onNavigate: (nextUrl) => {
+        if (!this.ownsEmbedSurfaceView(frame)) {
+          this.recordParkedSurfaceNavigation(frame, nextUrl);
+          return;
+        }
+        void this.handleEmbedSurfaceNavigate(embed, nextUrl);
+      },
+      onTitle: (title) => {
+        if (!this.ownsEmbedSurfaceView(frame)) {
+          this.recordParkedSurfaceTitle(frame, title);
+          return;
+        }
+        this.handleEmbedSurfaceTitle(embed, title);
+      },
       onFail: (message, failedUrl) => {
+        if (!this.ownsEmbedSurfaceView(frame)) {
+          void this.addConsole("warn", `Background tab load issue: ${message}`, failedUrl ?? url);
+          return;
+        }
         const currentUrl = failedUrl ?? embed.dataset.url ?? url;
         this.updateEmbedStatus(embed, currentUrl, hostName(currentUrl));
         void this.addConsole("warn", `Note Browser load issue: ${message}`, currentUrl);
@@ -15308,15 +15388,134 @@ export default class MobileWebviewerPlugin extends Plugin {
       onConsole: (level, message, pageUrl) => this.addConsole(level, message, pageUrl ?? embed.dataset.url ?? url),
       onNewWindow: (nextUrl) => this.openNoteBrowser(nextUrl, true),
       onLoading: (loading, loadingUrl) => {
+        if (!this.ownsEmbedSurfaceView(frame)) return;
         this.updateEmbedLoading(embed, loading, loadingUrl || url);
         if (!loading) this.notifyNoteDrawWebviewChanged(embed);
       },
-      onFavicon: (iconUrl) => this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url),
+      onFavicon: (iconUrl) => {
+        if (this.ownsEmbedSurfaceView(frame)) this.addConsole("info", `Favicon: ${iconUrl}`, embed.dataset.url || url);
+      },
       onDownloadCandidate: (downloadUrl) => this.handleEmbedDownloadCandidate(embed, downloadUrl),
-      onContextLink: (linkUrl, linkTitle) => this.updateEmbedStatus(embed, linkUrl, linkTitle),
+      onContextLink: (linkUrl, linkTitle) => {
+        if (this.ownsEmbedSurfaceView(frame)) this.updateEmbedStatus(embed, linkUrl, linkTitle);
+      },
       onWebNotePatch: (patch) => { void this.saveBrowserSurfaceWebNotePatch(patch); }
     });
+    frame.dataset.mwvSurfaceTabId = embed.dataset.mwvActiveTabId || `anon-${++this.embedSurfaceSeq}`;
+    frame.dataset.mwvSurfaceActiveAt = String(Date.now());
     this.applyFrameViewPreferences(frame);
+    this.notifyNoteDrawWebviewChanged(embed);
+  }
+
+  /**
+   * A surface owns the embed view exactly while it carries .mwv-live-frame.
+   * Parking swaps that class for .mwv-parked-frame, so this check is the
+   * event-routing guard: late events from a hidden tab must not write the
+   * shared embed state (dataset.url, stacks, chrome, reader).
+   */
+  ownsEmbedSurfaceView(frame: HTMLElement): boolean {
+    return frame.classList.contains("mwv-live-frame");
+  }
+
+  findEmbedSurfaceForTab(surface: HTMLElement, tabId: string): HTMLElement | null {
+    if (!tabId) return null;
+    return (
+      Array.from(
+        surface.querySelectorAll<HTMLElement>(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")
+      ).find((frame) => frame.dataset.mwvSurfaceTabId === tabId) ?? null
+    );
+  }
+
+  /**
+   * Swap the parked/active classes so the surface of `tabId` becomes the one
+   * every single-surface selector resolves to. Called on tab switch/new
+   * before the navigation flow: when the target has a parked surface, the
+   * subsequent sameWebPage checks see it is already on the right url and skip
+   * the reload — that is what keeps a background tab's content alive.
+   * Without a parked surface every frame is parked, so the new one is created
+   * by the next renderLiveBrowserSurface call.
+   */
+  activateEmbedSurfaceForTab(embed: HTMLElement, tabId: string): void {
+    const surface = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (!surface) return;
+    const frames = Array.from(surface.querySelectorAll<HTMLElement>(":scope > .mwv-live-frame, :scope > .mwv-parked-frame"));
+    if (frames.length === 0) return;
+    const target = tabId ? frames.find((frame) => frame.dataset.mwvSurfaceTabId === tabId) : undefined;
+    for (const frame of frames) {
+      const active = frame === target;
+      frame.toggleClass("mwv-parked-frame", !active);
+      frame.toggleClass("mwv-live-frame", active);
+      if (active) {
+        frame.dataset.mwvSurfaceActiveAt = String(Date.now());
+        // CSS-level preferences only — applying them never reloads the guest,
+        // so a long-parked surface resurfaces with current settings intact.
+        this.applyFrameViewPreferences(frame as BrowserSurfaceElement);
+      }
+    }
+    if (target) this.notifyNoteDrawWebviewChanged(embed);
+  }
+
+  /** Free the oldest parked surfaces so the pool never exceeds the cap. */
+  evictParkedEmbedSurfaces(surface: HTMLElement): void {
+    const parked = Array.from(surface.querySelectorAll<HTMLElement>(":scope > .mwv-parked-frame"));
+    const overflow = parked.length + 1 - MAX_LIVE_TAB_SURFACES;
+    if (overflow <= 0) return;
+    const ordered = parked.sort(
+      (left, right) => Number(left.dataset.mwvSurfaceActiveAt || 0) - Number(right.dataset.mwvSurfaceActiveAt || 0)
+    );
+    for (const victim of ordered.slice(0, overflow)) {
+      this.disposeBrowserSurfacesIn(victim);
+      victim.remove();
+    }
+  }
+
+  /** Destroy the surface of a closed tab so its renderer is freed. */
+  destroyEmbedSurfaceForTab(embed: HTMLElement, tabId: string): void {
+    const surface = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    const frame = surface ? this.findEmbedSurfaceForTab(surface, tabId) : null;
+    if (!frame) return;
+    this.disposeBrowserSurfacesIn(frame);
+    frame.remove();
+  }
+
+  recordParkedSurfaceNavigation(frame: HTMLElement, nextUrl: string): void {
+    const tabId = frame.dataset.mwvSurfaceTabId;
+    if (!tabId || !nextUrl || nextUrl === "about:blank" || nextUrl.startsWith("devtools://")) return;
+    void this.updateBrowserTab(tabId, { url: normalizeInput(nextUrl, this.settings.searchUrl), time: Date.now() });
+  }
+
+  recordParkedSurfaceTitle(frame: HTMLElement, title: string): void {
+    const tabId = frame.dataset.mwvSurfaceTabId;
+    if (!tabId || !title) return;
+    void this.updateBrowserTab(tabId, { title });
+  }
+
+  /**
+   * Tab keep-alive for close: hand the closed tab's surface over to its
+   * successor. If the successor already has a parked WebView, that one is
+   * promoted and the closed tab's renderer is freed. Otherwise the surviving
+   * guest is re-owned by the successor and the navigation flow that follows
+   * drives it to the successor url — the same reuse path tabs always used,
+   * so closing never leaves the embed without a live surface.
+   */
+  adoptEmbedSurfaceForSuccessor(embed: HTMLElement, closedTabId: string, successorTabId: string): void {
+    const surface = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
+    if (!surface) return;
+    const successorFrame = this.findEmbedSurfaceForTab(surface, successorTabId);
+    if (successorFrame) {
+      this.activateEmbedSurfaceForTab(embed, successorTabId);
+      const closedFrame = this.findEmbedSurfaceForTab(surface, closedTabId);
+      if (closedFrame) {
+        this.disposeBrowserSurfacesIn(closedFrame);
+        closedFrame.remove();
+      }
+      return;
+    }
+    const closedFrame = this.findEmbedSurfaceForTab(surface, closedTabId);
+    if (!closedFrame) return;
+    closedFrame.dataset.mwvSurfaceTabId = successorTabId;
+    closedFrame.dataset.mwvSurfaceActiveAt = String(Date.now());
+    this.activateEmbedSurfaceForTab(embed, successorTabId);
   }
 
   updateEmbedLoading(embed: HTMLElement, loading: boolean, url: string): void {
@@ -15906,7 +16105,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.prepareEmbedForRerender(embed);
     if (this.disposed || !embed.isConnected || this.embedRenderTokens.get(embed) !== renderToken) return;
     const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
-    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")) {
       Array.from(embed.children).forEach((child) => {
         if (child !== retainedLiveBrowser) child.remove();
       });
@@ -15930,6 +16129,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), currentUrl)) {
         this.setBrowserSurfaceUrl(retainedFrame, currentUrl);
       }
+      // Keep-alive: the container survived holding parked surfaces only (the
+      // previous tab was parked by a switch). Recreate the live guest for the
+      // tab that owns this paint so the retained-surface contract holds.
+      if (!retainedFrame) this.renderLiveBrowserSurface(embed, currentUrl);
     }
     this.notifyNoteDrawWebviewChanged(embed);
 
@@ -17135,7 +17338,7 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   renderPageEmbed(embed: HTMLElement, page: NotePage): void {
     const retainedLiveBrowser = embed.querySelector<HTMLElement>(":scope > .mwv-live-browser");
-    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame")) {
+    if (retainedLiveBrowser?.querySelector(":scope > .mwv-live-frame, :scope > .mwv-parked-frame")) {
       Array.from(embed.children).forEach((child) => {
         if (child !== retainedLiveBrowser) child.remove();
       });
@@ -17153,6 +17356,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (retainedFrame && !this.sameWebPage(this.safeBrowserSurfaceUrl(retainedFrame), page.url)) {
         this.setBrowserSurfaceUrl(retainedFrame, page.url);
       }
+      // Keep-alive: only parked surfaces survived a tab switch — recreate the
+      // live guest for the tab that owns this paint.
+      if (!retainedFrame) this.renderLiveBrowserSurface(embed, page.url);
     }
     embed.createDiv({ cls: "mwv-note-source", text: page.byline || hostName(page.url) });
     embed.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
@@ -18172,7 +18378,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       embed?._mwvMarkdownComponent?.unload();
       if (embed) embed._mwvMarkdownComponent = undefined;
     });
-    root.querySelectorAll<BrowserSurfaceElement>(".mwv-real-webview, .mwv-live-frame").forEach((surface) => {
+    root.querySelectorAll<BrowserSurfaceElement>(".mwv-real-webview, .mwv-live-frame, .mwv-parked-frame").forEach((surface) => {
       const proxyState = this.proxyFrameState.get(surface);
       proxyState?.dispose();
       this.proxyFrameState.delete(surface);

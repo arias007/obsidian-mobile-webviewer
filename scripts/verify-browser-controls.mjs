@@ -22,6 +22,7 @@ import * as esbuild from "esbuild";
 const sourcePath = process.env.MWV_SOURCE || "main.ts";
 const source = fs.readFileSync(sourcePath, "utf8");
 const MAX_BROWSER_TABS = 16;
+const MAX_LIVE_TAB_SURFACES = 5;
 
 /* ------------------------------------------------------------------ *
  * Extract real method bodies from the TypeScript source
@@ -171,6 +172,45 @@ function buildTabMutationTable(src) {
 }
 
 const tabMutations = buildTabMutationTable(source);
+
+/**
+ * 0.4.25 tab keep-alive: the pool helpers are extracted separately so the
+ * keep-alive checks can drive the real bodies against a jsdom surface without
+ * dragging in renderLiveBrowserSurface's full collaborator set.
+ */
+function buildKeepAliveTable(src) {
+  const names = [
+    "ownsEmbedSurfaceView",
+    "findEmbedSurfaceForTab",
+    "activateEmbedSurfaceForTab",
+    "evictParkedEmbedSurfaces",
+    "destroyEmbedSurfaceForTab",
+    "adoptEmbedSurfaceForSuccessor",
+    "recordParkedSurfaceNavigation",
+    "recordParkedSurfaceTitle"
+  ];
+  const entries = names.map((name) => {
+    try {
+      const { isAsync, paramsAndBody } = extractMethod(src, name);
+      return `  ${name}: ${isAsync ? "async " : ""}function ${paramsAndBody}`;
+    } catch (error) {
+      // Older sources (negative control) fail loudly when a keep-alive check
+      // actually drives the missing method.
+      return `  ${name}: function () { throw new Error(${JSON.stringify(`method missing in this source: ${name}`)}); }`;
+    }
+  });
+  const ts = `const __K = {\n${entries.join(",\n")}\n};\n__K;\n`;
+  const js = esbuild.transformSync(ts, { loader: "ts", format: "cjs", target: "es2020" }).code;
+  // recordParkedSurfaceNavigation normalizes through the module-level
+  // normalizeInput; identity stub — the checks only assert routing, not
+  // normalization (covered by the note-browser suite).
+  return new Function(
+    "MAX_LIVE_TAB_SURFACES",
+    `function normalizeInput(url) { return String(url || ""); }\n${js}\nreturn __K;`
+  )(MAX_LIVE_TAB_SURFACES);
+}
+
+const keepAlive = buildKeepAliveTable(source);
 
 /* ------------------------------------------------------------------ *
  * Minimal harness
@@ -360,6 +400,12 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     newEmbedBrowserTab: (el) => { calls.newTab.push(true); },
     getEmbedActiveTab: () => ctx.settings.browserTabs.find((t) => t.id === ctx.settings.activeBrowserTabId) ?? ctx.settings.browserTabs[0],
     updateBrowserTab: async () => {},
+    // Keep-alive collaborators. The tab-mutation checks stub them out (they
+    // assert row behaviour, not surface pooling); the keep-alive checks below
+    // drive the real extracted bodies instead.
+    activateEmbedSurfaceForTab: () => {},
+    adoptEmbedSurfaceForSuccessor: () => {},
+    destroyEmbedSurfaceForTab: () => {},
     activeBrowserTabId: "t1",
     ensureBrowserTab: () => ({ id: "t1", title: "One", url: "https://example.org/" }),
     plugin: null
@@ -905,6 +951,116 @@ check("repeated chrome updates do not stack listeners or duplicate wiring", () =
   assert(calls.openUrlInEmbed.length === 0, "an update navigated the embed");
   assert(navigations.filter((n) => n === "back").length === 1, `back fired ${navigations.length} times`);
   return "one handler, one navigation across 5 updates";
+});
+
+/* ------------------------------------------------------------------ *
+ * 0.4.25 tab keep-alive: parked surface pool
+ * ------------------------------------------------------------------ */
+
+function createSurfaceWorld() {
+  const world = createWorld();
+  const { embed, ctx, win, doc } = world;
+  const liveBrowser = embed.querySelector(":scope > .mwv-live-browser");
+  const calls = { prefs: [], notify: 0, disposed: [], tabPatches: [] };
+  ctx.applyFrameViewPreferences = (frame) => { calls.prefs.push(frame); };
+  ctx.notifyNoteDrawWebviewChanged = () => { calls.notify += 1; };
+  ctx.disposeBrowserSurfacesIn = (node) => { calls.disposed.push(node); };
+  ctx.updateBrowserTab = async (tabId, patch) => { calls.tabPatches.push([tabId, patch]); };
+  // The world mounts one live surface; tag it as t1's and add a parked t2.
+  const live = liveBrowser.querySelector(":scope > .mwv-live-frame");
+  live.dataset.mwvSurfaceTabId = "t1";
+  live.dataset.mwvSurfaceActiveAt = "100";
+  const parked = doc.createElement("webview");
+  parked.className = "mwv-parked-frame";
+  parked.dataset.mwvSurfaceTabId = "t2";
+  parked.dataset.mwvSurfaceActiveAt = "200";
+  liveBrowser.appendChild(parked);
+  // The real pool helpers resolve each other through `this` — mount the real
+  // extracted bodies so the checks drive the actual routing, while the
+  // collaborators above stay as recording stubs.
+  Object.assign(ctx, keepAlive);
+  return Object.assign(world, { liveBrowser, live, parked, calls });
+}
+
+check("tab keep-alive: switching to a preserved tab promotes its parked surface and parks the outgoing one", () => {
+  const { embed, live, parked, calls, ctx } = createSurfaceWorld();
+  keepAlive.activateEmbedSurfaceForTab.call(ctx, embed, "t2");
+  assert(parked.hasClass("mwv-live-frame") && !parked.hasClass("mwv-parked-frame"), "the preserved surface did not go live");
+  assert(live.hasClass("mwv-parked-frame") && !live.hasClass("mwv-live-frame"), "the outgoing surface stayed live");
+  assert(Number(parked.dataset.mwvSurfaceActiveAt) > 200, "the promoted surface did not refresh its recency stamp");
+  assert(calls.prefs.includes(parked), "the promoted surface missed its view preferences");
+  assert(calls.notify >= 1, "NoteDraw was not told the surface changed");
+  return "parked t2 promoted, live t1 parked, prefs reapplied without a reload";
+});
+
+check("tab keep-alive: switching to a tab with no preserved surface parks everything", () => {
+  const { embed, live, parked, ctx } = createSurfaceWorld();
+  keepAlive.activateEmbedSurfaceForTab.call(ctx, embed, "t-missing");
+  assert(live.hasClass("mwv-parked-frame") && parked.hasClass("mwv-parked-frame"), "a frame stayed live for a tab that has none");
+  assert(embed.querySelectorAll(".mwv-live-frame").length === 0, "exactly zero live frames expected");
+  return "all frames parked; renderLiveBrowserSurface will mount a fresh guest";
+});
+
+check("tab keep-alive: the pool evicts the oldest parked surfaces beyond the cap", () => {
+  const { embed, ctx, doc, calls } = createSurfaceWorld();
+  const liveBrowser = embed.querySelector(":scope > .mwv-live-browser");
+  for (let i = 0; i < 5; i += 1) {
+    const frame = doc.createElement("webview");
+    frame.className = "mwv-parked-frame";
+    frame.dataset.mwvSurfaceTabId = `old-${i}`;
+    frame.dataset.mwvSurfaceActiveAt = String(1000 + i);
+    liveBrowser.appendChild(frame);
+  }
+  // 6 parked (t2@200 + old-0..4) + the incoming live one = 7 against a cap of
+  // 5 → the two oldest (t2, old-0) must go, recency order preserved below.
+  keepAlive.evictParkedEmbedSurfaces.call(ctx, liveBrowser);
+  const left = Array.from(liveBrowser.querySelectorAll(":scope > .mwv-parked-frame"));
+  assert(left.length === 4, `expected the cap to keep 4 parked, got ${left.length}`);
+  assert(!left.some((f) => f.dataset.mwvSurfaceTabId === "t2"), "the stalest parked surface survived eviction");
+  assert(!left.some((f) => f.dataset.mwvSurfaceTabId === "old-0"), "the second-stalest parked surface survived eviction");
+  assert(calls.disposed.some((n) => n.dataset?.mwvSurfaceTabId === "t2"), "the evicted surface was not disposed");
+  return `pool capped: 2 stalest disposed, ${left.length} parked remain`;
+});
+
+check("tab keep-alive: closing the active tab hands the surface to a preserved successor", () => {
+  const { embed, live, parked, calls, ctx } = createSurfaceWorld();
+  keepAlive.adoptEmbedSurfaceForSuccessor.call(ctx, embed, "t1", "t2");
+  assert(parked.hasClass("mwv-live-frame"), "the successor's preserved surface did not go live");
+  assert(!live.isConnected, "the closed tab's surface was not freed");
+  assert(calls.disposed.includes(live), "the closed tab's renderer was not disposed");
+  assert(live.dataset.mwvSurfaceTabId === "t1" && !embed.querySelector('[data-mwv-surface-tab-id="t1"]'), "the closed tab's surface lingered");
+  return "successor promoted, closed surface disposed";
+});
+
+check("tab keep-alive: closing the active tab with no preserved successor adopts the surviving guest", () => {
+  const { embed, ctx, win, doc, calls } = createSurfaceWorld();
+  const liveBrowser = embed.querySelector(":scope > .mwv-live-browser");
+  liveBrowser.querySelector(':scope > [data-mwv-surface-tab-id="t2"]').remove();
+  const live = liveBrowser.querySelector(":scope > .mwv-live-frame");
+  keepAlive.adoptEmbedSurfaceForSuccessor.call(ctx, embed, "t1", "t2");
+  assert(live.isConnected, "the surviving guest was destroyed");
+  assert(live.dataset.mwvSurfaceTabId === "t2", "the surviving guest was not re-owned by the successor");
+  assert(live.hasClass("mwv-live-frame"), "the adopted guest lost the live surface role");
+  return "guest re-owned by the successor; the following navigation drives it";
+});
+
+check("tab keep-alive: closing a background tab frees its parked renderer", () => {
+  const { embed, parked, calls, ctx } = createSurfaceWorld();
+  keepAlive.destroyEmbedSurfaceForTab.call(ctx, embed, "t2");
+  assert(!parked.isConnected, "the background tab's surface was not removed");
+  assert(calls.disposed.includes(parked), "the background renderer was not disposed");
+  return "background surface disposed and removed";
+});
+
+check("tab keep-alive: parked-surface events are recorded onto their own tab", () => {
+  const { parked, calls, ctx } = createSurfaceWorld();
+  keepAlive.recordParkedSurfaceNavigation.call(ctx, parked, "https://next.example/page");
+  keepAlive.recordParkedSurfaceNavigation.call(ctx, parked, "about:blank");
+  keepAlive.recordParkedSurfaceTitle.call(ctx, parked, "Next Page");
+  assert(calls.tabPatches.length === 2, `expected 2 patches, got ${calls.tabPatches.length}`);
+  assert(calls.tabPatches[0][0] === "t2" && calls.tabPatches[0][1].url === "https://next.example/page", "the navigation patch hit the wrong tab");
+  assert(calls.tabPatches[1][0] === "t2" && calls.tabPatches[1][1].title === "Next Page", "the title patch hit the wrong tab");
+  return "background navigation/title land on the owning tab record; about:blank ignored";
 });
 
 /* ------------------------------------------------------------------ *
