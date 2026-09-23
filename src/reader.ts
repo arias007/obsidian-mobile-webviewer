@@ -347,8 +347,14 @@ export function absolutize(root: Element | null, baseUrl: string): void {
       image.getAttribute("data-lazy-src") ||
       "";
     const resolved = resolve(raw);
-    if (resolved && !/^(?:data:|blob:)/i.test(resolved)) image.setAttribute("src", resolved);
-    else image.removeAttribute("src");
+    if (resolved && !/^(?:data:|blob:)/i.test(resolved)) {
+      // Mirror the guest-side pass: an https page's http:// images are blocked
+      // by the CSP and render broken, so upgrade them.
+      const upgraded = /^http:\/\//i.test(resolved) && /^https:/i.test(baseUrl) ? `https://${resolved.slice(7)}` : resolved;
+      image.setAttribute("src", upgraded);
+    } else {
+      image.removeAttribute("src");
+    }
   });
 }
 

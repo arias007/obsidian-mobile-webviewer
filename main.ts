@@ -10494,6 +10494,9 @@ export default class MobileWebviewerPlugin extends Plugin {
   // Markdown rendering into the reader panel is async; a fast navigation must
   // not let a slow, stale render repaint the panel it was superseded by.
   private readerMarkdownRenderSeq = 0;
+  // A live read shorter than this is treated as "the page was still hydrating"
+  // and retried once (React apps inject paragraphs after did-finish-load).
+  private static readonly LIVE_READER_THIN_CHARS = 1000;
   noteDrawHeaderActivationTokens = new WeakMap<HTMLElement, number>();
   noteDrawHeaderActivationSeq = 0;
   noteDrawLegacyMigrationTimer = 0;
@@ -21217,7 +21220,31 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     };
     const first = await attempt();
-    if (first) return first;
+    if (first) {
+      // "Success" at 800 chars on an encyclopedia page is not success: React
+      // sites keep hydrating paragraphs long after did-finish-load, so the
+      // first read can beat the fetch while still missing most of the article.
+      // A thin result buys one settled second attempt; the fuller read wins.
+      const bodyLength = (page: NotePage): number => page.content.replace(/\s+/g, "").length;
+      if (bodyLength(first) >= MobileWebviewerPlugin.LIVE_READER_THIN_CHARS) {
+        await this.rememberPageCache(first);
+        return first;
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+      if (!embed.isConnected) return first;
+      const second = await attempt();
+      const best = !second || bodyLength(second) <= bodyLength(first) ? first : second;
+      // A thin read means the page was still hydrating — or the window was
+      // hidden and Chromium throttled the renderer to a stop. Either way it
+      // must not be cached: the next open should re-read, not re-serve a stub.
+      if (bodyLength(best) >= MobileWebviewerPlugin.LIVE_READER_THIN_CHARS) {
+        await this.rememberPageCache(best);
+        if (second && bodyLength(second) > bodyLength(first)) {
+          void this.addConsole("info", `Live reader re-read after hydration (${bodyLength(best)} chars)`, url);
+        }
+      }
+      return best;
+    }
     // The live surface may still be settling when the fetch-based pass fails
     // fast; give it one settled retry before giving up.
     await new Promise<void>((resolve) => window.setTimeout(resolve, 2500));

@@ -112,8 +112,15 @@ function absoluteize(root, baseUrl) {
       src = (parts[parts.length - 1] || "").trim().split(/\s+/)[0] || "";
     }
     var absolute = resolve(src);
-    if (absolute && !/^(?:data:|blob:)/i.test(absolute)) img.setAttribute("src", absolute);
-    else img.removeAttribute("src");
+    if (absolute && !/^(?:data:|blob:)/i.test(absolute)) {
+      // An https page may not reference http:// images: the guest CSP blocks
+      // them ("Mixed Content"), and the rendered Markdown would carry broken
+      // images. Image CDNs overwhelmingly serve https, so upgrade.
+      if (/^http:\/\//i.test(absolute) && /^https:/i.test(baseUrl)) absolute = "https://" + absolute.slice(7);
+      img.setAttribute("src", absolute);
+    } else {
+      img.removeAttribute("src");
+    }
   }
 }
 
