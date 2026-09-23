@@ -20,7 +20,7 @@ const checks = [
   ].every((method) => source.includes(method))],
   ["active context resolves standalone and embedded browser surfaces", source.includes("resolveActiveWebContextTarget") && source.includes('.mwv-embed[data-url]') && source.includes("getLeavesOfType(VIEW_TYPE)")],
   ["selection supports Chromium webview and iframe fallback", source.includes("surface.executeJavaScript") && source.includes("contentWindow?.getSelection")],
-  ["reader context includes selection, edited text, images, and links", source.includes("selectedText") && source.includes("note.noteText || note.pageText") && source.includes("images: cached?.images") && source.includes("links: cached?.links")],
+  ["reader context includes selection, edited text, images, and links", source.includes("selectedText") && source.includes("richest") && source.includes("current.length > best.length ? current : best") && source.includes("images: cached?.images") && source.includes("links: cached?.links")],
   ["refresh failure restores the previous reader cache", source.match(/if \(previousCache\) this\.settings\.pageCache = previousCache/g)?.length >= 2],
   ["tab API returns compact summaries without navigation history", source.includes("browserTabSummaryForApi") && source.includes("canGoBack: tab.back.length > 0") && !source.includes("return this.settings.browserTabs.map((tab) => ({ ...tab, back:")],
   ["Cancip receives structured context before clipboard fallback", source.includes("cancip?.api?.receiveExternalContext") && source.includes('route: "api"') && source.includes('route: "clipboard"')],

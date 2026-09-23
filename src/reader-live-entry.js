@@ -185,6 +185,31 @@ function fallbackHtml(live, baseUrl) {
   return target.innerHTML || "";
 }
 
+/**
+ * One Readability pass over a fresh clone of the live DOM. Readability
+ * rewrites the tree it is handed, so each attempt needs its own copy; the
+ * base URL is re-attached because a detached clone loses it.
+ */
+function parseWithReadability(live, baseUrl, threshold) {
+  var clone = live.cloneNode(true);
+  try {
+    var head = clone.querySelector("head");
+    if (head && baseUrl && !clone.querySelector("base")) {
+      var base = live.createElement("base");
+      base.setAttribute("href", baseUrl);
+      head.insertBefore(base, head.firstChild);
+    }
+  } catch (error) {
+    /* a missing head is not fatal: the host absolute-ises as well */
+  }
+  stripNodes(clone);
+  try {
+    return new Readability(clone, { charThreshold: threshold }).parse();
+  } catch (error) {
+    return null;
+  }
+}
+
 globalThis.__mwvReadLive = function (options) {
   var opts = options || {};
   var minChars = typeof opts.minChars === "number" ? opts.minChars : 220;
@@ -220,53 +245,75 @@ globalThis.__mwvReadLive = function (options) {
     result.baseUrl = baseUrl;
     result.title = (live.title || "").trim();
 
-    // Readability rewrites the tree it is handed, so hand it a copy: the page
-    // the user is looking at must not be touched.
-    var clone = live.cloneNode(true);
-    // A detached clone loses its base URL, which is what Readability uses to
-    // turn "/img/x.png" into an absolute URL. Re-attach it explicitly.
-    try {
-      var head = clone.querySelector("head");
-      if (head && baseUrl && !clone.querySelector("base")) {
-        var base = live.createElement("base");
-        base.setAttribute("href", baseUrl);
-        head.insertBefore(base, head.firstChild);
-      }
-    } catch (error) {
-      /* a missing head is not fatal: the host absolute-ises as well */
-    }
-    stripNodes(clone);
+    // How much text the rendered page actually holds. Readability that comes
+    // home with a fraction of this under-extracted: charThreshold is what
+    // makes it climb the tree, and a low one lets it stop at the first block
+    // that looks "long enough" — a baike summary stub satisfied 220 chars and
+    // the catalog, tables and images above and below it were dropped.
+    var bodyText = textOf(live.body);
 
-    var article = null;
-    try {
-      article = new Readability(clone, { charThreshold: Math.max(140, minChars) }).parse();
-    } catch (error) {
-      result.reason = "readability:" + (error && error.message ? error.message : String(error));
-      article = null;
-    }
-
-    if (article && article.content) {
+    // Pass 1 uses Firefox's own default (500). If the result covers little of
+    // the rendered page, pass 2 raises the threshold far enough that the
+    // scorer has to keep climbing into the container that holds everything.
+    var attempts = [Math.max(500, minChars), Math.min(20000, Math.max(2000, bodyText.length))];
+    var best = null;
+    for (var a = 0; a < attempts.length; a++) {
+      var article = parseWithReadability(live, baseUrl, attempts[a]);
+      if (!article || !article.content) continue;
       var body = live.createElement("div");
       body.innerHTML = article.content;
       stripNodes(body);
       stripAttributes(body);
       absoluteize(body, baseUrl);
       var text = textOf(body);
-      if (text.length >= minChars) {
-        result.ok = true;
-        result.method = "readability";
-        result.title = (article.title || result.title || "").trim();
-        result.byline = (article.byline || "").trim();
-        result.siteName = (article.siteName || "").trim();
-        result.publishedTime = (article.publishedTime || "").trim();
-        result.excerpt = (article.excerpt || "").trim();
-        result.lang = (article.lang || "").trim();
-        result.dir = (article.dir || "").trim();
-        result.html = body.innerHTML || "";
-        result.text = text;
-        result.length = article.length || text.length;
-        return result;
+      if (text.length < minChars) continue;
+      if (!best || text.length > best.text.length) {
+        best = { article: article, body: body, text: text };
       }
+      // Good enough when the page itself is short, or the article carries
+      // close to everything the rendered body shows.
+      if (bodyText.length < 2000 || text.length >= bodyText.length * 0.45) break;
+    }
+
+    if (best) {
+      // Readability can lock onto a summary stub while the rendered page
+      // holds several times more text: baike's lemma body sits in sibling
+      // containers whose scores never win, and a higher charThreshold only
+      // relaxes Readability's cleaning flags — it never climbs the tree. When
+      // the article covers a small fraction of the rendered text, the
+      // densest-block fallback carries more of the page; take whichever is
+      // longer.
+      var coverage = bodyText.length > 0 ? best.text.length / bodyText.length : 1;
+      if (coverage < 0.45 && bodyText.length > 2000) {
+        var fbHtml = fallbackHtml(live, baseUrl);
+        if (fbHtml) {
+          var fbProbe = live.createElement("div");
+          fbProbe.innerHTML = fbHtml;
+          var fbText = textOf(fbProbe);
+          if (fbText.length > best.text.length * 1.3 && fbText.length >= 800) {
+            result.ok = true;
+            result.method = "dom-fallback";
+            result.html = fbHtml;
+            result.text = fbText;
+            result.length = fbText.length;
+            result.excerpt = fbText.slice(0, 400);
+            return result;
+          }
+        }
+      }
+      result.ok = true;
+      result.method = "readability";
+      result.title = (best.article.title || result.title || "").trim();
+      result.byline = (best.article.byline || "").trim();
+      result.siteName = (best.article.siteName || "").trim();
+      result.publishedTime = (best.article.publishedTime || "").trim();
+      result.excerpt = (best.article.excerpt || "").trim();
+      result.lang = (best.article.lang || "").trim();
+      result.dir = (best.article.dir || "").trim();
+      result.html = best.body.innerHTML || "";
+      result.text = best.text;
+      result.length = best.article.length || best.text.length;
+      return result;
     }
 
     // Readability bailed (or produced a stub). Keep whatever dense content the

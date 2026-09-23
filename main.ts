@@ -65,7 +65,7 @@ const BINARY_URL_PATTERN = /\.(zip|7z|rar|exe|msi|apk|dmg|pkg|pdf|docx?|xlsx?|pp
 const INVALID_FILE_NAME_CHARS = new Set(["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]);
 const NOTEDRAW_BUTTON_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
 const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
-const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.4.26";
+const NOTE_BROWSER_STARTUP_DEFAULT_VERSION = "0.4.27";
 const NOTEDRAW_LEGACY_WEBVIEWER_MIGRATION_VERSION = 3;
 const AD_CANDIDATE_SELECTOR = [
   "[id='ad' i]",
@@ -17655,7 +17655,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Treating those as a cache miss forces a fresh extraction instead of
     // re-serving the failure the user already saw.
     const content = (entry.content ?? "").trim();
-    if (!content || looksLikeReaderFailure(content) || content.replace(/\s+/g, "").length < 80) return null;
+    // Below the live reader's thin threshold the cache cannot be trusted:
+    // pre-guard versions persisted hidden-window hydration stubs (a few
+    // hundred chars of flattened text, no structure), and the current writer
+    // never stores thin pages anyway. Either way a thin hit would shadow a
+    // fresh rich extraction, so it counts as a miss.
+    if (!content || looksLikeReaderFailure(content) || content.replace(/\s+/g, "").length < MobileWebviewerPlugin.LIVE_READER_THIN_CHARS) {
+      return null;
+    }
     return {
       title: entry.title,
       url: entry.url,
@@ -17714,10 +17721,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       // same URL re-rendered the error instead of the freshly extracted
       // article. When the stored note IS a failure and this pass actually read
       // the page, rebuild from the page — doodles survive, they are a separate
-      // field.
+      // field. A stored note that is much thinner than the fresh read gets the
+      // same treatment: a summary stub left behind by an interrupted hydration
+      // must not outlive the article that finally arrived.
       const pageUsable = (page.content ?? "").trim().length > 0 && !looksLikeReaderFailure(page.content);
       const storedIsFailure = looksLikeReaderFailure(existing.noteText ?? "");
-      if (pageUsable && storedIsFailure) {
+      const storedText = (existing.noteText ?? "").replace(/\s+/g, "").length;
+      const pageText = (page.content ?? "").replace(/\s+/g, "").length;
+      const storedMuchThinner = storedText + 500 < pageText;
+      if (pageUsable && !existing.noteHtml && (storedIsFailure || storedMuchThinner)) {
         existing.noteHtml = "";
         existing.noteText = page.content;
         existing.title = page.title || existing.title;
@@ -19800,13 +19812,20 @@ export default class MobileWebviewerPlugin extends Plugin {
     const cached = this.getCachedPage(target.url);
     if (target.view?.currentWebNote && target.view.currentWebNote.url === target.url) {
       const note = target.view.currentWebNote;
+      // The stored note can be older and thinner than what the reader now
+      // extracts (a hidden-window hydration once persisted a 841-char plot
+      // stub). Whichever source carries the most content wins.
+      const richest = [note.noteText ?? "", note.pageText ?? "", cached?.content ?? ""].reduce(
+        (best, current) => (current.length > best.length ? current : best),
+        ""
+      );
       page = {
         title: note.sourceTitle || note.title || target.title,
         url: note.url,
         byline: cached?.byline || hostName(note.url),
-        excerpt: (note.noteText || note.pageText || cached?.excerpt || "").slice(0, 420),
+        excerpt: (richest || cached?.excerpt || "").slice(0, 420),
         images: cached?.images ?? [],
-        content: note.noteText || note.pageText,
+        content: richest,
         links: cached?.links ?? []
       };
       html = note.pageHtml || note.noteHtml;
@@ -21228,26 +21247,40 @@ export default class MobileWebviewerPlugin extends Plugin {
     const first = await attempt();
     if (first) {
       // "Success" at 800 chars on an encyclopedia page is not success: React
-      // sites keep hydrating paragraphs long after did-finish-load, so the
-      // first read can beat the fetch while still missing most of the article.
-      // A thin result buys one settled second attempt; the fuller read wins.
+      // sites keep hydrating paragraphs for several seconds after
+      // did-finish-load, so the first read can beat the fetch while still
+      // missing most of the article. Poll the guest while the read keeps
+      // growing — hydration finishes in a few seconds on a visible window —
+      // and the fullest read wins.
       const bodyLength = (page: NotePage): number => page.content.replace(/\s+/g, "").length;
-      if (bodyLength(first) >= MobileWebviewerPlugin.LIVE_READER_THIN_CHARS) {
-        await this.rememberPageCache(first);
-        return first;
+      let best = first;
+      // A thin first read gets the full polling budget; an already-substantial
+      // one buys a single settled check for late hydration.
+      const rounds = bodyLength(first) >= MobileWebviewerPlugin.LIVE_READER_THIN_CHARS ? 1 : 3;
+      for (let round = 0; round < rounds; round++) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, round === 0 ? 2000 : 2500));
+        if (!embed.isConnected) break;
+        const next = await attempt();
+        if (!next) break;
+        const grew = bodyLength(next) > bodyLength(best);
+        if (grew) {
+          best = next;
+        } else {
+          // No growth since the last read: the page has settled (or the
+          // window is hidden and the renderer is frozen — nothing more is
+          // coming either way).
+          break;
+        }
       }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
-      if (!embed.isConnected) return first;
-      const second = await attempt();
-      const best = !second || bodyLength(second) <= bodyLength(first) ? first : second;
-      // A thin read means the page was still hydrating — or the window was
-      // hidden and Chromium throttled the renderer to a stop. Either way it
-      // must not be cached: the next open should re-read, not re-serve a stub.
+      if (bodyLength(best) > bodyLength(first)) {
+        void this.addConsole("info", `Live reader re-read after hydration (${bodyLength(best)} chars)`, url);
+      }
+      // A thin read means the page never finished hydrating — or the window
+      // was hidden and Chromium throttled the renderer to a stop. Either way
+      // it must not be cached: the next open should re-read, not re-serve a
+      // stub.
       if (bodyLength(best) >= MobileWebviewerPlugin.LIVE_READER_THIN_CHARS) {
         await this.rememberPageCache(best);
-        if (second && bodyLength(second) > bodyLength(first)) {
-          void this.addConsole("info", `Live reader re-read after hydration (${bodyLength(best)} chars)`, url);
-        }
       }
       return best;
     }
@@ -21286,6 +21319,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       for (const note of this.settings.webNotes) {
         if (note.noteHtml) note.noteHtml = "";
       }
+      // One-time migration to 0.4.27: page caches written before the
+      // thin-extraction guard hold hidden-window hydration results — a few
+      // hundred chars of flattened plot text with no headings, tables or
+      // images — that permanently shadow a fresh rich extraction. The cache is
+      // a pure cache, so drop it wholesale: every page re-extracts once with
+      // the current reader and gets the fused rich Markdown instead.
+      this.settings.pageCache = [];
       shouldSaveSettings = true;
     }
     this.settings.uiLanguage = typeof this.settings.uiLanguage === "string" && isUiLanguage(this.settings.uiLanguage)

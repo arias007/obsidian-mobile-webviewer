@@ -294,6 +294,38 @@ if (fs.existsSync(liveFixture)) {
   report.push("SKIP  live script execution (no sspai fixture; run with --fetch)");
 }
 
+// Low-threshold regression: a page whose summary block alone satisfies the
+// first Readability pass must not stop there — the adaptive second pass has
+// to climb and carry the sections, table and summary together.
+const synthetic = new JSDOM(
+  [
+    "<!doctype html><html><head><title>合成页</title></head><body>",
+    '<nav>导航菜单 ', "导航链接文字。".repeat(60), '</nav>',
+    '<div class="summary"><p>', "这是词条的摘要段落，概括全篇。".repeat(40), "</p></div>",
+    '<div class="lemma-main">',
+    ...[1, 2, 3, 4].map((n) => `<h2>第${["一","二","三","四"][n - 1]}节</h2><p>${`第${["一","二","三","四"][n - 1]}节正文内容详细叙述。`.repeat(24)}</p>`),
+    "<table><tr><th>项目</th><td>表格数据甲乙丙丁。</td></tr></table>",
+    "</div>",
+    '<aside>侧栏推荐 ', "侧栏链接文字。".repeat(60), '</aside>',
+    '<footer>页脚 ', "页脚版权文字。".repeat(50), '</footer>',
+    "</body></html>"
+  ].join(""),
+  { url: "https://example.com/synthetic/1", runScripts: "dangerously", pretendToBeVisual: true }
+);
+try {
+  const synPayload = synthetic.window.eval(
+    `${reader.READER_LIVE_SCRIPT}\n__mwvReadLive(${JSON.stringify({ minChars: 220, fallbackMinChars: 120 })});`
+  );
+  if (synPayload) {
+    check("adaptive live pass keeps the summary block", synPayload.ok === true && (synPayload.text ?? "").includes("概括全篇"), `text=${(synPayload.text ?? "").length} chars`);
+    check("adaptive live pass reaches the later sections", (synPayload.text ?? "").includes("第四节"), "");
+    check("adaptive live pass keeps the table", (synPayload.text ?? "").includes("表格数据甲乙丙丁"), "");
+    check("adaptive live pass beats the summary-only stub", (synPayload.text ?? "").length > 1200, `${(synPayload.text ?? "").length} chars`);
+  }
+} finally {
+  synthetic.window.close();
+}
+
 for (const sample of SAMPLES) {
   const file = path.join(fixtureDir, `${sample.id}.html`);
   if (!fs.existsSync(file)) {
