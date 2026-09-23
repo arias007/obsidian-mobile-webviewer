@@ -74,6 +74,15 @@ function extractMethod(src, name) {
   return { isAsync: Boolean(m[1]), paramsAndBody: src.slice(parenStart, end + 1) };
 }
 
+/** Extract a column-0 module-level function (e.g. equivalentEmbedUrl). */
+function extractTopLevelFunction(src, name) {
+  const re = new RegExp(`^function ${name}\\s*\\(`, "m");
+  const m = re.exec(src);
+  if (!m) throw new Error(`top-level function not found: ${name}`);
+  const end = findBodyEnd(src, src.indexOf("{", src.indexOf("(", m.index)));
+  return src.slice(m.index, end + 1);
+}
+
 const METHODS = [
   "renderEmbedTabstrip",
   "findEmbedTabstripItem",
@@ -134,14 +143,28 @@ const makeMethodTable = buildMethodTable(source);
  * Keeping them on a side table lets a test drive the real code with `call(ctx)`.
  */
 function buildTabMutationTable(src) {
-  const names = ["newEmbedBrowserTab", "switchEmbedBrowserTab", "closeEmbedBrowserTab"];
+  const names = ["newEmbedBrowserTab", "switchEmbedBrowserTab", "closeEmbedBrowserTab", "syncEmbedActiveTab"];
   const entries = names.map((name) => {
-    const { isAsync, paramsAndBody } = extractMethod(src, name);
-    return `  ${name}: ${isAsync ? "async " : ""}function ${paramsAndBody}`;
+    try {
+      const { isAsync, paramsAndBody } = extractMethod(src, name);
+      return `  ${name}: ${isAsync ? "async " : ""}function ${paramsAndBody}`;
+    } catch (error) {
+      // Keep the suite runnable against older sources: a missing method
+      // becomes a stub that fails loudly when a test actually drives it.
+      return `  ${name}: function () { throw new Error(${JSON.stringify(`method missing in this source: ${name}`)}); }`;
+    }
   });
+  // syncEmbedActiveTab compares URLs through the module-level
+  // equivalentEmbedUrl, so that function has to be in scope too.
+  let eqJs = "function equivalentEmbedUrl() { throw new Error('equivalentEmbedUrl missing in this source'); }";
+  try {
+    eqJs = esbuild.transformSync(extractTopLevelFunction(src, "equivalentEmbedUrl"), { loader: "ts", format: "cjs", target: "es2020" }).code;
+  } catch (error) {
+    // keep the throwing stub
+  }
   const ts = `const __T = {\n${entries.join(",\n")}\n};\n__T;\n`;
   const js = esbuild.transformSync(ts, { loader: "ts", format: "cjs", target: "es2020" }).code;
-  return new Function("MAX_BROWSER_TABS", `${js}\nreturn __T;`)(MAX_BROWSER_TABS);
+  return new Function("MAX_BROWSER_TABS", `${eqJs}\n${js}\nreturn __T;`)(MAX_BROWSER_TABS);
 }
 
 const tabMutations = buildTabMutationTable(source);
@@ -645,6 +668,50 @@ check("closing a background tab repaints without any navigation at all", async (
   const ids = Array.from(doc.querySelectorAll(".mwv-embed-tab")).map((n) => n.dataset.mwvTabId);
   assert(ids.length === 1 && ids[0] === "t1", `row drifted: ${ids.join(",")}`);
   return "background close pruned the row with no navigation";
+});
+
+check("a new tab appends to the right of the row", async () => {
+  const { embed, ctx, doc } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "One", url: "https://one.example/", back: [], forward: [] },
+    { id: "t2", title: "Two", url: "https://two.example/", back: [], forward: [] }
+  ];
+  ctx.settings.activeBrowserTabId = "t1";
+  embed.dataset.mwvActiveTabId = "t1";
+  ctx.renderEmbedTabstrip(embed);
+  await tabMutations.newEmbedBrowserTab.call(ctx, embed);
+  const ids = tabIdsRoot(doc);
+  const recordIds = ctx.settings.browserTabs.map((t) => t.id);
+  assert(ids.join(",") === recordIds.join(","), `row ${ids.join(",")} drifted from record ${recordIds.join(",")}`);
+  const newId = recordIds[recordIds.length - 1];
+  assert(ids[0] === "t1" && ids[1] === "t2", `existing tabs changed position: ${ids.join(",")}`);
+  assert(ids[ids.length - 1] === newId && ctx.settings.activeBrowserTabId === newId, `the new tab is not rightmost/active: ${ids.join(",")}`);
+  return `row order ${ids.join(",")} — the new tab sits on the right`;
+});
+
+check("a tab keeps its title when it goes background", async () => {
+  const { embed, ctx } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "Bing: 查询词", url: "https://cn.bing.com/search?q=x", back: [], forward: [] },
+    { id: "t2", title: "Two", url: "https://two.example/", back: [], forward: [] }
+  ];
+  ctx.settings.activeBrowserTabId = "t1";
+  embed.dataset.mwvActiveTabId = "t1";
+  embed.dataset.url = "https://cn.bing.com/search?q=x";
+  // The surface reports no fresh title at the moment the tab is being left
+  // (the exact switch-away shape that used to hit the hostname fallback).
+  ctx.getEmbedSurfaceTitle = () => "";
+  // Drive the REAL sync (the fixture stub would bypass the code under test)
+  // with an updateBrowserTab that actually mutates the record.
+  ctx.syncEmbedActiveTab = tabMutations.syncEmbedActiveTab;
+  ctx.updateBrowserTab = async (id, patch) => {
+    const tab = ctx.settings.browserTabs.find((t) => t.id === id);
+    if (tab) Object.assign(tab, patch);
+  };
+  await tabMutations.switchEmbedBrowserTab.call(ctx, embed, "t2");
+  const t1 = ctx.settings.browserTabs.find((t) => t.id === "t1");
+  assert(t1.title === "Bing: 查询词", `the background tab's title was downgraded to "${t1.title}"`);
+  return "the outgoing sync kept the recorded title instead of the hostname";
 });
 
 check("settleEmbedTabs re-asserts the active id the note layer clobbered", () => {

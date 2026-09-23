@@ -8981,8 +8981,12 @@ class MobileWebviewerView extends ItemView {
     this.flushCurrentWebNoteBeforeRender();
     await this.syncActiveBrowserTab();
     const tab = this.plugin.createBrowserTab(url);
-    this.plugin.settings.browserTabs.unshift(tab);
-    this.plugin.settings.browserTabs = this.plugin.settings.browserTabs.slice(0, MAX_BROWSER_TABS);
+    // Append to the right, mirroring the embed path: new tabs must not jump
+    // in front of the existing ones, and overflow keeps the newest entries.
+    this.plugin.settings.browserTabs = [
+      ...this.plugin.settings.browserTabs.filter((item) => item.id !== tab.id),
+      tab
+    ].slice(-MAX_BROWSER_TABS);
     this.plugin.settings.activeBrowserTabId = tab.id;
     await this.plugin.saveSettings();
     // Sibling paths (switch / close) repaint the row here; this one used to
@@ -14766,8 +14770,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     // the history the user can actually see.
     this.syncEmbedChromeNavState(embed);
     const tab = this.getEmbedActiveTab(embed);
+    // A background tab keeps the name it had while it was open. This sync also
+    // runs at the moment the tab is being LEFT (switch/new/close) with no
+    // fresh title available, and falling straight through to the hostname used
+    // to downgrade the recorded title ("Bing: 查询词" → "cn.bing.com") — the
+    // row name visibly changed the moment the tab went background. Only trust
+    // the hostname fallback when the embed actually left the recorded page.
+    const surfaceTitle = title || this.getEmbedSurfaceTitle(embed) || "";
+    const nextTitle = surfaceTitle
+      || (tab.title && equivalentEmbedUrl(tab.url || "", url) ? tab.title : "")
+      || hostName(url);
     await this.updateBrowserTab(tab.id, {
-      title: title || this.getEmbedSurfaceTitle(embed) || hostName(url),
+      title: nextTitle,
       url,
       back: this.getEmbedStack(embed, "mwvBack"),
       forward: this.getEmbedStack(embed, "mwvForward"),
@@ -14800,10 +14814,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.flushEmbedReaderNow(embed);
     await this.syncEmbedActiveTab(embed);
     const tab = this.createBrowserTab(url);
+    // New tabs append to the RIGHT of the row. Prepending made every new tab
+    // jump in front of the existing ones, which reads backwards next to every
+    // mainstream browser; overflow keeps the newest entries.
     this.settings.browserTabs = [
-      tab,
-      ...this.settings.browserTabs.filter((item) => item.id !== tab.id)
-    ].slice(0, MAX_BROWSER_TABS);
+      ...this.settings.browserTabs.filter((item) => item.id !== tab.id),
+      tab
+    ].slice(-MAX_BROWSER_TABS);
     this.settings.activeBrowserTabId = tab.id;
     embed.dataset.mwvActiveTabId = tab.id;
     this.setEmbedStack(embed, "mwvBack", []);
@@ -15506,7 +15523,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     strip.toggleClass("mwv-embed-tabstrip-in-header", strip.parentElement === header);
     this.bindEmbedTabstrip(strip, embed);
 
-    const wantedTabs = this.settings.browserTabs.slice(0, 12);
+    // The row shows the up-to-12 MOST RECENT tabs: the record grows to the
+    // right, so the tail holds the tabs the user is actually working with.
+    const wantedTabs = this.settings.browserTabs.slice(-12);
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
     const wantedIds = new Set(wantedTabs.map((tab) => tab.id));
     for (const node of Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab"))) {
@@ -19519,7 +19538,11 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.newEmbedBrowserTab(target.embed, url);
     } else {
       const tab = this.createBrowserTab(url);
-      this.settings.browserTabs.unshift(tab);
+      // Append to the right, mirroring the embed and view paths.
+      this.settings.browserTabs = [
+        ...this.settings.browserTabs.filter((item) => item.id !== tab.id),
+        tab
+      ].slice(-MAX_BROWSER_TABS);
       this.settings.activeBrowserTabId = tab.id;
       await this.saveSettings();
       await this.activateBrowserView(url, true, tab.id);
