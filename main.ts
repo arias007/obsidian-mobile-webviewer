@@ -16030,7 +16030,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     panel.createEl("h2", { cls: "mwv-page-title", text: page.title || hostName(page.url) });
     const actions = panel.createDiv({ cls: "mwv-note-actions" });
     const status = actions.createSpan({ cls: "mwv-webnote-status" });
-    if (page.images.length) {
+    // The top media grid is a leftover from the plain-text era: when the
+    // Markdown body already carries the images inline — the whole point of a
+    // page-to-Markdown conversion — repeating the first four above the article
+    // just duplicates them. Only show the grid when the body has none.
+    const markdownBody = (page.content ?? "").trim();
+    const bodyHasInlineImages = markdownBody.includes("![") || Boolean(note?.noteHtml && note.noteHtml.includes("<img"));
+    if (page.images.length && !bodyHasInlineImages) {
       const media = panel.createDiv({ cls: "mwv-page-media" });
       for (const image of page.images.slice(0, 4)) {
         media.createEl("img", { attr: { src: image, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });

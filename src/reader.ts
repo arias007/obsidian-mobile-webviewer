@@ -23,6 +23,45 @@ import { READER_LIVE_SCRIPT } from "./reader-live.generated";
 
 export { READER_LIVE_SCRIPT };
 
+/**
+ * Embedded players are real content: a tutorial page's YouTube/Bilibili video
+ * is part of the article, not chrome. Every other iframe (ads, widgets,
+ * tracking) is dropped, and the kept players become plain watch links.
+ */
+const VIDEO_IFRAME_MARKERS = [
+  "youtube.com/embed",
+  "youtube-nocookie.com/embed",
+  "youtu.be/",
+  "player.bilibili.com/player.html",
+  "bilibili.com/blackboard/html5mobileplayer",
+  "player.vimeo.com/video",
+  "www.dailymotion.com/embed",
+  "player.youku.com/embed",
+  "v.qq.com/txp/iframe/player"
+];
+
+function isVideoIframeElement(node: Node | null): boolean {
+  if (!node || node.nodeName !== "IFRAME") return false;
+  const src = (node as HTMLElement).getAttribute("src") ?? "";
+  if (!src) return false;
+  return VIDEO_IFRAME_MARKERS.some((marker) => src.includes(marker));
+}
+
+/** Maps a player embed URL to the page a human would open. */
+function embedToWatchUrl(src: string): string {
+  let match = /youtube(?:-nocookie)?\.com\/embed\/([\w-]{6,})/i.exec(src);
+  if (match) return `https://www.youtube.com/watch?v=${match[1]}`;
+  match = /^https?:\/\/youtu\.be\/([\w-]{6,})/i.exec(src);
+  if (match) return `https://www.youtube.com/watch?v=${match[1]}`;
+  match = /player\.bilibili\.com\/player\.html\?[^"]*bvid=([\w]+)/i.exec(src);
+  if (match) return `https://www.bilibili.com/video/${match[1]}`;
+  match = /player\.vimeo\.com\/video\/(\d+)/i.exec(src);
+  if (match) return `https://vimeo.com/${match[1]}`;
+  match = /dailymotion\.com\/embed\/video\/([\w]+)/i.exec(src);
+  if (match) return `https://www.dailymotion.com/video/${match[1]}`;
+  return src;
+}
+
 /** Nodes that never carry article text. */
 const READER_DROP_SELECTORS = [
   "script",
@@ -31,7 +70,6 @@ const READER_DROP_SELECTORS = [
   "template",
   "svg",
   "canvas",
-  "iframe",
   "form",
   "button",
   "input",
@@ -165,10 +203,12 @@ function createTurndownService(): TurndownService {
   // Chrome that must not reach the Markdown as text. Checkboxes stay: the GFM
   // task-list rule downstream needs the input node to know a list is a task
   // list, and removing it here silently downgraded every checklist to bullets.
+  // Video iframes stay too — the mwvIframe rule turns them into watch links.
   service.remove((node: Node) => {
     const element = node as Element;
     const name = node.nodeName.toLowerCase();
     if (name === "input") return (element.getAttribute("type") ?? "").toLowerCase() !== "checkbox";
+    if (name === "iframe") return !isVideoIframeElement(node);
     if (READER_DROP_SELECTORS.some((selector) => selector === name)) return true;
     if (element.getAttribute("aria-hidden") === "true") return true;
     if (element.hasAttribute("hidden")) return true;
@@ -281,6 +321,58 @@ function createTurndownService(): TurndownService {
     }
   });
 
+  // Kept video players become the link a human would open: an <iframe
+  // src="youtube.com/embed/ID"> is useless in Markdown, the watch page is not.
+  // Custom rules run before the remove filter, so the whitelist check lives
+  // here too — without it widget iframes would leak through as [Video] links.
+  service.addRule("mwvIframe", {
+    filter: (node: Node): boolean => node.nodeName === "IFRAME" && isVideoIframeElement(node),
+    replacement: (_content: string, node: Node): string => {
+      const src = ((node as HTMLElement).getAttribute("src") ?? "").trim();
+      if (!src || /^(?:data:|blob:)/i.test(src)) return "";
+      return `\n\n[Video](${embedToWatchUrl(src).replace(/\)/g, "%29")})\n\n`;
+    }
+  });
+
+  // Obsidian's own highlight syntax: <mark>inline</mark> -> ==inline==.
+  service.addRule("mwvMark", {
+    filter: "mark",
+    replacement: (content: string): string => {
+      const text = content.replace(/\s+/g, " ").trim();
+      return text ? `==${text}==` : "";
+    }
+  });
+
+  // <details>/<summary> collapse to a bold heading line followed by the body:
+  // the collapsed-by-default state is lost, but the structure reads correctly.
+  service.addRule("mwvSummary", {
+    filter: (node: Node): boolean => node.nodeName === "SUMMARY",
+    replacement: (content: string): string => {
+      const text = content.replace(/\s+/g, " ").trim();
+      return text ? `\n\n**${text}**\n\n` : "";
+    }
+  });
+  service.addRule("mwvDetails", {
+    filter: (node: Node): boolean => node.nodeName === "DETAILS",
+    replacement: (content: string): string => `\n\n${content.trim()}\n\n`
+  });
+
+  // Citation superscripts are noise in Markdown: a bare [1] or a floating
+  // reference number carries nothing once it leaves the page, so numeric
+  // superscripts are dropped (the user-facing trade-off — x² renders as x2 —
+  // is worth a page without [1][2][3] litter). Any other superscript keeps
+  // Obsidian's ^sup^ syntax instead.
+  service.addRule("mwvSupNoise", {
+    filter: (node: Node): boolean => node.nodeName === "SUP",
+    replacement: (content: string, node: Node): string => {
+      const element = node as HTMLElement;
+      const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (/^\[\d+\]$/.test(text) || /^\d{1,3}$/.test(text)) return "";
+      const label = content.replace(/\s+/g, " ").trim();
+      return label ? `^${label}^` : "";
+    }
+  });
+
   return service;
 }
 
@@ -311,6 +403,84 @@ function collapseMarkdown(markdown: string): string {
     .replace(/\s+$/, "");
 }
 
+/**
+ * MathML / KaTeX trees collapse into garbage under Turndown. Pages that embed
+ * TeX ship it inside <annotation encoding="application/x-tex">, so read that
+ * back out and emit Obsidian's $…$ / $$…$$ math in place of the whole tree.
+ */
+function flattenMath(root: Element): void {
+  const nodes = Array.from(root.querySelectorAll("math, .katex, .katex-display, .katex-mathml"));
+  for (const node of nodes) {
+    if (!node.parentNode) continue;
+    const tex = node.querySelector('annotation[encoding*="x-tex"]')?.textContent?.trim();
+    if (!tex) continue;
+    const block =
+      node.getAttribute("display") === "block" ||
+      (node as HTMLElement).classList?.contains("katex-display") ||
+      Boolean(node.closest(".katex-display"));
+    node.parentNode.replaceChild(node.ownerDocument.createTextNode(block ? `$$${tex}$$` : `$${tex}$`), node);
+  }
+}
+
+/**
+ * GFM tables have no colspan/rowspan. Duplicate the merged cell's text into
+ * every position it spans, so the flattened table keeps its information
+ * instead of shifting columns silently.
+ */
+function expandTableSpans(root: Element): void {
+  for (const table of Array.from(root.querySelectorAll("table"))) {
+    const rows = Array.from(table.querySelectorAll("tr"));
+    if (!rows.length) continue;
+    const hasSpans = rows.some((row) =>
+      Array.from(row.querySelectorAll("td, th")).some(
+        (cell) => Number(cell.getAttribute("colspan")) > 1 || Number(cell.getAttribute("rowspan")) > 1
+      )
+    );
+    if (!hasSpans) continue;
+    const grid: string[][] = [];
+    for (let r = 0; r < rows.length; r++) {
+      const cells = Array.from(rows[r].querySelectorAll("td, th"));
+      let c = 0;
+      for (const cell of cells) {
+        while (grid[r]?.[c] !== undefined) c++;
+        const colspan = Math.max(1, Number(cell.getAttribute("colspan")) || 1);
+        const rowspan = Math.max(1, Number(cell.getAttribute("rowspan")) || 1);
+        const text = (cell.textContent ?? "").replace(/\s+/g, " ").trim();
+        for (let dr = 0; dr < rowspan; dr++) {
+          for (let dc = 0; dc < colspan; dc++) {
+            grid[r + dr] = grid[r + dr] ?? [];
+            grid[r + dr][c + dc] = text;
+          }
+        }
+        c += colspan;
+      }
+    }
+    const doc = root.ownerDocument;
+    const rebuilt = doc.createElement("table");
+    const body = doc.createElement("tbody");
+    const width = grid.reduce((max, row) => Math.max(max, row.length), 0);
+    const buildRow = (row: string[]): HTMLElement => {
+      const tr = doc.createElement("tr");
+      for (let c = 0; c < width; c++) {
+        const td = doc.createElement("td");
+        td.textContent = row[c] ?? "";
+        tr.appendChild(td);
+      }
+      return tr;
+    };
+    // The GFM table rule only emits the header separator for a row it can see
+    // as a heading (inside <thead>), so the first rebuilt row gets one.
+    if (grid.length) {
+      const head = doc.createElement("thead");
+      head.appendChild(buildRow(grid[0]));
+      rebuilt.appendChild(head);
+    }
+    for (const row of grid.slice(1)) body.appendChild(buildRow(row));
+    rebuilt.appendChild(body);
+    table.parentNode?.replaceChild(rebuilt, table);
+  }
+}
+
 export function htmlToMarkdown(html: string, baseUrl: string): string {
   if (!html.trim()) return "";
   const wrapped = `<div id="mwv-reader-root">${html}</div>`;
@@ -318,6 +488,8 @@ export function htmlToMarkdown(html: string, baseUrl: string): string {
   if (baseUrl) absolutize(parsed.getElementById("mwv-reader-root"), baseUrl);
   const root = parsed.getElementById("mwv-reader-root");
   if (!root) return "";
+  flattenMath(root);
+  expandTableSpans(root);
   return collapseMarkdown(turndown().turndown(root.innerHTML));
 }
 
@@ -360,7 +532,12 @@ export function absolutize(root: Element | null, baseUrl: string): void {
 
 export function stripReaderNoise(root: ParentNode): void {
   root.querySelectorAll(READER_DROP_SELECTORS.join(",")).forEach((node) => {
+    // Embedded video players survive: the host turns them into watch links.
+    if (isVideoIframeElement(node)) return;
     if (node.parentNode) node.parentNode.removeChild(node);
+  });
+  root.querySelectorAll("iframe").forEach((node) => {
+    if (!isVideoIframeElement(node) && node.parentNode) node.parentNode.removeChild(node);
   });
   // Comments carry no content but do slow the scorer down.
   const walker = (root as Document).createTreeWalker?.(root as Node, NodeFilter.SHOW_COMMENT);

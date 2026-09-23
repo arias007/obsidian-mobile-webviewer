@@ -17,6 +17,33 @@
 import { Readability } from "@mozilla/readability";
 
 /** Nodes that never carry article text and only pollute the Markdown. */
+/**
+ * Embedded players are real content: a tutorial page's YouTube/Bilibili video
+ * is part of the article, not chrome. Every other iframe (ads, widgets,
+ * tracking) is dropped. The host converts kept players into plain links.
+ */
+var VIDEO_IFRAME_MARKERS = [
+  "youtube.com/embed",
+  "youtube-nocookie.com/embed",
+  "youtu.be/",
+  "player.bilibili.com/player.html",
+  "bilibili.com/blackboard/html5mobileplayer",
+  "player.vimeo.com/video",
+  "www.dailymotion.com/embed",
+  "player.youku.com/embed",
+  "v.qq.com/txp/iframe/player"
+];
+
+function isVideoIframe(node) {
+  if (!node || node.nodeName !== "IFRAME") return false;
+  var src = node.getAttribute("src") || "";
+  if (!src) return false;
+  for (var i = 0; i < VIDEO_IFRAME_MARKERS.length; i++) {
+    if (src.indexOf(VIDEO_IFRAME_MARKERS[i]) !== -1) return true;
+  }
+  return false;
+}
+
 var STRIP_SELECTORS = [
   "script",
   "style",
@@ -71,6 +98,8 @@ function stripNodes(root) {
   }
   for (var i = doomed.length - 1; i >= 0; i--) {
     var node = doomed[i];
+    // Embedded video players survive: the host turns them into watch links.
+    if (isVideoIframe(node)) continue;
     if (node.parentNode) node.parentNode.removeChild(node);
   }
 }

@@ -201,6 +201,54 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// Rich-text fusion: what a page carries beyond plain paragraphs — highlights,
+// video embeds, collapsed sections, math, merged tables, citation noise —
+// has to survive the HTML->Markdown trip the way a real clipper keeps it.
+// ---------------------------------------------------------------------------
+const richHtml = `
+  <article>
+    <h1>富文本</h1>
+    <p>这是<mark>重点内容</mark>，引用<sup>[1]</sup>标注，数学 <math><semantics><mrow><mi>a</mi></mrow><annotation encoding="application/x-tex">a^2+b^2=c^2</annotation></semantics></math> 公式。</p>
+    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" width="560" height="315"></iframe>
+    <iframe src="https://player.bilibili.com/player.html?bvid=BV1xx411c7mD"></iframe>
+    <iframe src="https://ads.example.com/tracker?foo=1"></iframe>
+    <video src="https://example.com/clip.mp4"></video>
+    <details><summary>展开查看</summary><p>被折叠的正文</p></details>
+    <table>
+      <tr><th rowspan="2">项目</th><th colspan="2">数值</th></tr>
+      <tr><td>甲</td><td>乙</td></tr>
+      <tr><td>合计</td><td>1</td><td>2</td></tr>
+    </table>
+  </article>`;
+const rich = reader.htmlToMarkdown(richHtml, "https://example.com/rich/1");
+check("rich: <mark> becomes Obsidian ==highlight==", rich.includes("==重点内容=="));
+check("rich: numeric citation sup is dropped", !rich.includes("[1]"));
+check("rich: TeX annotation becomes inline math", rich.includes("$a^2+b^2=c^2$"));
+check("rich: YouTube iframe becomes a watch link", rich.includes("[Video](https://www.youtube.com/watch?v=dQw4w9WgXcQ)"));
+check("rich: Bilibili iframe becomes a video-page link", rich.includes("https://www.bilibili.com/video/BV1xx411c7mD"));
+check("rich: non-video iframe is dropped", !rich.includes("ads.example.com"));
+check("rich: <video> keeps a media link", rich.includes("[Video](https://example.com/clip.mp4)"));
+check("rich: <summary> becomes a bold line", rich.includes("**展开查看**"));
+check("rich: details body is kept", rich.includes("被折叠的正文"));
+check("rich: merged table cells are duplicated into the grid", /项目.*甲.*乙/m.test(rich) && /项目.*数值/m.test(rich) && rich.split("\n").filter((l) => l.includes("合计")).length === 1);
+check("rich: flattened table stays a GFM table", /\|\s*---\s*\|/.test(rich));
+
+// iframe whitelisting on the extraction path: a page whose only content is a
+// video embed must survive both strip passes, a widget iframe must not.
+check(
+  "stripReaderNoise keeps video iframes and drops widget iframes",
+  (() => {
+    const doc = new DOMParser().parseFromString(
+      `<div id="r"><iframe src="https://player.vimeo.com/video/123"></iframe><iframe src="https://widget.example.com/x"></iframe></div>`,
+      "text/html"
+    );
+    reader.stripReaderNoise(doc);
+    const kept = doc.querySelectorAll("iframe").length;
+    return kept === 1 && doc.querySelector("iframe")?.getAttribute("src") === "https://player.vimeo.com/video/123";
+  })()
+);
+
+// ---------------------------------------------------------------------------
 // The guest-side path: this is the one that reads anti-bot and app-shell pages,
 // so it has to be proven to actually execute in a page context, not just to
 // bundle. jsdom stands in for the Chromium renderer; the script is evaluated
