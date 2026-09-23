@@ -15373,6 +15373,17 @@ export default class MobileWebviewerPlugin extends Plugin {
     } catch (error) {
       console.error("[mobile-webviewer] reader-first extraction failed", error);
       void this.addConsole("warn", "Reader-first extraction skipped", url);
+      // Before dropping to the raw page, give the rendered DOM a chance: on a
+      // bot wall the guest usually holds the article even though the fetch did
+      // not. This branch is the one used when the note is the foreground, so
+      // skipping it meant those pages never became Markdown at all.
+      this.renderLiveBrowserSurface(embed, url);
+      const livePage = await this.extractLiveReaderPage(embed, url);
+      if (livePage && embed.isConnected && embed.dataset.url === url) {
+        await this.ensureWebNote(livePage);
+        this.renderPageEmbed(embed, livePage);
+        return;
+      }
       await this.prepareEmbedForRerender(embed);
       embed.empty();
       embed.addClass("mwv-embed");
