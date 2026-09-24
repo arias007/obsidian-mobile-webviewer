@@ -310,13 +310,22 @@
 
 .mwv-utility-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+}
+
+.mwv-utility-day {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .mwv-utility-item {
   display: grid;
-  gap: 8px;
-  padding: 10px 11px;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--background-secondary) 88%, var(--background-primary));
@@ -324,13 +333,50 @@
 
 .mwv-utility-main {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   width: 100%;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
+  cursor: var(--cursor);
+}
+
+.mwv-utility-top {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.mwv-utility-top .mwv-utility-title {
+  flex: 1 1 auto;
+}
+
+.mwv-utility-inline-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.mwv-utility-inline-actions .mwv-mini-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mwv-utility-inline-actions .mwv-mini-action:hover {
+  border-color: var(--background-modifier-border);
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 .mwv-utility-meta {
@@ -352,7 +398,12 @@
 }
 
 .mwv-utility-host {
+  flex: 0 1 auto;
   color: var(--interactive-accent);
+}
+
+.mwv-utility-time {
+  flex: none;
 }
 
 .mwv-utility-title,
@@ -367,10 +418,16 @@
 
 .mwv-utility-url,
 .mwv-cancip-desc {
-  overflow-wrap: anywhere;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.mwv-utility-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mwv-utility-actions {
@@ -2752,6 +2809,16 @@
 .mwv-browser-nav.is-active {
   background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
   color: var(--text-accent);
+}
+
+/* The bookmark star in the address row: filled + golden while the current page
+   is bookmarked, so the state survives glance-only checks. */
+.mwv-browser-nav.is-bookmarked {
+  color: var(--color-yellow, var(--text-accent));
+}
+
+.mwv-browser-nav.is-bookmarked svg {
+  fill: currentColor;
 }
 
 .mwv-browser-address {

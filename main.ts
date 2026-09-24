@@ -7504,6 +7504,14 @@ function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
   return /^https?:\/\//i.test(contextUrl) ? `${base}?url=${encodeURIComponent(contextUrl)}` : base;
 }
 
+// Bump these when the toolbar's button set or the utility page's row shape
+// changes. Already-mounted embeds keep their DOM across a plugin reload (the
+// heartbeat deliberately repairs instead of rebuilding), so without a rev the
+// old toolbar would survive the update forever. A mismatch triggers exactly
+// one rebuild, after which the fresh chrome carries the current rev.
+const MWV_BROWSER_CHROME_REV = "2";
+const MWV_UTILITY_PAGE_REV = "2";
+
 function utilityPageTitle(kind: UtilityPageKind): string {
   switch (kind) {
     case "bookmarks":
@@ -14506,21 +14514,11 @@ export default class MobileWebviewerPlugin extends Plugin {
         addMenuItem(menu, this.tr("note"), "file-text", () => this.setNoteBrowserEmbedMode(current, "note"), mode === "note");
         addMenuItem(menu, this.tr("web"), "globe-2", () => this.setNoteBrowserEmbedMode(current, "web"), mode === "web");
         addMenuItem(menu, "Split", "columns-2", () => this.setNoteBrowserEmbedMode(current, "split"), mode === "split");
-        addMenuItem(menu, this.tr("reload"), "rotate-cw", () => void this.refreshEmbed(current));
-        addMenuItem(menu, this.tr("home"), "home", () => void this.openUrlInEmbed(current, this.settings.homeUrl));
         addMenuItem(menu, this.tr("saveMd"), "file-down", () => void this.exportEmbedWebNote(current));
-        addMenuItem(menu, this.tr("more"), "more-horizontal", () => {
-          const url = current.dataset.url || this.settings.homeUrl;
-          const title = current.dataset.mwvCurrentTitle || "";
-          let chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-          if (!chrome) {
-            // Recovered or fast-reloaded embeds can miss their chrome. Rebuild
-            // it instead of silently ignoring the More entry.
-            this.renderBrowserChrome(current, url, title || hostName(url));
-            chrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-          }
-          if (chrome) this.toggleMorePanel(current, chrome, url, title);
-        });
+        // Reload / Home / More used to sit here too. All three were cut: reload
+        // and the star moved into the address row, home is already on that row,
+        // and the More panel has its own header button — three menu paths to
+        // the same action only made the menu longer.
       };
       binding.guardedPaneMenu = guardedPaneMenu;
       view.onPaneMenu = guardedPaneMenu;
@@ -15382,6 +15380,45 @@ export default class MobileWebviewerPlugin extends Plugin {
     await this.openUrlInEmbed(embed, embed.dataset.url ?? this.settings.homeUrl, false);
   }
 
+  isUrlBookmarked(url: string): boolean {
+    return this.settings.bookmarks.some((entry) => entry.url === url);
+  }
+
+  /**
+   * Toggle the bookmark star for the page the embed currently shows.
+   *
+   * Only http(s) pages can be bookmarked — internal utility pages (history,
+   * downloads, …) keep the star disabled. State is patched onto every star in
+   * the embed in place instead of rebuilding the chrome, and the chip row under
+   * the address bar is refreshed so a new bookmark is immediately reachable.
+   */
+  async toggleEmbedBookmark(embed: HTMLElement): Promise<void> {
+    const url = embed.dataset.url || "";
+    if (!/^https?:\/\//i.test(url)) return;
+    const title = embed.dataset.mwvCurrentTitle || hostName(url);
+    const added = await this.toggleBookmarkEntry(url, title);
+    new Notice(added ? this.tr("bookmarkAdded") : this.tr("bookmarkRemoved"));
+    this.syncEmbedBookmarkState(embed);
+    embed.querySelector<HTMLElement>(":scope > .mwv-bookmarks-bar")?.remove();
+    this.renderBookmarksBar(embed);
+    this.pinEmbedChrome(embed);
+  }
+
+  syncEmbedBookmarkState(embed: HTMLElement): void {
+    const url = embed.dataset.url || "";
+    const bookmarkable = /^https?:\/\//i.test(url);
+    const bookmarked = bookmarkable && this.isUrlBookmarked(url);
+    for (const button of Array.from(embed.querySelectorAll<HTMLButtonElement>('button[data-mwv-browser-nav="bookmark"]'))) {
+      button.disabled = !bookmarkable;
+      button.toggleClass("is-disabled", !bookmarkable);
+      button.setAttribute("aria-disabled", String(!bookmarkable));
+      button.toggleClass("is-bookmarked", bookmarked);
+      const label = bookmarked ? this.tr("removeBookmark") : this.tr("addBookmark");
+      button.setAttribute("title", label);
+      button.setAttribute("aria-label", label);
+    }
+  }
+
   async persistEmbedState(embed: HTMLElement): Promise<void> {
     this.settings.noteBrowserUrl = embed.dataset.url || this.settings.homeUrl;
     this.settings.noteBrowserBack = this.getEmbedStack(embed, "mwvBack");
@@ -15423,6 +15460,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.renderBrowserChrome(embed, url, title);
     const page = embed.createEl("article", { cls: "mwv-note-surface mwv-utility-page" });
     page.dataset.url = url;
+    page.dataset.mwvUtilityRev = MWV_UTILITY_PAGE_REV;
     page.createEl("h2", { cls: "mwv-page-title", text: title });
     const content = page.createDiv({ cls: "mwv-utility-content" });
     if (kind === "downloads") {
@@ -15451,7 +15489,7 @@ export default class MobileWebviewerPlugin extends Plugin {
           [this.tr("latest"), entries[0] ? hostName(entries[0].url) : "-"]
         ]);
       }
-      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : this.tr("noEntries"));
+      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : this.tr("noEntries"), kind === "history" ? { groupByDay: true } : {});
     }
     this.notifyNoteDrawWebviewChanged(embed);
   }
@@ -15465,32 +15503,85 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  renderEntryUtilityList(parent: HTMLElement, embed: HTMLElement, entries: WebEntry[], emptyText: string): void {
+  /**
+   * Compact, fixed-shape rows for the history / bookmarks / reading pages.
+   *
+   * The old row floated a host+date line and three text buttons around a tall
+   * card, so long URLs overflowed the panel and the page read as a form dump.
+   * Now each row is: title + two icon buttons on one line, the URL ellipsized
+   * on the next, host + short time on the last. The whole row opens in the
+   * current tab; the icons cover "new tab" and "copy link". History entries
+   * are grouped under day headers so 120 rows stay scannable.
+   */
+  renderEntryUtilityList(
+    parent: HTMLElement,
+    embed: HTMLElement,
+    entries: WebEntry[],
+    emptyText: string,
+    options: { groupByDay?: boolean } = {}
+  ): void {
     if (!entries.length) {
       parent.createDiv({ cls: "mwv-empty", text: emptyText || this.tr("noEntries") });
       return;
     }
     const list = parent.createDiv({ cls: "mwv-utility-list" });
+    let lastDay = "";
     for (const entry of entries.slice(0, 120)) {
+      if (options.groupByDay) {
+        const day = this.formatEntryDay(entry.time);
+        if (day !== lastDay) {
+          lastDay = day;
+          list.createDiv({ cls: "mwv-utility-day", text: day });
+        }
+      }
       const item = list.createDiv({ cls: "mwv-utility-item" });
       const main = item.createEl("button", { cls: "mwv-utility-main", attr: { type: "button", title: entry.url } });
+      const top = main.createDiv({ cls: "mwv-utility-top" });
+      top.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
+      const inline = top.createDiv({ cls: "mwv-utility-inline-actions" });
+      const newTab = inline.createEl("button", {
+        cls: "mwv-mini-action",
+        attr: { type: "button", title: this.tr("openInNewTab"), "aria-label": this.tr("openInNewTab") }
+      });
+      setIcon(newTab, "plus");
+      newTab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.newEmbedBrowserTab(embed, entry.url);
+      });
+      const copy = inline.createEl("button", {
+        cls: "mwv-mini-action",
+        attr: { type: "button", title: this.tr("copyLink"), "aria-label": this.tr("copyLink") }
+      });
+      setIcon(copy, "copy");
+      copy.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void runAsync(async () => {
+          await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
+          new Notice(this.tr("copiedLink"));
+        });
+      });
+      main.createDiv({ cls: "mwv-utility-url", text: entry.url });
       const meta = main.createDiv({ cls: "mwv-utility-meta" });
       meta.createSpan({ cls: "mwv-utility-host", text: hostName(entry.url) });
-      meta.createSpan({ cls: "mwv-utility-time", text: new Date(entry.time).toLocaleString() });
-      main.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
-      main.createDiv({ cls: "mwv-utility-url", text: entry.url });
-      main.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
-      const row = item.createDiv({ cls: "mwv-utility-actions" });
-      const open = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("newTab"), attr: { type: "button" } });
-      open.addEventListener("click", () => void this.newEmbedBrowserTab(embed, entry.url));
-      const current = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("currentOpen"), attr: { type: "button" } });
-      current.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
-      const copy = row.createEl("button", { cls: "mwv-mini-action", text: this.tr("copy"), attr: { type: "button" } });
-      copy.addEventListener("click", () => runAsync(async () => {
-        await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
-        new Notice(this.tr("copiedLink"));
-      }));
+      meta.createSpan({ cls: "mwv-utility-time", text: this.formatEntryTime(entry.time) });
+      main.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
     }
+  }
+
+  /** "14:32" today, "09/21 14:32" otherwise — full timestamps made every row noisy. */
+  formatEntryTime(time: number): string {
+    const date = new Date(time);
+    const clock = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (date.toDateString() === new Date().toDateString()) return clock;
+    return `${date.toLocaleDateString([], { month: "numeric", day: "numeric" })} ${clock}`;
+  }
+
+  /** Day header for grouped lists: the localized "today" key, else the locale date. */
+  formatEntryDay(time: number): string {
+    const date = new Date(time);
+    return date.toDateString() === new Date().toDateString() ? this.tr("today") : date.toLocaleDateString();
   }
 
   renderDownloadUtilityList(parent: HTMLElement, embed: HTMLElement, entries: DownloadEntry[]): void {
@@ -16075,6 +16166,9 @@ export default class MobileWebviewerPlugin extends Plugin {
       // never rebuilding the toolbar to do it) is what keeps back/forward
       // honest without making the controls unclickable.
       this.syncEmbedChromeNavState(embed);
+      // The star follows the address: navigating to a bookmarked page fills
+      // it, navigating away empties it, without a chrome rebuild.
+      this.syncEmbedBookmarkState(embed);
     }
     this.syncNoteBrowserNativeIdentity(embed, url);
   }
@@ -16753,6 +16847,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     embed.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab-strip, :scope > .mwv-browser-chrome, :scope > .mwv-browser-status, :scope > .mwv-bookmarks-bar").forEach((node) => node.remove());
     embed.dataset.mwvCurrentTitle = title || hostName(url);
     const chrome = embed.createDiv({ cls: "mwv-browser-chrome" });
+    chrome.dataset.mwvChromeRev = MWV_BROWSER_CHROME_REV;
     const controls = chrome.createDiv({ cls: "mwv-browser-controls" });
     const actions = chrome.createDiv({ cls: "mwv-browser-actions" });
     const setMode = (mode: "note" | "web" | "split") => {
@@ -16786,6 +16881,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     // start page, and it is the one control that behaves identically on desktop
     // (guest src) and on mobile (frame load).
     makeNavButton("home", this.tr("home"), false, "home");
+    // Reload and the bookmark star join the address row. The pane menu used to
+    // duplicate both (plus a third path into the More panel); the address bar
+    // is where a refresh and a star are looked for first, so they live here.
+    makeNavButton("rotate-cw", this.tr("reload"), false, "reload");
+    const bookmarkable = /^https?:\/\//i.test(url);
+    const bookmarked = bookmarkable && this.isUrlBookmarked(url);
+    const star = makeNavButton("star", bookmarked ? this.tr("removeBookmark") : this.tr("addBookmark"), !bookmarkable, "bookmark");
+    star.toggleClass("is-bookmarked", bookmarked);
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
@@ -16879,6 +16982,8 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (action === "back") this.runBrowserAction("back", this.navigateEmbedBack(embed));
         else if (action === "forward") this.runBrowserAction("forward", this.navigateEmbedForward(embed));
         else if (action === "home") this.runBrowserAction("home", this.openUrlInEmbed(embed, this.settings.homeUrl));
+        else if (action === "reload") this.runBrowserAction("reload", this.refreshEmbed(embed));
+        else if (action === "bookmark") this.runBrowserAction("bookmark", this.toggleEmbedBookmark(embed));
         return;
       }
       if (target.closest(".mwv-browser-action")) {
@@ -17020,6 +17125,20 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!embed.isConnected || (!embed.hasClass("mwv-note-embed") && !embed.hasClass("mwv-bing-home") && !embed.hasClass("mwv-utility-embed"))) return;
     const url = embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
     const title = embed.dataset.mwvCurrentTitle || this.getEmbedSurfaceTitle(embed) || hostName(url);
+    // A utility page rendered by an older build keeps its old row shape (the
+    // heartbeat would otherwise never touch it). Re-render it exactly once:
+    // the fresh page carries the current rev and the check goes quiet.
+    if (embed.hasClass("mwv-utility-embed")) {
+      const kind = internalUtilityKind(embed.dataset.url || "");
+      const page = embed.querySelector<HTMLElement>(":scope > .mwv-utility-page");
+      if (kind && (!page || page.dataset.mwvUtilityRev !== MWV_UTILITY_PAGE_REV)) {
+        const scrollTop = embed.scrollTop;
+        this.renderUtilityEmbed(embed, kind, embed.dataset.url || utilityPageUrl(kind));
+        this.pinEmbedChrome(embed);
+        if (embed.scrollTop !== scrollTop) embed.scrollTop = scrollTop;
+        return;
+      }
+    }
     const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
     // "Is the chrome still healthy" must be answered with something that really
     // lives inside it. This used to probe for the More button, which is anchored
@@ -17028,7 +17147,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     // the heartbeat rebuilt the entire toolbar every 1.2 s. Tearing the address
     // row, the nav buttons and the tab strip down dozens of times a minute is
     // exactly why those controls appeared to ignore taps.
-    if (chrome?.querySelector(".mwv-browser-address .mwv-browser-url")) {
+    if (chrome?.querySelector(".mwv-browser-address .mwv-browser-url") && chrome.dataset.mwvChromeRev === MWV_BROWSER_CHROME_REV) {
       this.updateEmbedChrome(embed, url, title);
       this.pinEmbedChrome(embed);
       return;

@@ -95,6 +95,8 @@ const METHODS = [
   "settleEmbedTabs",
   "refreshEmbedTabstrips",
   "syncEmbedChromeNavState",
+  "syncEmbedBookmarkState",
+  "isUrlBookmarked",
   "canNavigateEmbed",
   "canDriveBrowserSurface",
   "isElectronWebview",
@@ -130,6 +132,8 @@ function buildMethodTable(src) {
     "HTMLButtonElement",
     "HTMLInputElement",
     "MAX_BROWSER_TABS",
+    "MWV_BROWSER_CHROME_REV",
+    "MWV_UTILITY_PAGE_REV",
     `${js}\nreturn __M;`
   );
   return factory;
@@ -323,7 +327,7 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
 
   const notices = [];
   const navigations = [];
-  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0 };
+  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0, reload: 0, bookmarkToggle: 0 };
 
   const leaf = { id: "leaf-1" };
   const binding = { navButtons: [] };
@@ -340,7 +344,11 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     win.HTMLElement,
     win.HTMLButtonElement,
     win.HTMLInputElement,
-    MAX_BROWSER_TABS
+    MAX_BROWSER_TABS,
+    // Chrome / utility-page revision markers, mirrored from main.ts: the
+    // extracted bodies compare them to decide "repair vs rebuild".
+    "2",
+    "2"
   );
 
   const ctx = Object.assign(table, {
@@ -348,7 +356,8 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
       homeUrl: "https://home.example/",
       browserTabs: [{ id: "t1", title: "One", url: "https://example.org/", back: [], forward: [] }],
       activeBrowserTabId: "t1",
-      noteBrowserUrl: "https://example.org/"
+      noteBrowserUrl: "https://example.org/",
+      bookmarks: []
     },
     tr: (key) => key,
     syncEmbedChromeNavState: table.syncEmbedChromeNavState,
@@ -388,6 +397,10 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     setNoteBrowserEmbedMode: () => {},
     navigateEmbedBack: () => { navigations.push("back"); },
     navigateEmbedForward: () => { navigations.push("forward"); },
+    // Reload / bookmark star collaborators: the delegated chrome handler routes
+    // to these; the checks assert the routing, not the full refresh pipeline.
+    refreshEmbed: async () => { calls.reload += 1; },
+    toggleEmbedBookmark: async () => { calls.bookmarkToggle += 1; },
     openUrlInEmbed: (el, url) => { calls.openUrlInEmbed.push(url); },
     exportEmbedWebNote: () => {},
     ensureNoteBrowserMoreButton: () => null,
@@ -449,19 +462,60 @@ const stripOf = (doc) => doc.querySelector(".mwv-embed-tabstrip");
  * Checks
  * ------------------------------------------------------------------ */
 
-check("chrome exposes back / forward / home in the address row", () => {
+check("chrome exposes back / forward / home / reload / bookmark in the address row", () => {
   const { embed } = createWorld();
   const chrome = chromeOf(embed);
   assert(chrome, "no chrome was built");
   const address = chrome.querySelector(".mwv-browser-address");
   assert(address, "no address row");
-  for (const nav of ["back", "forward", "home"]) {
+  for (const nav of ["back", "forward", "home", "reload", "bookmark"]) {
     const button = navButton(embed, nav);
     assert(button, `missing ${nav} button`);
     assert(address.contains(button), `${nav} button is not in the address row`);
     assert(button.getAttribute("type") === "button", `${nav} must not submit the address form`);
   }
-  return "back/forward/home present in the address row";
+  return "back/forward/home/reload/bookmark present in the address row";
+});
+
+check("the bookmark star follows the page and is disabled on internal pages", () => {
+  const { embed, ctx } = createWorld();
+  const star = navButton(embed, "bookmark");
+  assert(star, "missing bookmark star");
+  assert(!star.classList.contains("is-bookmarked"), "star filled without a bookmark");
+  assert(!star.disabled, "star disabled on a bookmarkable page");
+  ctx.settings.bookmarks = [{ title: "Example", url: "https://example.org/", time: 0 }];
+  ctx.syncEmbedBookmarkState(embed);
+  assert(star.classList.contains("is-bookmarked"), "star not filled for a bookmarked page");
+  assert(star.getAttribute("title") === "removeBookmark", "star title not switched to remove");
+  embed.dataset.url = "mwv://history";
+  ctx.syncEmbedBookmarkState(embed);
+  assert(star.disabled, "star enabled on an internal utility page");
+  assert(!star.classList.contains("is-bookmarked"), "star filled on an internal utility page");
+  return "star reflects the bookmark state; internal pages keep it disabled";
+});
+
+check("tapping reload and the star routes to the embed actions", () => {
+  const { embed, calls } = createWorld();
+  click(embed.ownerDocument.defaultView, navButton(embed, "reload"));
+  click(embed.ownerDocument.defaultView, navButton(embed, "bookmark"));
+  assert(calls.reload === 1, `reload routed ${calls.reload} times`);
+  assert(calls.bookmarkToggle === 1, `bookmark routed ${calls.bookmarkToggle} times`);
+  return "reload -> refreshEmbed, star -> toggleEmbedBookmark";
+});
+
+check("a stale-rev chrome is rebuilt exactly once by the heartbeat", () => {
+  const { embed, calls, ctx } = createWorld();
+  const chrome = chromeOf(embed);
+  chrome.dataset.mwvChromeRev = "1";
+  ctx.ensureEmbedChrome(embed);
+  assert(calls.renderBrowserChrome === 2, `rebuilt ${calls.renderBrowserChrome} times (setup + upgrade expected)`);
+  const rebuilt = chromeOf(embed);
+  assert(rebuilt !== chrome, "chrome was patched in place instead of rebuilt");
+  assert(rebuilt.dataset.mwvChromeRev === "2", "rebuilt chrome does not carry the current rev");
+  ctx.ensureEmbedChrome(embed);
+  ctx.ensureEmbedChrome(embed);
+  assert(calls.renderBrowserChrome === 2, "healthy current-rev chrome was rebuilt again");
+  return "old toolbars upgrade once, then stay stable";
 });
 
 check("heartbeat update does not rebuild a healthy chrome", () => {

@@ -159,7 +159,7 @@ const checks = [
   ["raw Web surfaces are hard-excluded before NoteDraw mounts a controller", source.includes("installNoteDrawRawSurfaceGuard") && source.includes("isRawNoteDrawExcludedSurface") && source.includes("noteDrawRawSurfaceGuardRunning") && source.includes("Object.defineProperty(documentEl, \"querySelectorAll\"")],
   ["raw Web mode keeps NoteDraw's own wand instead of destroying its controller", source.includes("disposeNoteDrawControllersForRawSurface") && source.includes("notedraw-body-control") && source.includes("documentEl.body?.querySelectorAll") && !modeMethod.includes("disposeNoteDrawControllersForRawSurface(embed)") && modeMethod.includes("queueNoteWebWandAdopt(embed)")],
   ["standalone Web to NoteWeb transition clears all raw NoteDraw controllers", source.includes("disposeAllRawNoteDrawControllers") && source.includes("this.plugin.disposeAllRawNoteDrawControllers()")],
-  ["NoteWeb chrome drops redundant web/note/home/reload buttons", !chromeMethod.includes('makeNavButton("rotate-cw"') && !chromeMethod.includes("makeModeButton") && !chromeMethod.includes('cls: "mwv-browser-home"')],
+  ["NoteWeb chrome keeps mode buttons out and carries the address-row reload", chromeMethod.includes('makeNavButton("rotate-cw", this.tr("reload"), false, "reload")') && !chromeMethod.includes("makeModeButton") && !chromeMethod.includes('cls: "mwv-browser-home"')],
   ["More button lives beside the NoteDraw wand with its own icon", chromeMethod.includes("this.ensureNoteBrowserMoreButton(embed, url, title)") && source.includes("data-mwv-browser-more") && styles.includes(".mwv-notedraw-anchor .mwv-browser-more")],
   ["no NoteDraw plugin means no wand at all", wandMethod.includes("if (!this.getNoteDrawPlugin()) {") && wandMethod.includes("this.removeNoteWebWandProxy(surface);") && wandMethod.includes("return null;")],
   ["wand stays untouched - NoteDraw owns its icon and label", !source.includes("decorateNoteDrawWebWandButton") && !source.includes("mwvWebWandDecorated") && !source.includes("mwv-web-wand-globe") && styles.includes(".mwv-notedraw-anchor .notedraw-webview-button")],
@@ -206,7 +206,7 @@ const checks = [
   ["mobile direct-open forces reading mode on file-open and leaf change", source.includes('on("file-open"') && source.includes("this.enforceNoteBrowserReadingMode()")],
   ["reading-mode enforcement re-sweeps stale preview embeds", source.includes("this.processWebviewerEmbeds(leaf.view.containerEl)")],
   ["More panel stays visible in Web mode", styles.includes(":not(.mwv-extension-panel):not(.mwv-more-panel)") && styles.includes(".mwv-embed.is-web-front > .mwv-extension-panel")],
-  ["More menu entry rebuilds missing chrome instead of no-op", source.includes("this.renderBrowserChrome(current, url, title || hostName(url))") && source.includes("embed.appendChild(panel)")],
+  ["More entry rebuilds missing chrome instead of no-op", source.includes("this.renderBrowserChrome(current, liveUrl, liveTitle);") && source.includes("embed.appendChild(panel)")],
   ["native menu actions never use a detached embed", source.includes('querySelector<HTMLElement>(".mwv-embed[data-url]")') && source.includes("if (embed.isConnected) return embed")]
 ];
 
