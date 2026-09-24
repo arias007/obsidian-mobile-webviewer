@@ -2851,6 +2851,41 @@
   fill: currentColor;
 }
 
+/* Immersive mode: hide every chrome row, keep a floating exit handle. */
+.mwv-embed.mwv-immersive > .mwv-browser-chrome,
+.mwv-embed.mwv-immersive > .mwv-bookmarks-bar,
+.mwv-embed.mwv-immersive > .mwv-embed-tab-strip,
+.mwv-embed.mwv-immersive > .mwv-browser-status {
+  display: none !important;
+}
+.mwv-embed > .mwv-immersive-exit {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 30;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  box-shadow: var(--shadow-s);
+  opacity: 0.55;
+  cursor: pointer;
+}
+.mwv-embed > .mwv-immersive-exit:active {
+  opacity: 1;
+}
+.mwv-browser-nav.is-immersive {
+  color: var(--interactive-accent);
+}
+
+/* Address bar suggestion list (native datalist, kept out of layout). */
+.mwv-browser-suggest {
+  display: none;
+}
+
 .mwv-browser-address {
   display: grid;
   position: relative;

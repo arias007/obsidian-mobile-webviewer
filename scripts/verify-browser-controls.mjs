@@ -104,6 +104,10 @@ const METHODS = [
   "ensureEmbedChrome",
   "pinEmbedChrome",
   "renderBrowserChrome",
+  "populateAddressSuggestions",
+  "toggleEmbedImmersive",
+  "toggleEmbedFindPanel",
+  "closeEmbedBrowserTabsBatch",
   "renderTabStrip"
 ];
 
@@ -134,6 +138,7 @@ function buildMethodTable(src) {
     "MAX_BROWSER_TABS",
     "MWV_BROWSER_CHROME_REV",
     "MWV_UTILITY_PAGE_REV",
+    "Menu",
     `${js}\nreturn __M;`
   );
   return factory;
@@ -327,7 +332,8 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
 
   const notices = [];
   const navigations = [];
-  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0, reload: 0, bookmarkToggle: 0 };
+  const menus = [];
+  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0, reload: 0, bookmarkToggle: 0, find: 0, immersive: 0 };
 
   const leaf = { id: "leaf-1" };
   const binding = { navButtons: [] };
@@ -347,8 +353,26 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     MAX_BROWSER_TABS,
     // Chrome / utility-page revision markers, mirrored from main.ts: the
     // extracted bodies compare them to decide "repair vs rebuild".
-    "2",
-    "2"
+    "3",
+    "3",
+    function Menu() {
+      const items = [];
+      const self = {
+        items,
+        addItem(fn) {
+          const entry = { title: "" };
+          entry.setTitle = (t) => {
+            entry.title = t;
+            return { setIcon: (icon) => { entry.icon = icon; return { onClick: (cb) => { entry.onClick = cb; } }; } };
+          };
+          fn(entry);
+          items.push(entry);
+          return self;
+        },
+        showAtMouseEvent: (event) => { menus.push({ items, event }); }
+      };
+      return self;
+    }
   );
 
   const ctx = Object.assign(table, {
@@ -357,7 +381,9 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
       browserTabs: [{ id: "t1", title: "One", url: "https://example.org/", back: [], forward: [] }],
       activeBrowserTabId: "t1",
       noteBrowserUrl: "https://example.org/",
-      bookmarks: []
+      bookmarks: [],
+      readingList: [],
+      history: []
     },
     tr: (key) => key,
     syncEmbedChromeNavState: table.syncEmbedChromeNavState,
@@ -401,6 +427,9 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     // to these; the checks assert the routing, not the full refresh pipeline.
     refreshEmbed: async () => { calls.reload += 1; },
     toggleEmbedBookmark: async () => { calls.bookmarkToggle += 1; },
+    // The find panel drags in its own collaborator set; the checks assert
+    // that the chrome routes to it, so a counter stub is enough here.
+    toggleEmbedFindPanel: (el) => { calls.find += 1; },
     openUrlInEmbed: (el, url) => { calls.openUrlInEmbed.push(url); },
     exportEmbedWebNote: () => {},
     ensureNoteBrowserMoreButton: () => null,
@@ -442,7 +471,7 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
 
   ctx.renderBrowserChrome(embed, embed.dataset.url, "Example");
 
-  return { win, doc, embed, leaf, binding, notices, navigations, calls, ctx, leafContent, header, surface, newTabStrip };
+  return { win, doc, embed, leaf, binding, notices, navigations, calls, menus, ctx, leafContent, header, surface, newTabStrip };
 }
 
 const click = (win, el) => {
@@ -475,6 +504,106 @@ check("chrome exposes back / forward / home / reload / bookmark in the address r
     assert(button.getAttribute("type") === "button", `${nav} must not submit the address form`);
   }
   return "back/forward/home/reload/bookmark present in the address row";
+});
+
+check("chrome exposes find and immersive in the address row and routes them", () => {
+  const { win, embed, calls } = createWorld();
+  const chrome = chromeOf(embed);
+  const address = chrome.querySelector(".mwv-browser-address");
+  const find = navButton(embed, "find");
+  const immersive = navButton(embed, "immersive");
+  assert(find && address.contains(find), "find button missing from the address row");
+  assert(immersive && address.contains(immersive), "immersive button missing from the address row");
+  click(win, find);
+  assert(calls.find === 1, `find routed ${calls.find} times`);
+  click(win, immersive);
+  assert(embed.hasClass("mwv-immersive"), "immersive mode did not toggle on");
+  assert(embed.querySelector(":scope > .mwv-immersive-exit"), "no floating exit handle was mounted");
+  click(win, embed.querySelector(":scope > .mwv-immersive-exit"));
+  assert(!embed.hasClass("mwv-immersive"), "the exit handle did not leave immersive mode");
+  assert(!embed.querySelector(":scope > .mwv-immersive-exit"), "the exit handle lingered after exit");
+  return "find -> toggleEmbedFindPanel; immersive toggles class + exit handle";
+});
+
+check("immersive state survives a chrome rebuild with the correct icon", () => {
+  const { embed, ctx } = createWorld();
+  ctx.toggleEmbedImmersive(embed);
+  const before = navButton(embed, "immersive");
+  assert(before.getAttribute("data-icon") === "minimize-2", "immersive button did not switch to the exit icon");
+  // A rev bump rebuilds the chrome from scratch; the mode must be reflected.
+  const chrome = chromeOf(embed);
+  chrome.dataset.mwvChromeRev = "1";
+  ctx.ensureEmbedChrome(embed);
+  const after = navButton(embed, "immersive");
+  assert(after && after.getAttribute("data-icon") === "minimize-2", "rebuilt chrome lost the immersive icon");
+  assert(embed.hasClass("mwv-immersive"), "rebuilt chrome lost the immersive mode");
+  return "rebuild keeps immersive mode and its exit icon";
+});
+
+check("address suggestions draw from bookmarks, reading list and history", () => {
+  const { embed, ctx } = createWorld();
+  const input = embed.querySelector(".mwv-browser-url");
+  const datalist = embed.querySelector(".mwv-browser-suggest");
+  assert(input && datalist, "address input or datalist missing");
+  ctx.settings.bookmarks = [
+    { title: "Example", url: "https://example.org/", time: 3 },
+    { title: "Dup", url: "https://example.org/", time: 4 }
+  ];
+  ctx.settings.history = [
+    { title: "Bing", url: "https://bing.example/search?q=x", time: 2 },
+    { title: "Old", url: "https://old.example/", time: 1 }
+  ];
+  input.value = "";
+  ctx.populateAddressSuggestions(embed, input, datalist);
+  let values = Array.from(datalist.querySelectorAll("option")).map((o) => o.value);
+  assert(values.length === 3, `expected 3 unique suggestions, got ${values.length}: ${values.join(",")}`);
+  assert(values[0] === "https://example.org/", "bookmarks should lead the empty-query list");
+  input.value = "bing";
+  ctx.populateAddressSuggestions(embed, input, datalist);
+  values = Array.from(datalist.querySelectorAll("option")).map((o) => o.value);
+  assert(values.length === 1 && values[0] === "https://bing.example/search?q=x", `query filter failed: ${values.join(",")}`);
+  return "dedupe + filter + bookmark-first ordering verified";
+});
+
+check("tab context menu offers close-others and close-right", async () => {
+  const { win, embed, ctx, doc, menus, calls } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "One", url: "https://one.example/", back: [], forward: [] },
+    { id: "t2", title: "Two", url: "https://two.example/", back: [], forward: [] },
+    { id: "t3", title: "Three", url: "https://three.example/", back: [], forward: [] }
+  ];
+  ctx.renderEmbedTabstrip(embed);
+  const t2 = Array.from(doc.querySelectorAll(".mwv-embed-tab")).find((n) => n.dataset.mwvTabId === "t2");
+  const event = new win.MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: win });
+  t2.dispatchEvent(event);
+  assert(menus.length === 1, "no context menu was shown");
+  assert(menus[0].items.length === 2, `expected 2 menu items, got ${menus[0].items.length}`);
+  assert(menus[0].items[0].title === "closeOtherTabs" && menus[0].items[1].title === "closeTabsToRight", "menu titles wrong");
+  // Drive the close-others entry: real batch body + recording close stub.
+  // The batch runs sequentially through awaited closes, so let it settle.
+  menus[0].items[0].onClick();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert(calls.closeTab.join(",") === "t1,t3", `close-others routed ${calls.closeTab.join(",")}`);
+  return "context menu shown with both batch actions, close-others routed";
+});
+
+check("closeTabsToRight keeps the anchor and its left-hand tabs", async () => {
+  const { embed, ctx } = createWorld();
+  ctx.settings.browserTabs = [
+    { id: "t1", title: "One", url: "https://one.example/", back: [], forward: [] },
+    { id: "t2", title: "Two", url: "https://two.example/", back: [], forward: [] },
+    { id: "t3", title: "Three", url: "https://three.example/", back: [], forward: [] }
+  ];
+  const closed = [];
+  ctx.closeEmbedBrowserTab = async (el, id) => {
+    closed.push(id);
+    ctx.settings.browserTabs = ctx.settings.browserTabs.filter((t) => t.id !== id);
+  };
+  ctx.refreshEmbedTabstrips = () => {};
+  await ctx.closeEmbedBrowserTabsBatch(embed, "t2", "right");
+  assert(closed.join(",") === "t3", `close-right closed ${closed.join(",")}`);
+  assert(ctx.settings.browserTabs.map((t) => t.id).join(",") === "t1,t2", "the anchor or a left tab was closed");
+  return "close-right removed only t3";
 });
 
 check("the bookmark star follows the page and is disabled on internal pages", () => {
@@ -511,7 +640,7 @@ check("a stale-rev chrome is rebuilt exactly once by the heartbeat", () => {
   assert(calls.renderBrowserChrome === 2, `rebuilt ${calls.renderBrowserChrome} times (setup + upgrade expected)`);
   const rebuilt = chromeOf(embed);
   assert(rebuilt !== chrome, "chrome was patched in place instead of rebuilt");
-  assert(rebuilt.dataset.mwvChromeRev === "2", "rebuilt chrome does not carry the current rev");
+  assert(rebuilt.dataset.mwvChromeRev === "3", "rebuilt chrome does not carry the current rev");
   ctx.ensureEmbedChrome(embed);
   ctx.ensureEmbedChrome(embed);
   assert(calls.renderBrowserChrome === 2, "healthy current-rev chrome was rebuilt again");

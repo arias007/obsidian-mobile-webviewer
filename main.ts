@@ -4,6 +4,7 @@ import {
   ItemView,
   MarkdownRenderer,
   Menu,
+  Modal,
   Notice,
   Platform,
   Plugin,
@@ -423,9 +424,18 @@ interface UserScriptRule {
   enabled: boolean;
   css: string;
   js: string;
-  runAt: "reader";
+  // "reader" keeps the legacy reader-surface behaviour; the Tampermonkey-style
+  // phases below drive real webview page injection.
+  runAt: "reader" | "document-start" | "document-end" | "document-idle";
   time: number;
 }
+
+const USERSCRIPT_RUN_AT_VALUES: UserScriptRule["runAt"][] = [
+  "reader",
+  "document-start",
+  "document-end",
+  "document-idle"
+];
 
 interface DownloadEntry {
   id: string;
@@ -823,6 +833,10 @@ type UiTextKey =
   | "disabled"
   | "noMatchingScripts"
   | "findInPage"
+  | "immersiveMode"
+  | "exitImmersiveMode"
+  | "closeOtherTabs"
+  | "closeTabsToRight"
   | "previous"
   | "next"
   | "close"
@@ -1156,7 +1170,7 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   viewModeDesc: "Switches live page width and zoom surface.",
   downloadsDesc: "Files, HTML, and MHT saves inside the vault folder.",
   userScripts: "User Scripts",
-  userScriptsDesc: "Matched reader CSS/JavaScript rules.",
+  userScriptsDesc: "Matched reader/webpage CSS/JavaScript rules. Supports Tampermonkey (Greasemonkey) script imports with GM_* APIs.",
   readingListDesc: "Saved pages stay available from the browser bar.",
   modeLabel: "Mode",
   uaLabel: "UA",
@@ -1192,6 +1206,10 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   disabled: "Disabled",
   noMatchingScripts: "No matching scripts",
   findInPage: "Find in page",
+  immersiveMode: "Immersive mode",
+  exitImmersiveMode: "Exit immersive mode",
+  closeOtherTabs: "Close other tabs",
+  closeTabsToRight: "Close tabs to the right",
   previous: "Previous",
   next: "Next",
   close: "Close",
@@ -1524,7 +1542,7 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   viewModeDesc: "切换实时页面的宽度与缩放。",
   downloadsDesc: "保存在库文件夹内的文件、HTML 与 MHT。",
   userScripts: "用户脚本",
-  userScriptsDesc: "匹配阅读层的 CSS/JavaScript 规则。",
+  userScriptsDesc: "匹配阅读层/网页的 CSS/JavaScript 规则，支持导入油猴（Tampermonkey）脚本并兼容 GM_* API。",
   readingListDesc: "保存的页面可从浏览器栏随时打开。",
   modeLabel: "模式",
   uaLabel: "UA",
@@ -1560,6 +1578,10 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   disabled: "已禁用",
   noMatchingScripts: "没有匹配脚本",
   findInPage: "页内查找",
+  immersiveMode: "沉浸模式",
+  exitImmersiveMode: "退出沉浸模式",
+  closeOtherTabs: "关闭其他标签页",
+  closeTabsToRight: "关闭右侧标签页",
   previous: "上一个",
   next: "下一个",
   close: "关闭",
@@ -1854,7 +1876,7 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
   viewModeDesc: "切換即時頁面的寬度與縮放。",
   downloadsDesc: "儲存在庫資料夾內的檔案、HTML 與 MHT。",
   userScripts: "使用者指令碼",
-  userScriptsDesc: "符合閱讀層的 CSS/JavaScript 規則。",
+  userScriptsDesc: "符合閱讀層/網頁的 CSS/JavaScript 規則。支援匯入油猴（Tampermonkey）腳本並相容 GM_* API。",
   readingListDesc: "儲存的頁面可從瀏覽器列隨時開啟。",
   modeLabel: "模式",
   uaLabel: "UA",
@@ -1889,6 +1911,10 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
   disabled: "已停用",
   noMatchingScripts: "沒有符合的腳本",
   findInPage: "頁內搜尋",
+  immersiveMode: "沉浸模式",
+  exitImmersiveMode: "退出沉浸模式",
+  closeOtherTabs: "關閉其他標籤頁",
+  closeTabsToRight: "關閉右側標籤頁",
   previous: "上一個",
   next: "下一個",
   pageLoadLimited: "頁面載入受限；保留可編輯筆記層。",
@@ -2199,6 +2225,10 @@ const UI_TEXT_UG: UiDictionary = {
   disabled: "چەكلەنگەن",
   noMatchingScripts: "ماس كېلىدىغان قوليازما يوق",
   findInPage: "بەت ئىچىدىن ئىزدەش",
+  immersiveMode: "چۆكمە ھالەت",
+  exitImmersiveMode: "چۆكمە ھالەتتىن چىقىش",
+  closeOtherTabs: "باشقا بەتلەرنى ياپىش",
+  closeTabsToRight: "ئوڭ تەرەپتىكى بەتلەرنى ياپىش",
   previous: "ئالدىنقى",
   next: "كېيىنكى",
   pageLoadLimited: "بەت يۈكلىنىشى چەكلىك؛ تەھرىرلەشكە بولىدىغان خاتىرە قاتلىمى ساقلاندى.",
@@ -2592,6 +2622,10 @@ const UI_TEXT_AR = commonUi({
   disabled: "معطّل",
   noMatchingScripts: "لا سكربتات مطابقة",
   findInPage: "بحث في الصفحة",
+  immersiveMode: "وضع غامر",
+  exitImmersiveMode: "الخروج من الوضع الغامر",
+  closeOtherTabs: "إغلاق علامات التبويب الأخرى",
+  closeTabsToRight: "إغلاق علامات التبويب على اليمين",
   previous: "السابق",
   next: "التالي",
   pageLoadLimited: "تحميل الصفحة محدود؛ تبقى طبقة ملاحظة قابلة للتحرير.",
@@ -2947,6 +2981,10 @@ const UI_TEXT_RU = commonUi({
   disabled: "Отключено",
   noMatchingScripts: "Нет совпадающих скриптов",
   findInPage: "Найти на странице",
+  immersiveMode: "Режим погружения",
+  exitImmersiveMode: "Выйти из режима погружения",
+  closeOtherTabs: "Закрыть другие вкладки",
+  closeTabsToRight: "Закрыть вкладки справа",
   previous: "Назад",
   next: "Далее",
   pageLoadLimited: "Загрузка страницы ограничена; сохранён редактируемый слой заметки.",
@@ -3302,6 +3340,10 @@ const UI_TEXT_TR = commonUi({
   disabled: "Devre dışı",
   noMatchingScripts: "Eşleşen komut dosyası yok",
   findInPage: "Sayfada bul",
+  immersiveMode: "Daldırma modu",
+  exitImmersiveMode: "Daldırma modundan çık",
+  closeOtherTabs: "Diğer sekmeleri kapat",
+  closeTabsToRight: "Sağdaki sekmeleri kapat",
   previous: "Önceki",
   next: "Sonraki",
   pageLoadLimited: "Sayfa yükleme sınırlı; düzenlenebilir not katmanı korunur.",
@@ -3657,6 +3699,10 @@ const UI_TEXT_JA = commonUi({
   disabled: "無効",
   noMatchingScripts: "一致するスクリプトはありません",
   findInPage: "ページ内検索",
+  immersiveMode: "没入モード",
+  exitImmersiveMode: "没入モードを終了",
+  closeOtherTabs: "他のタブを閉じる",
+  closeTabsToRight: "右側のタブを閉じる",
   previous: "前へ",
   next: "次へ",
   pageLoadLimited: "ページの読み込みが制限されています。編集可能なノートレイヤーを保持します。",
@@ -4012,6 +4058,8 @@ const UI_TEXT_KO = commonUi({
   disabled: "비활성화됨",
   noMatchingScripts: "일치하는 스크립트 없음",
   findInPage: "페이지 내 찾기",
+  immersiveMode: "몰입 모드",
+  exitImmersiveMode: "몰입 모드 종료",
   previous: "이전",
   next: "다음",
   pageLoadLimited: "페이지 불러오기가 제한됩니다. 편집 가능한 노트 레이어를 유지합니다.",
@@ -4367,6 +4415,8 @@ const UI_TEXT_FR = commonUi({
   disabled: "Désactivé",
   noMatchingScripts: "Aucun script correspondant",
   findInPage: "Rechercher dans la page",
+  immersiveMode: "Mode immersif",
+  exitImmersiveMode: "Quitter le mode immersif",
   previous: "Précédent",
   next: "Suivant",
   pageLoadLimited: "Chargement limité ; une couche de note éditable est conservée.",
@@ -4722,6 +4772,8 @@ const UI_TEXT_DE = commonUi({
   disabled: "Deaktiviert",
   noMatchingScripts: "Keine passenden Skripte",
   findInPage: "Auf Seite suchen",
+  immersiveMode: "Immersiv-Modus",
+  exitImmersiveMode: "Immersiv-Modus beenden",
   previous: "Zurück",
   next: "Weiter",
   pageLoadLimited: "Seitenladen eingeschränkt; eine bearbeitbare Notizebene bleibt erhalten.",
@@ -5077,6 +5129,8 @@ const UI_TEXT_ES = commonUi({
   disabled: "Desactivado",
   noMatchingScripts: "Sin scripts coincidentes",
   findInPage: "Buscar en la página",
+  immersiveMode: "Modo inmersivo",
+  exitImmersiveMode: "Salir del modo inmersivo",
   previous: "Anterior",
   next: "Siguiente",
   pageLoadLimited: "Carga de página limitada; se mantiene una capa de nota editable.",
@@ -5511,6 +5565,8 @@ const UI_TEXT_HI = commonUi({
   disabled: "अक्षम",
   noMatchingScripts: "कोई मिलान स्क्रिप्ट नहीं",
   findInPage: "पेज में खोजें",
+  immersiveMode: "इमर्सिव मोड",
+  exitImmersiveMode: "इमर्सिव मोड से बाहर निकलें",
   previous: "पिछला",
   next: "अगला",
   pageLoadLimited: "पेज लोडिंग सीमित; संपादन योग्य नोट लेयर बनी रहती है।",
@@ -6045,6 +6101,8 @@ const UI_TEXT_ID = commonUi({
   disabled: "Nonaktif",
   noMatchingScripts: "Tidak ada skrip yang cocok",
   findInPage: "Cari di halaman",
+  immersiveMode: "Mode imersif",
+  exitImmersiveMode: "Keluar dari mode imersif",
   previous: "Sebelumnya",
   next: "Berikutnya",
   pageLoadLimited: "Pemuatan halaman terbatas; lapisan catatan yang dapat disunting tetap disimpan.",
@@ -6403,6 +6461,8 @@ const UI_TEXT_TH = commonUi({
   disabled: "ปิดใช้งาน",
   noMatchingScripts: "ไม่มีสคริปต์ที่จับคู่ได้",
   findInPage: "ค้นหาในหน้า",
+  immersiveMode: "โหมดดื่มด่ำ",
+  exitImmersiveMode: "ออกจากโหมดดื่มด่ำ",
   previous: "ก่อนหน้า",
   next: "ถัดไป",
   pageLoadLimited: "การโหลดหน้าถูกจำกัด; ยังคงชั้นโน้ตแก้ไขได้ไว้",
@@ -6753,6 +6813,8 @@ const UI_TEXT_VI = commonUi({
   disabled: "Đã tắt",
   noMatchingScripts: "Không có script khớp",
   findInPage: "Tìm trong trang",
+  immersiveMode: "Chế độ đắm chìm",
+  exitImmersiveMode: "Thoát chế độ đắm chìm",
   previous: "Trước",
   next: "Sau",
   pageLoadLimited: "Tải trang bị giới hạn; giữ lại lớp ghi chú chỉnh sửa được.",
@@ -7491,6 +7553,17 @@ interface MobileWebviewerApi {
   addToReadingList: (input?: { url?: string; title?: string }) => Promise<{ added: boolean; url: string; title: string }>;
   sendToCancip: (input?: { prompt?: string; submit?: boolean; reveal?: boolean; focus?: boolean; maxChars?: number }) => Promise<Record<string, unknown>>;
   subscribe: (listener: MobileWebviewerApiListener) => () => void;
+  // --- Open integration surface (v1.1): see API.md -----------------------
+  getActiveTab: () => MobileWebviewerTabSummary | null;
+  listBookmarks: () => { url: string; title: string; time: number }[];
+  listHistory: () => { url: string; title: string; time: number }[];
+  listReadingList: () => { url: string; title: string; time: number }[];
+  /** Runs arbitrary JavaScript in the active (or given) web page guest and returns its value. */
+  execInPage: (input: { tabId?: string; code: string }) => Promise<Record<string, unknown>>;
+  listUserScripts: () => { id: string; name: string; match: string; enabled: boolean; runAt: string }[];
+  /** Imports a raw Tampermonkey/Greasemonkey script (with ==UserScript== header). */
+  importUserscript: (source: string) => Promise<Record<string, unknown>>;
+  setUserScriptEnabled: (id: string, enabled: boolean) => Promise<Record<string, unknown>>;
 }
 
 interface AutofillProfile {
@@ -7509,7 +7582,7 @@ function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
 // heartbeat deliberately repairs instead of rebuilding), so without a rev the
 // old toolbar would survive the update forever. A mismatch triggers exactly
 // one rebuild, after which the fresh chrome carries the current rev.
-const MWV_BROWSER_CHROME_REV = "2";
+const MWV_BROWSER_CHROME_REV = "3";
 const MWV_UTILITY_PAGE_REV = "3";
 
 function utilityPageTitle(kind: UtilityPageKind): string {
@@ -8663,8 +8736,147 @@ function createBuiltInUserScriptRules(): UserScriptRule[] {
       ].join("\n"),
       runAt: "reader",
       time: now + 3
+    },
+    {
+      id: "builtin-web-copy-unlock",
+      name: "油猴预设：网页复制限制解除",
+      match: "*://*/*",
+      enabled: true,
+      css: [
+        "html, body, * {",
+        "  -webkit-user-select: text !important;",
+        "  user-select: text !important;",
+        "}"
+      ].join("\n"),
+      js: [
+        "// ==UserScript==",
+        "// @name         解除网页复制限制",
+        "// @match        *://*/*",
+        "// @run-at       document-end",
+        "// @grant        none",
+        "// ==/UserScript==",
+        "const locked = ['oncopy','oncut','onpaste','onselectstart','oncontextmenu','ondragstart'];",
+        "document.querySelectorAll('*').forEach((el) => {",
+        "  for (const name of locked) {",
+        "    if (el.getAttribute(name)) el.removeAttribute(name);",
+        "  }",
+        "});",
+        "for (const type of ['copy','cut','paste','selectstart','contextmenu','dragstart','keydown']) {",
+        "  document.addEventListener(type, (event) => event.stopPropagation(), true);",
+        "}",
+        "const css = document.createElement('style');",
+        "css.textContent = '*{-webkit-user-select:text!important;user-select:text!important}';",
+        "document.documentElement.appendChild(css);"
+      ].join("\n"),
+      runAt: "document-end",
+      time: now + 4
+    },
+    {
+      id: "builtin-web-back-to-top",
+      name: "油猴预设：返回顶部按钮",
+      match: "*://*/*",
+      enabled: true,
+      css: "",
+      js: [
+        "// ==UserScript==",
+        "// @name         返回顶部按钮",
+        "// @match        *://*/*",
+        "// @run-at       document-idle",
+        "// @grant        GM_addStyle",
+        "// ==/UserScript==",
+        "GM_addStyle('#mwv-back-top{position:fixed;right:14px;bottom:22px;z-index:2147483000;width:40px;height:40px;border-radius:50%;border:1px solid rgba(128,128,128,.4);background:rgba(30,30,30,.55);color:#fff;font-size:20px;line-height:38px;text-align:center;opacity:.6;}#mwv-back-top:active{opacity:1;}');",
+        "const btn = document.createElement('div');",
+        "btn.id = 'mwv-back-top';",
+        "btn.textContent = '↑';",
+        "btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));",
+        "document.body ? document.body.appendChild(btn) : document.documentElement.appendChild(btn);"
+      ].join("\n"),
+      runAt: "document-idle",
+      time: now + 5
+    },
+    {
+      id: "builtin-web-password-reveal",
+      name: "油猴预设：双击显示密码",
+      match: "*://*/*",
+      enabled: true,
+      css: "",
+      js: [
+        "// ==UserScript==",
+        "// @name         双击显示密码",
+        "// @match        *://*/*",
+        "// @run-at       document-idle",
+        "// @grant        none",
+        "// ==/UserScript==",
+        "document.addEventListener('dblclick', (event) => {",
+        "  const el = event.target;",
+        "  if (!(el instanceof HTMLInputElement) || el.type !== 'password') return;",
+        "  el.type = el.getAttribute('data-mwv-revealed') === '1' ? 'password' : 'text';",
+        "  el.setAttribute('data-mwv-revealed', el.type === 'text' ? '1' : '0');",
+        "}, true);"
+      ].join("\n"),
+      runAt: "document-idle",
+      time: now + 6
     }
   ];
+}
+
+interface UserscriptMetadata {
+  name: string;
+  matches: string[];
+  includes: string[];
+  runAt: UserScriptRule["runAt"];
+  description: string;
+  version: string;
+}
+
+// Parses the ==UserScript== header block found in Tampermonkey /
+// Greasemonkey scripts so that raw community scripts can be imported as rules
+// without manual field copying.
+function parseUserscriptMetadata(source: string): UserscriptMetadata | null {
+  const block = source.match(/==\s*UserScript\s*==([\s\S]*?)==\s*\/UserScript\s*==/i);
+  if (!block) return null;
+  const grab = (key: string): string[] => {
+    const values: string[] = [];
+    const pattern = new RegExp(`^\\s*//\\s*@${key}\\s+(.+?)\\s*$`, "gim");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(block[1]))) values.push(match[1].trim());
+    return values;
+  };
+  const first = (key: string): string => grab(key)[0] ?? "";
+  const rawRunAt = first("run-at").toLowerCase();
+  const runAt: UserScriptRule["runAt"] =
+    rawRunAt === "document-start" ? "document-start"
+      : rawRunAt === "document-end" ? "document-end"
+        : rawRunAt === "document-idle" || rawRunAt === "default" ? "document-idle"
+          : "document-idle";
+  const name = first("name") || "";
+  return {
+    name,
+    matches: grab("match"),
+    includes: grab("include"),
+    runAt,
+    description: first("description"),
+    version: first("version")
+  };
+}
+
+// Converts a raw Tampermonkey/Greasemonkey script into a stored rule. The
+// script body keeps its full metadata block; matching prefers @match
+// patterns and falls back to @include, then to the universal wildcard.
+function createUserscriptRuleFromSource(source: string): UserScriptRule {
+  const meta = parseUserscriptMetadata(source);
+  const match = meta?.matches[0] ?? meta?.includes[0] ?? "*://*/*";
+  const id = `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id,
+    name: meta?.name || "导入脚本",
+    match,
+    enabled: true,
+    css: "",
+    js: source.trim(),
+    runAt: meta?.runAt ?? "document-idle",
+    time: Date.now()
+  };
 }
 
 function wildcardMatch(pattern: string, value: string): boolean {
@@ -10875,7 +11087,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     toggleBookmark: (input) => this.toggleBookmarkFromApi(input),
     addToReadingList: (input) => this.addToReadingListFromApi(input),
     sendToCancip: (input) => this.sendCurrentToCancip(input),
-    subscribe: (listener) => this.subscribeApi(listener)
+    subscribe: (listener) => this.subscribeApi(listener),
+    getActiveTab: () => this.getActiveTabForApi(),
+    listBookmarks: () => this.listEntriesForApi(this.settings.bookmarks),
+    listHistory: () => this.listEntriesForApi(this.settings.history),
+    listReadingList: () => this.listEntriesForApi(this.settings.readingList),
+    execInPage: (input) => this.execInPageFromApi(input),
+    listUserScripts: () => this.listUserScriptsForApi(),
+    importUserscript: async (source) => this.importUserscriptSource(source),
+    setUserScriptEnabled: (id, enabled) => this.setUserScriptEnabledFromApi(id, enabled)
   };
 
   tr(key: UiTextKey, values: Record<string, string | number> = {}): string {
@@ -10888,6 +11108,10 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    // Open integration alias: other agents and plugins can drive this plugin
+    // through window.MWV (same object as app.plugins.plugins["mobile-webviewer"].api).
+    (globalThis as typeof globalThis & { MWV?: MobileWebviewerApi }).MWV = this.api;
 
     // Debug affordance: lets the maintenance tooling (and the release verifier)
     // exercise the reader-mode HTML -> Markdown converter in isolation.
@@ -11110,6 +11334,9 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   onunload(): void {
     this.disposed = true;
+    try { delete (globalThis as typeof globalThis & { MWV?: unknown }).MWV; } catch (error) {
+      // Ignore.
+    }
     for (const target of this.markdownConverterDebugWindows()) {
       try {
         const host = target as Window & { __mwvConvertHtml?: unknown; __mwvReaderDebug?: unknown };
@@ -16423,6 +16650,57 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (target.closest(".mwv-embed-tab-close")) void this.closeEmbedBrowserTab(surface, tabId);
       else void this.switchEmbedBrowserTab(surface, tabId);
     });
+    // Desktop right-click on a tab: the batch close actions that a long-press
+    // would offer on mobile. Same owner guard as the click path above.
+    strip.addEventListener("contextmenu", (event) => {
+      if (owned._mwvTabOwner !== this) return;
+      const target = event.target as HTMLElement | null;
+      const item = target?.closest<HTMLElement>(".mwv-embed-tab");
+      if (!item || !strip.contains(item)) return;
+      const tabId = item.dataset.mwvTabId;
+      if (!tabId) return;
+      const surface = this.resolveTabstripEmbed(strip, embed);
+      if (!surface) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const menu = new Menu();
+      menu.addItem((entry) =>
+        entry
+          .setTitle(this.tr("closeOtherTabs"))
+          .setIcon("x")
+          .onClick(() => {
+            void this.closeEmbedBrowserTabsBatch(surface, tabId, "others");
+          })
+      );
+      menu.addItem((entry) =>
+        entry
+          .setTitle(this.tr("closeTabsToRight"))
+          .setIcon("chevrons-right")
+          .onClick(() => {
+            void this.closeEmbedBrowserTabsBatch(surface, tabId, "right");
+          })
+      );
+      menu.showAtMouseEvent(event as MouseEvent);
+    });
+  }
+
+  // Batch tab close for the context menu. Reuses closeEmbedBrowserTab per
+  // tab so active-tab adoption, surface disposal and API events stay exactly
+  // the same as a single close; the loop only skips ids that earlier
+  // iterations already removed.
+  async closeEmbedBrowserTabsBatch(embed: HTMLElement, anchorId: string, scope: "others" | "right"): Promise<void> {
+    const anchorIndex = this.settings.browserTabs.findIndex((tab) => tab.id === anchorId);
+    if (anchorIndex < 0) return;
+    const doomedIds = (scope === "others"
+      ? this.settings.browserTabs.filter((tab) => tab.id !== anchorId)
+      : this.settings.browserTabs.slice(anchorIndex + 1)
+    ).map((tab) => tab.id);
+    if (!doomedIds.length) return;
+    for (const id of doomedIds) {
+      if (!this.settings.browserTabs.some((tab) => tab.id === id)) continue;
+      await this.closeEmbedBrowserTab(embed, id);
+    }
+    this.refreshEmbedTabstrips();
   }
 
   /**
@@ -16950,6 +17228,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     const bookmarked = bookmarkable && this.isUrlBookmarked(url);
     const star = makeNavButton("star", bookmarked ? this.tr("removeBookmark") : this.tr("addBookmark"), !bookmarkable, "bookmark");
     star.toggleClass("is-bookmarked", bookmarked);
+    // In-page find and immersive (chrome-less) mode join the row; both toggle
+    // state that lives on the embed, so a plain delegated action is enough.
+    makeNavButton("search", this.tr("findInPage"), false, "find");
+    const immersive = makeNavButton(
+      embed.hasClass("mwv-immersive") ? "minimize-2" : "expand",
+      embed.hasClass("mwv-immersive") ? this.tr("exitImmersiveMode") : this.tr("immersiveMode"),
+      false,
+      "immersive"
+    );
+    immersive.toggleClass("is-immersive", embed.hasClass("mwv-immersive"));
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
@@ -16979,6 +17267,17 @@ export default class MobileWebviewerPlugin extends Plugin {
     // Obsidian's createEl ignores the `value` option on inputs — assign the
     // property directly so a rebuilt chrome shows the current address.
     addressInput.value = url;
+    // Address bar suggestions: a plain <datalist> keeps this native, keyboard
+    // and IME friendly, and free of custom popup layout. Options are refreshed
+    // by the delegated input listener in bindEmbedChrome.
+    const suggestions = address.createEl("datalist", { cls: "mwv-browser-suggest" });
+    addressInput.setAttribute("list", suggestions.getAttribute("id") ?? "");
+    if (!suggestions.getAttribute("id")) {
+      const listId = `mwv-suggest-${Math.random().toString(36).slice(2, 10)}`;
+      suggestions.setAttribute("id", listId);
+      addressInput.setAttribute("list", listId);
+    }
+    this.populateAddressSuggestions(embed, addressInput, suggestions);
     const go = address.createEl("button", {
       cls: "mwv-browser-go",
       attr: { type: "submit", title: this.tr("go"), "aria-label": this.tr("go") }
@@ -17045,6 +17344,8 @@ export default class MobileWebviewerPlugin extends Plugin {
         else if (action === "home") this.runBrowserAction("home", this.openUrlInEmbed(embed, this.settings.homeUrl));
         else if (action === "reload") this.runBrowserAction("reload", this.refreshEmbed(embed));
         else if (action === "bookmark") this.runBrowserAction("bookmark", this.toggleEmbedBookmark(embed));
+        else if (action === "find") this.runBrowserAction("find", this.toggleEmbedFindPanel(embed));
+        else if (action === "immersive") this.runBrowserAction("immersive", this.toggleEmbedImmersive(embed));
         return;
       }
       if (target.closest(".mwv-browser-action")) {
@@ -17060,6 +17361,77 @@ export default class MobileWebviewerPlugin extends Plugin {
       const input = chrome.querySelector<HTMLInputElement>(".mwv-browser-url");
       this.runBrowserAction("open", this.openUrlInEmbed(embed, input?.value ?? ""));
     });
+    // Live suggestions while typing. Bound here (not at render time) so the
+    // listener carries the chrome-owner guard and survives plugin reloads.
+    const suggestInput = chrome.querySelector<HTMLInputElement>(".mwv-browser-url");
+    const suggestList = chrome.querySelector<HTMLDataListElement>(".mwv-browser-suggest");
+    if (suggestInput && suggestList) {
+      suggestInput.addEventListener("input", () => {
+        if (!stillMine()) return;
+        this.populateAddressSuggestions(embed, suggestInput, suggestList);
+      });
+    }
+  }
+
+  // Refreshes the address bar suggestion list from bookmarks, the reading
+  // list, and history (best entries first). When the field is empty the most
+  // recent destinations lead; otherwise entries matching the typed text.
+  populateAddressSuggestions(embed: HTMLElement, input: HTMLInputElement, datalist: HTMLDataListElement): void {
+    void embed;
+    const query = input.value.trim().toLowerCase();
+    const pool = [
+      ...(this.settings.bookmarks ?? []),
+      ...(this.settings.readingList ?? []),
+      ...(this.settings.history ?? [])
+    ];
+    const seen = new Set<string>();
+    const values: string[] = [];
+    for (const entry of pool) {
+      const value = entry.url?.trim();
+      if (!value || seen.has(value)) continue;
+      if (query && !value.toLowerCase().includes(query) && !(entry.title || "").toLowerCase().includes(query)) continue;
+      seen.add(value);
+      values.push(value);
+      if (values.length >= 8) break;
+    }
+    datalist.replaceChildren();
+    for (const value of values) {
+      const option = datalist.ownerDocument.createElement("option");
+      option.value = value;
+      datalist.appendChild(option);
+    }
+  }
+
+  // Immersive mode hides the whole chrome (toolbar, bookmarks bar, tab strip)
+  // and floats a small exit handle so the row stays one tap away. The state
+  // rides on the embed itself, so a chrome rebuild (rev bump) re-renders the
+  // correct icon instead of resetting the mode.
+  toggleEmbedImmersive(embed: HTMLElement): void {
+    const immersive = !embed.hasClass("mwv-immersive");
+    embed.toggleClass("mwv-immersive", immersive);
+    const chrome = embed.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
+    const button = chrome?.querySelector<HTMLButtonElement>('button[data-mwv-browser-nav="immersive"]');
+    if (button) {
+      setIcon(button, immersive ? "minimize-2" : "expand");
+      button.title = immersive ? this.tr("exitImmersiveMode") : this.tr("immersiveMode");
+      button.setAttribute("aria-label", button.title);
+      button.toggleClass("is-immersive", immersive);
+    }
+    let exit = embed.querySelector<HTMLElement>(":scope > .mwv-immersive-exit");
+    if (immersive && !exit) {
+      exit = embed.ownerDocument.createElement("button");
+      exit.addClass("mwv-immersive-exit");
+      exit.setAttribute("type", "button");
+      exit.setAttribute("aria-label", this.tr("exitImmersiveMode"));
+      exit.setAttribute("title", this.tr("exitImmersiveMode"));
+      setIcon(exit, "minimize-2");
+      exit.addEventListener("click", () => {
+        if (embed.hasClass("mwv-immersive")) this.toggleEmbedImmersive(embed);
+      });
+      embed.appendChild(exit);
+    } else if (!immersive && exit) {
+      exit.remove();
+    }
   }
 
   /**
@@ -18999,6 +19371,156 @@ export default class MobileWebviewerPlugin extends Plugin {
       .filter((rule) => rule.enabled && this.matchesUserScriptRule(rule, url));
   }
 
+  getActiveWebviewUserScriptRules(url: string, phase: "document-start" | "document-end" | "document-idle"): UserScriptRule[] {
+    return this.getActiveUserScriptRules(url).filter(
+      (rule) => rule.js.trim() && rule.runAt === phase
+    );
+  }
+
+  // Builds the sandboxed Tampermonkey-style runner for one rule. The user code
+  // executes inside a closure that exposes the classic GM_* surface; storage
+  // maps onto page localStorage so values survive reloads without any host
+  // round-trip. The whole thing is one string because it must run in the
+  // webview guest, not in the Obsidian renderer.
+  buildUserscriptRunner(rule: UserScriptRule, pageUrl: string): string {
+    const ruleId = JSON.stringify(rule.id);
+    const ruleName = JSON.stringify(rule.name);
+    const safeUrl = JSON.stringify(pageUrl);
+    return `
+      (() => {
+        window.__mwvUserscriptRuns = window.__mwvUserscriptRuns || {};
+        if (window.__mwvUserscriptRuns[${ruleId}] === ${safeUrl}) return;
+        window.__mwvUserscriptRuns[${ruleId}] = ${safeUrl};
+        const storeKey = "__mwvGm:" + ${ruleId} + ":";
+        const GM_getValue = (key, defaultValue) => {
+          try {
+            const raw = localStorage.getItem(storeKey + key);
+            return raw === null ? defaultValue : raw;
+          } catch (error) { return defaultValue; }
+        };
+        const GM_setValue = (key, value) => {
+          try { localStorage.setItem(storeKey + key, String(value)); } catch (error) {}
+        };
+        const GM_deleteValue = (key) => {
+          try { localStorage.removeItem(storeKey + key); } catch (error) {}
+        };
+        const GM_listValues = () => {
+          try {
+            const keys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && key.indexOf(storeKey) === 0) keys.push(key.slice(storeKey.length));
+            }
+            return keys;
+          } catch (error) { return []; }
+        };
+        const GM_addStyle = (css) => {
+          const style = document.createElement('style');
+          style.textContent = String(css == null ? '' : css);
+          (document.head || document.documentElement).appendChild(style);
+          return style;
+        };
+        const GM_setClipboard = (text) => {
+          try { return navigator.clipboard.writeText(String(text == null ? '' : text)); } catch (error) {}
+        };
+        const GM_notification = (details, title) => {
+          const message = typeof details === 'string' ? details : (details && details.text) || '';
+          try { console.info('[GM_notification]', title || '', message); } catch (error) {}
+        };
+        const GM_openInTab = (url) => {
+          try { return window.open(String(url), '_blank'); } catch (error) { return null; }
+        };
+        const menus = new Map();
+        const GM_registerMenuCommand = (label, fn) => {
+          menus.set(String(label), typeof fn === 'function' ? fn : null);
+          try { console.info('[GM menu]', label); } catch (error) {}
+          return String(label);
+        };
+        const GM_unregisterMenuCommand = (label) => { menus.delete(String(label)); };
+        const GM_xmlhttpRequest = (details) => {
+          const opts = details || {};
+          const handle = { aborted: false, abort() { this.aborted = true; } };
+          const run = async () => {
+            try {
+              const init = { method: String(opts.method || 'GET').toUpperCase(), headers: opts.headers || {} };
+              if (opts.data) init.body = opts.data;
+              const response = await fetch(String(opts.url), init);
+              const responseHeaders = {};
+              response.headers.forEach((value, key) => { responseHeaders[key] = value; });
+              const responseType = opts.responseType || 'text';
+              let responseText = '';
+              let responseValue;
+              if (responseType === 'json') {
+                responseText = await response.text();
+                try { responseValue = JSON.parse(responseText); } catch (error) { responseValue = null; }
+              } else if (responseType === 'blob') {
+                responseValue = await response.blob();
+                responseText = '[blob]';
+              } else if (responseType === 'arraybuffer') {
+                responseValue = await response.arrayBuffer();
+                responseText = '[arraybuffer]';
+              } else {
+                responseText = await response.text();
+                responseValue = responseText;
+              }
+              if (!handle.aborted && typeof opts.onload === 'function') {
+                opts.onload({ status: response.status, statusText: response.statusText, readyState: 4, responseHeaders, response: responseValue, responseText, finalUrl: response.url || opts.url });
+              }
+            } catch (error) {
+              const fail = opts.onerror || opts.ontimeout;
+              if (!handle.aborted && typeof fail === 'function') fail(error);
+            }
+          };
+          run();
+          return handle;
+        };
+        window.__mwvGmMenus = window.__mwvGmMenus || {};
+        window.__mwvGmMenus[${ruleId}] = menus;
+        const unsafeWindow = window;
+        const GM_info = {
+          script: { name: ${ruleName}, uuid: ${ruleId} },
+          scriptHandler: 'Mobile Webviewer UserScripts',
+          version: '1.0.0'
+        };
+        (function() {
+          ${rule.js}
+        })();
+      })();
+    `;
+  }
+
+  async injectWebviewUserScripts(
+    webview: ElectronWebviewElement,
+    phase: "document-start" | "document-end" | "document-idle"
+  ): Promise<void> {
+    if (!this.settings.userScriptsEnabled) return;
+    if (!this.isBrowserSurfaceReady(webview) || !webview.executeJavaScript) return;
+    const url = this.safeWebviewUrl(webview);
+    if (!/^https?:\/\//i.test(url)) return;
+    const rules = this.getActiveWebviewUserScriptRules(url, phase);
+    for (const rule of rules) {
+      try {
+        await webview.executeJavaScript(this.buildUserscriptRunner(rule, url), false);
+        void this.addConsole("info", `Userscript applied (${phase}): ${rule.name}`, url);
+      } catch (error) {
+        void this.addConsole("warn", `Userscript failed (${phase}): ${rule.name} — ${error instanceof Error ? error.message : String(error)}`, url);
+      }
+    }
+  }
+
+  importUserscriptSource(source: string): { imported: boolean; name: string; match: string; runAt: UserScriptRule["runAt"]; error?: string } {
+    const body = typeof source === "string" ? source.trim() : "";
+    if (!body) return { imported: false, name: "", match: "", runAt: "document-idle", error: "empty source" };
+    if (!parseUserscriptMetadata(body)) {
+      return { imported: false, name: "", match: "", runAt: "document-idle", error: "missing ==UserScript== metadata block" };
+    }
+    const rule = createUserscriptRuleFromSource(body);
+    this.settings.userScriptRules = [rule, ...this.settings.userScriptRules].slice(0, 40);
+    void this.saveSettings();
+    void this.addConsole("info", `Userscript imported: ${rule.name} (${rule.match})`);
+    return { imported: true, name: rule.name, match: rule.match, runAt: rule.runAt };
+  }
+
   buildFrameSandbox(allowDownloads = false): string {
     const tokens = [
       allowDownloads ? "allow-downloads" : "",
@@ -19624,6 +20146,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!keepGuestUntouched) {
         void this.applyWebviewRuntime(webview);
         this.installWebviewBrowserBridge(webview, callbacks);
+        void this.injectWebviewUserScripts(webview, "document-start");
       }
       void callbacks.onReady?.();
       const title = this.safeWebviewTitle(webview);
@@ -19687,6 +20210,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (url) void callbacks.onNavigate?.(url);
       const title = this.safeWebviewTitle(webview);
       if (title) void callbacks.onTitle?.(title);
+      void this.injectWebviewUserScripts(webview, "document-end");
+      void this.injectWebviewUserScripts(webview, "document-idle");
     }) as EventListener);
     listen("did-fail-load", ((event: Event) => {
       if (!this.isBrowserSurfaceReady(webview)) return;
@@ -20566,6 +21091,58 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (typeof listener !== "function") throw new Error("Mobile Webviewer subscribe requires a listener function");
     this.apiListeners.add(listener);
     return () => this.apiListeners.delete(listener);
+  }
+
+  private listEntriesForApi(entries: WebEntry[]): { url: string; title: string; time: number }[] {
+    return (entries ?? []).map((entry) => ({ url: entry.url, title: entry.title || "", time: entry.time ?? 0 }));
+  }
+
+  private getActiveTabForApi(): MobileWebviewerTabSummary | null {
+    return this.listBrowserTabsForApi().find((tab) => tab.active) ?? null;
+  }
+
+  // Executes arbitrary code in the page guest of the active surface (main
+  // view, embed, or the persisted active tab). This is the primary hook other
+  // agents use for front-of-page control: read the DOM, click, scroll, fill
+  // forms, or drive the page programmatically.
+  private async execInPageFromApi(input: { tabId?: string; code: string }): Promise<Record<string, unknown>> {
+    const code = typeof input?.code === "string" ? input.code : "";
+    if (!code.trim()) return { ok: false, error: "execInPage requires code" };
+    const target = this.resolveActiveWebContextTarget();
+    if (input?.tabId && input.tabId !== target.tabId) {
+      return { ok: false, error: `tab ${input.tabId} is not the active surface; call switchTab first`, activeTabId: target.tabId };
+    }
+    const surface = target.view?.surfaceEl
+      ?? target.embed?.querySelector<BrowserSurfaceElement>(".mwv-live-frame")
+      ?? null;
+    if (!surface || !this.isBrowserSurfaceReady(surface) || !this.isElectronWebview(surface) || !surface.executeJavaScript) {
+      return { ok: false, error: "no executable webview surface for the active tab", url: target.url, tabId: target.tabId };
+    }
+    try {
+      const result = await surface.executeJavaScript(code, true);
+      void this.addConsole("info", "API execInPage executed", target.url);
+      return { ok: true, result, url: target.url, tabId: target.tabId };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), url: target.url, tabId: target.tabId };
+    }
+  }
+
+  private listUserScriptsForApi(): { id: string; name: string; match: string; enabled: boolean; runAt: string }[] {
+    return (this.settings.userScriptRules ?? []).map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      match: rule.match,
+      enabled: rule.enabled,
+      runAt: rule.runAt
+    }));
+  }
+
+  private async setUserScriptEnabledFromApi(id: string, enabled: boolean): Promise<Record<string, unknown>> {
+    const rule = this.settings.userScriptRules.find((item) => item.id === id);
+    if (!rule) return { ok: false, error: `unknown script id: ${id}` };
+    rule.enabled = Boolean(enabled);
+    await this.saveSettings();
+    return { ok: true, id: rule.id, name: rule.name, enabled: rule.enabled };
   }
 
   emitApiEvent(event: Omit<MobileWebviewerApiEvent, "time">): void {
@@ -21920,7 +22497,9 @@ export default class MobileWebviewerPlugin extends Plugin {
               enabled: typeof item.enabled === "boolean" ? item.enabled : true,
               css: typeof item.css === "string" ? item.css : "",
               js: typeof item.js === "string" ? item.js : "",
-              runAt: "reader",
+              runAt: USERSCRIPT_RUN_AT_VALUES.includes(item.runAt as UserScriptRule["runAt"])
+                ? (item.runAt as UserScriptRule["runAt"])
+                : "reader",
               time: typeof item.time === "number" ? item.time : Date.now()
             };
           })
@@ -22027,6 +22606,59 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+}
+
+// Paste a raw Tampermonkey/Greasemonkey script; the ==UserScript== header is
+// parsed into name/match/run-at and the full source is kept as the rule body.
+class UserscriptImportModal extends Modal {
+  plugin: MobileWebviewerPlugin;
+  onImported: () => void;
+
+  constructor(plugin: MobileWebviewerPlugin, onImported: () => void) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.onImported = onImported;
+  }
+
+  onOpen(): void {
+    this.titleEl.setText(this.plugin.tr("userScripts"));
+    this.contentEl.createDiv({ cls: "setting-item-description", text: this.plugin.tr("userScriptsDesc") });
+    const textarea = this.contentEl.createEl("textarea", {
+      cls: "mwv-userscript-import-source",
+      attr: {
+        rows: "14",
+        spellcheck: "false",
+        placeholder: [
+          "// ==UserScript==",
+          "// @name       My script",
+          "// @match       *://example.com/*",
+          "// @run-at      document-idle",
+          "// @grant       GM_addStyle",
+          "// ==/UserScript=="
+        ].join("\n")
+      }
+    });
+    textarea.style.width = "100%";
+    const confirm = this.contentEl.createEl("button", {
+      text: this.plugin.tr("save"),
+      attr: { type: "button" }
+    });
+    confirm.addClass("mod-cta");
+    confirm.addEventListener("click", () => {
+      const result = this.plugin.importUserscriptSource(textarea.value);
+      if (result.imported) {
+        new Notice(`${this.plugin.tr("userScripts")}: ${result.name} (${result.match})`);
+        this.close();
+        this.onImported();
+      } else {
+        new Notice(result.error || "Import failed");
+      }
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
 
@@ -22522,7 +23154,15 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
       .setDesc(this.plugin.tr("rulesDesc"))
       .addButton((button) =>
         button
+          .setButtonText(this.plugin.tr("userScripts"))
+          .onClick(() => {
+            new UserscriptImportModal(this.plugin, () => this.refreshSettings()).open();
+          })
+      )
+      .addButton((button) =>
+        button
           .setButtonText(this.plugin.tr("addRule"))
+          .setCta()
           .onClick(async () => {
             this.plugin.settings.userScriptRules.unshift(createDefaultUserScriptRule());
             await this.plugin.saveSettings();
