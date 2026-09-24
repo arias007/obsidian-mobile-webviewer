@@ -40,7 +40,7 @@ const DEFAULT_HOME = "https://www.bing.com/";
 const DEFAULT_SEARCH = "https://www.bing.com/search?q={{query}}";
 const WEBVIEW_NOTE_PATH = "Mobile Webviewer.md";
 /** One tap can reach both the click handler and `open-url`; claim window in ms. */
-const EXTERNAL_CLAIM_WINDOW_MS = 600;
+const EXTERNAL_CLAIM_WINDOW_MS = 1200;
 /** How many times a blank NoteWeb surface is re-rendered before giving up. */
 const EMBED_RENDER_WATCHDOG_ATTEMPTS = 3;
 /** Base delay between watchdog retries; scaled by the attempt number. */
@@ -11023,6 +11023,15 @@ export default class MobileWebviewerPlugin extends Plugin {
       // reading mode here too so the embed never stays trapped at 0x0 inside
       // the Live Preview source DOM.
       this.enforceNoteBrowserReadingMode();
+      // Note/URL reconciliation is not only a mode-switch concern: a leaf
+      // reused after a tab switch restores saved dataset snapshots over the
+      // live embed, and only this pass re-aligns the visible Note document
+      // with the retained guest. Guarded by sameWebPage, so an already
+      // consistent pair never re-renders here.
+      const activeEmbed = leaf ? this.getNoteBrowserEmbed(leaf) : null;
+      if (activeEmbed && !activeEmbed.hasClass("is-web-front")) {
+        this.reconcileNoteWebDocumentWithLiveSurface(activeEmbed);
+      }
     }));
 
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
@@ -11986,9 +11995,20 @@ export default class MobileWebviewerPlugin extends Plugin {
 
     // Mobile: there is no <webview> tag, so the page is painted into an
     // <iframe>. A proxied page is same-origin and hosts the very same editor
-    // script; only a cross-origin frame cannot, which is the one case still
-    // refused instead of leaving a button that silently does nothing.
-    const runInFrame = this.rawElementEditorHost(frame);
+    // script. A DIRECT cross-origin frame cannot be reached from the host —
+    // that used to be a hard refusal, which is why Notedraw's select tool
+    // "simply did not work" in RealWeb on a phone. The page content is already
+    // flowing through our fetch pipeline for the embed-block probe, so instead
+    // of refusing we convert the frame to the same-origin proxy document and
+    // inject there; only a page we cannot even fetch still refuses.
+    let runInFrame = this.rawElementEditorHost(frame);
+    if (!runInFrame && enabled && frame && frame.tagName.toLowerCase() === "iframe") {
+      const editUrl = url;
+      if (/^https?:\/\//i.test(editUrl) && frame.dataset.mwvProxyUrl !== editUrl) {
+        const converted = await this.convertFrameToProxyForEditing(frame, editUrl);
+        if (converted) runInFrame = this.rawElementEditorHost(frame);
+      }
+    }
     if (!runInFrame) {
       if (enabled) new Notice("当前网页内核不支持元素编辑");
       return !enabled;
@@ -12000,6 +12020,34 @@ export default class MobileWebviewerPlugin extends Plugin {
       console.warn("[mobile-webviewer] raw page element editor skipped", error);
       if (enabled) new Notice("网页元素编辑器启动失败");
       return !enabled;
+    }
+  }
+
+  /**
+   * Swap a direct cross-origin guest frame to the built-in same-origin proxy
+   * so the host can inject the page-element editor. Used only when the user
+   * explicitly enters element editing: the conversion reloads the page, which
+   * is acceptable at that moment and unacceptable as a silent background
+   * behavior. Returns true when the frame now answers to contentWindow.
+   */
+  async convertFrameToProxyForEditing(frame: BrowserSurfaceElement, url: string): Promise<boolean> {
+    if (this.isElectronWebview(frame) || !frame.isConnected || !/^https?:\/\//i.test(url)) return false;
+    try {
+      const doc = await this.fetchLiveDocument(url);
+      if (!doc || !frame.isConnected) return false;
+      // Reuse the callbacks the surface was created with (they carry the
+      // navigate/title/loading reporting); wireProxyBridge keeps the original
+      // binding when the frame is already proxied.
+      const callbacks = (frame as BrowserSurfaceElement & { _mwvSurfaceCallbacks?: BrowserSurfaceCallbacks })._mwvSurfaceCallbacks ?? {};
+      this.wireProxyBridge(frame, callbacks);
+      this.renderProxyDocument(frame, url, doc.text, callbacks);
+      // srcdoc parses synchronously on assignment, but give the document one
+      // frame to boot its own scripts before the editor is eval'd into it.
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+      return frame.isConnected;
+    } catch (error) {
+      console.warn("[mobile-webviewer] proxy conversion for element editing failed", error);
+      return false;
     }
   }
 
@@ -14194,7 +14242,11 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.setNoteBrowserReadingMode(leaf);
     let boundToLeaf = false;
-    for (const delay of [0, 80, 240, 600, 1200]) {
+    // Slow phones can take longer than the old 1.2 s window to finish
+    // openFile -> markdown render -> post-processor, after which nothing ever
+    // bound the embed and the browser tab stayed blank ("home sometimes
+    // doesn't open"). The tail retries are no-ops once boundToLeaf is set.
+    for (const delay of [0, 80, 240, 600, 1200, 2200, 3600, 5600]) {
       window.setTimeout(() => {
         if (!isCurrentOpen()) return;
         if (boundToLeaf || !leaf.view?.containerEl?.isConnected) return;
@@ -15029,9 +15081,19 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.externalClaim = { url, at: Date.now() };
   }
 
-  /** True while `url` was claimed by this plugin moments ago (one tap, one open). */
+  /**
+   * True while `url` was claimed by this plugin moments ago (one tap, one open).
+   * The comparison is URL-equivalence, not string equality: the click path sees
+   * the browser-resolved `anchor.href` (percent-encoded) while the `open-url`
+   * event can carry the raw markdown href (raw CJK) for the SAME link. Exact
+   * matching used to miss that, so both listeners opened the link — the core
+   * Web viewer's tab then survived our sweep and "the link opened there".
+   */
   private hasFreshExternalClaim(url: string): boolean {
-    return this.externalClaim.url === url && Date.now() - this.externalClaim.at < EXTERNAL_CLAIM_WINDOW_MS;
+    return (
+      this.externalClaim.url === url ||
+      equivalentEmbedUrl(this.externalClaim.url, url)
+    ) && Date.now() - this.externalClaim.at < EXTERNAL_CLAIM_WINDOW_MS;
   }
 
   /**
@@ -15098,6 +15160,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
     window.setTimeout(sweep, 60);
     window.setTimeout(sweep, 300);
+    // Mobile core-plugin timing: the Web viewer leaf can materialise well
+    // after the desktop paths, so a third late sweep closes it too instead of
+    // leaving a link the user watched open in the wrong app.
+    window.setTimeout(sweep, 900);
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -19359,6 +19425,17 @@ export default class MobileWebviewerPlugin extends Plugin {
   private proxyProbeSeq = 0;
   private lastCrossViewSync = { url: "", at: 0 };
   private readonly proxyFindResolvers = new Map<number, (count: number) => void>();
+  /** Hosts observed refusing to be framed (X-Frame-Options / CSP), per session. */
+  private readonly embedBlockedHostMemory = new Set<string>();
+
+  rememberEmbedBlockedHost(url: string): void {
+    try {
+      const host = hostName(url);
+      if (host) this.embedBlockedHostMemory.add(host);
+    } catch {
+      // hostName should never throw on an http URL; ignore defensively.
+    }
+  }
 
   /**
    * Detects responses that refuse to be embedded (X-Frame-Options /
@@ -19377,7 +19454,15 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   buildProxyFrameSandbox(): string {
-    const tokens = ["allow-forms", "allow-modals", "allow-popups", "allow-popups-to-escape-sandbox", "allow-pointer-lock"];
+    // `allow-same-origin` is required for the element editor (the Notedraw
+    // "select a page element" tool) to reach the proxied page at all: a
+    // sandboxed srcdoc WITHOUT it lives on an opaque origin, so the host can
+    // neither touch `contentWindow.document` nor `eval` into it — every
+    // RealWeb/NoteWeb element-selection attempt on a phone silently refused.
+    // The proxied document is HTML we fetched and rewrote ourselves, so
+    // granting it the app's origin is the same trust boundary as the rest of
+    // the reader pipeline.
+    const tokens = ["allow-forms", "allow-modals", "allow-popups", "allow-popups-to-escape-sandbox", "allow-pointer-lock", "allow-same-origin"];
     if (!this.settings.jsDisabled) tokens.push("allow-scripts");
     return tokens.join(" ");
   }
@@ -19613,6 +19698,22 @@ export default class MobileWebviewerPlugin extends Plugin {
       return;
     }
     this.wireProxyBridge(frame, callbacks);
+    // Hosts that already refused to be framed once (Bing does this
+    // intermittently by region) are served through the proxy immediately on
+    // every later visit. Without this memory every navigation re-gambled on a
+    // direct iframe, which is exactly the "home opens unreliably" pattern:
+    // same URL, different edge node, different X-Frame-Options.
+    if (this.embedBlockedHostMemory.has(hostName(clean))) {
+      const remembered = await this.fetchLiveDocument(clean);
+      if (!frame.isConnected) return;
+      if (remembered) {
+        this.renderProxyDocument(frame, clean, remembered.text, callbacks);
+        void callbacks.onNavigate?.(clean);
+        return;
+      }
+      // The remembered host became fetchable-transparent again; fall through
+      // and let the direct iframe try (the probe below re-records the block).
+    }
     // Load natively right away so ordinary sites open instantly with their
     // own cookies and full page JavaScript. The embed-blocked probe runs in
     // parallel and swaps the frame to the built-in proxy only when the site
@@ -19628,6 +19729,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       const doc = await this.fetchLiveDocument(clean);
       if (!frame.isConnected || frame.dataset.mwvProbeToken !== String(probeToken)) return;
       if (!doc || !this.isEmbedBlockedByHeaders(doc.headers)) return;
+      this.rememberEmbedBlockedHost(clean);
       this.renderProxyDocument(frame, clean, doc.text, callbacks);
     })();
   }
@@ -19651,6 +19753,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (frame.dataset.mwvProxyUrl === url) return false;
     const doc = await this.fetchLiveDocument(url);
     if (!doc || !frame.isConnected || !this.isEmbedBlockedByHeaders(doc.headers)) return false;
+    this.rememberEmbedBlockedHost(url);
     this.wireProxyBridge(frame, callbacks);
     this.renderProxyDocument(frame, url, doc.text, callbacks);
     void callbacks.onNavigate?.(url);
@@ -19733,12 +19836,28 @@ export default class MobileWebviewerPlugin extends Plugin {
         referrerpolicy: "strict-origin-when-cross-origin"
       }
     });
+    // Keep the live callbacks reachable from the element itself: the element
+    // editor's proxy conversion (convertFrameToProxyForEditing) must rewire the
+    // proxy bridge with THESE callbacks, or navigations inside the converted
+    // frame would stop reporting back and the address bar would drift from the
+    // page again.
+    (frame as BrowserSurfaceElement & { _mwvSurfaceCallbacks?: BrowserSurfaceCallbacks })._mwvSurfaceCallbacks = callbacks;
     if (url) void this.smartLoadBrowserFrame(frame, url, callbacks);
     let settled = false;
     const loadTimer = window.setTimeout(() => {
       if (settled) return;
       settled = true;
-      void callbacks.onFail?.("Live frame timed out; using internal reader fallback", frame.src || url);
+      // A frame that never fired `load` is usually a host that hangs or
+      // silently refuses framing. Give the proxy one chance before falling
+      // back to the reader — the direct attempt clearly already lost.
+      void (async () => {
+        const stalledUrl = frame.dataset.mwvProxyUrl || frame.src || url;
+        if (/^https?:\/\//i.test(stalledUrl)) {
+          const proxied = await this.tryProxyFallback(frame, stalledUrl, callbacks);
+          if (proxied) return;
+        }
+        void callbacks.onFail?.("Live frame timed out; using internal reader fallback", frame.src || url);
+      })();
     }, 12000);
     frame.addEventListener("load", () => {
       settled = true;
