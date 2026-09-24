@@ -331,16 +331,34 @@
   background: color-mix(in srgb, var(--background-secondary) 88%, var(--background-primary));
 }
 
-.mwv-utility-main {
-  display: grid;
+.mwv-utility-item .mwv-utility-main {
+  display: flex !important;
+  flex-direction: column !important;
+  /* The themed button also centers its children (align-items:center on the
+     cross axis) — in a column that shrinks every row to its content width and
+     centers it. Rows must span the card. */
+  align-items: stretch !important;
+  justify-content: flex-start !important;
   gap: 2px;
   width: 100%;
   min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
+  margin: 0;
+  /* The note document (and cancip's stamped-button pass) styles bare buttons
+     with a fixed 32px height, a filled background and a radius. That pill box
+     clipped the row and pushed the URL and the timestamp outside the card.
+     These resets must beat those higher-specificity rules, hence the
+     importance flags on exactly the box-model properties. */
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
   color: inherit;
-  text-align: left;
+  font-weight: inherit;
+  text-align: left !important;
   cursor: var(--cursor);
 }
 
@@ -366,17 +384,29 @@
   align-items: center;
   justify-content: center;
   width: 24px;
+  min-width: 24px;
+  height: 24px;
   min-height: 24px;
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  box-shadow: none !important;
   color: var(--text-muted);
 }
 
 .mwv-utility-inline-actions .mwv-mini-action:hover {
-  border-color: var(--background-modifier-border);
-  background: var(--background-modifier-hover);
+  border: 0 !important;
+  background: var(--background-modifier-hover) !important;
   color: var(--text-normal);
+}
+
+.mwv-utility-searchbar {
+  margin: 0 0 6px;
+}
+
+.mwv-utility-search {
+  width: 100%;
 }
 
 .mwv-utility-meta {

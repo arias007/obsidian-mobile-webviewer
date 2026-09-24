@@ -7510,7 +7510,7 @@ function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
 // old toolbar would survive the update forever. A mismatch triggers exactly
 // one rebuild, after which the fresh chrome carries the current rev.
 const MWV_BROWSER_CHROME_REV = "2";
-const MWV_UTILITY_PAGE_REV = "2";
+const MWV_UTILITY_PAGE_REV = "3";
 
 function utilityPageTitle(kind: UtilityPageKind): string {
   switch (kind) {
@@ -15475,12 +15475,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     } else if (kind === "cancip") {
       this.renderCancipUtilityContent(content, embed);
     } else {
-      const entries =
+      const pool =
         kind === "bookmarks"
-          ? this.settings.bookmarks.filter((entry) => !isBuiltInShortcut(entry))
+          ? this.settings.bookmarks
           : kind === "reading"
           ? this.settings.readingList
           : this.settings.history;
+      const entries = kind === "bookmarks" ? pool.filter((entry) => !isBuiltInShortcut(entry)) : pool;
       if (kind === "history") {
         const today = new Date().toDateString();
         this.renderEmbedUtilitySummary(content, [
@@ -15489,7 +15490,20 @@ export default class MobileWebviewerPlugin extends Plugin {
           [this.tr("latest"), entries[0] ? hostName(entries[0].url) : "-"]
         ]);
       }
-      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : this.tr("noEntries"), kind === "history" ? { groupByDay: true } : {});
+      this.renderEntryUtilityList(content, embed, entries, entries.length ? "" : this.tr("noEntries"), {
+        groupByDay: kind === "history",
+        searchable: entries.length > 8,
+        deleteEntry: async (entry) => {
+          // Identity-based removal from the live pool, then re-point the
+          // setting at the pruned array — the row list keeps working off the
+          // same objects, so a delete never needs a full page re-render.
+          const next = pool.filter((candidate) => candidate !== entry);
+          if (kind === "bookmarks") this.settings.bookmarks = next;
+          else if (kind === "reading") this.settings.readingList = next;
+          else this.settings.history = next;
+          await this.saveSettings();
+        }
+      });
     }
     this.notifyNoteDrawWebviewChanged(embed);
   }
@@ -15508,66 +15522,113 @@ export default class MobileWebviewerPlugin extends Plugin {
    *
    * The old row floated a host+date line and three text buttons around a tall
    * card, so long URLs overflowed the panel and the page read as a form dump.
-   * Now each row is: title + two icon buttons on one line, the URL ellipsized
-   * on the next, host + short time on the last. The whole row opens in the
-   * current tab; the icons cover "new tab" and "copy link". History entries
-   * are grouped under day headers so 120 rows stay scannable.
+   * Now each row is: title + icon buttons on one line, the URL ellipsized on
+   * the next, host + short time on the last. The whole row opens in the
+   * current tab; the icons cover "new tab", "copy link" and "delete". Long
+   * pages get a filter box; history entries are grouped under day headers.
    */
   renderEntryUtilityList(
     parent: HTMLElement,
     embed: HTMLElement,
     entries: WebEntry[],
     emptyText: string,
-    options: { groupByDay?: boolean } = {}
+    options: {
+      groupByDay?: boolean;
+      searchable?: boolean;
+      deleteEntry?: (entry: WebEntry) => Promise<void>;
+    } = {}
   ): void {
     if (!entries.length) {
       parent.createDiv({ cls: "mwv-empty", text: emptyText || this.tr("noEntries") });
       return;
     }
-    const list = parent.createDiv({ cls: "mwv-utility-list" });
-    let lastDay = "";
-    for (const entry of entries.slice(0, 120)) {
-      if (options.groupByDay) {
-        const day = this.formatEntryDay(entry.time);
-        if (day !== lastDay) {
-          lastDay = day;
-          list.createDiv({ cls: "mwv-utility-day", text: day });
-        }
-      }
-      const item = list.createDiv({ cls: "mwv-utility-item" });
-      const main = item.createEl("button", { cls: "mwv-utility-main", attr: { type: "button", title: entry.url } });
-      const top = main.createDiv({ cls: "mwv-utility-top" });
-      top.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
-      const inline = top.createDiv({ cls: "mwv-utility-inline-actions" });
-      const newTab = inline.createEl("button", {
-        cls: "mwv-mini-action",
-        attr: { type: "button", title: this.tr("openInNewTab"), "aria-label": this.tr("openInNewTab") }
+    let query = "";
+    if (options.searchable && entries.length > 8) {
+      const bar = parent.createDiv({ cls: "mwv-utility-searchbar" });
+      const input = bar.createEl("input", {
+        cls: "mwv-utility-search",
+        attr: { type: "search", placeholder: this.tr("search"), autocomplete: "off", spellcheck: "false" }
       });
-      setIcon(newTab, "plus");
-      newTab.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void this.newEmbedBrowserTab(embed, entry.url);
+      input.addEventListener("input", () => {
+        query = input.value;
+        rebuild();
       });
-      const copy = inline.createEl("button", {
-        cls: "mwv-mini-action",
-        attr: { type: "button", title: this.tr("copyLink"), "aria-label": this.tr("copyLink") }
-      });
-      setIcon(copy, "copy");
-      copy.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void runAsync(async () => {
-          await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
-          new Notice(this.tr("copiedLink"));
-        });
-      });
-      main.createDiv({ cls: "mwv-utility-url", text: entry.url });
-      const meta = main.createDiv({ cls: "mwv-utility-meta" });
-      meta.createSpan({ cls: "mwv-utility-host", text: hostName(entry.url) });
-      meta.createSpan({ cls: "mwv-utility-time", text: this.formatEntryTime(entry.time) });
-      main.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
     }
+    const list = parent.createDiv({ cls: "mwv-utility-list" });
+    // Filtering and deletion rebuild only the rows, so the filter box keeps
+    // focus and the scroll position while pruning.
+    const rebuild = (): void => {
+      list.empty();
+      const needle = query.trim().toLowerCase();
+      const visible = needle
+        ? entries.filter((entry) => `${entry.title}\n${entry.url}`.toLowerCase().includes(needle))
+        : entries;
+      if (!visible.length) {
+        list.createDiv({ cls: "mwv-empty", text: emptyText || this.tr("noEntries") });
+        return;
+      }
+      let lastDay = "";
+      for (const entry of visible.slice(0, 120)) {
+        if (options.groupByDay) {
+          const day = this.formatEntryDay(entry.time);
+          if (day !== lastDay) {
+            lastDay = day;
+            list.createDiv({ cls: "mwv-utility-day", text: day });
+          }
+        }
+        const item = list.createDiv({ cls: "mwv-utility-item" });
+        const main = item.createEl("button", { cls: "mwv-utility-main", attr: { type: "button", title: entry.url } });
+        const top = main.createDiv({ cls: "mwv-utility-top" });
+        top.createDiv({ cls: "mwv-utility-title", text: entry.title || hostName(entry.url) });
+        const inline = top.createDiv({ cls: "mwv-utility-inline-actions" });
+        const newTab = inline.createEl("button", {
+          cls: "mwv-mini-action",
+          attr: { type: "button", title: this.tr("openInNewTab"), "aria-label": this.tr("openInNewTab") }
+        });
+        setIcon(newTab, "plus");
+        newTab.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void this.newEmbedBrowserTab(embed, entry.url);
+        });
+        const copy = inline.createEl("button", {
+          cls: "mwv-mini-action",
+          attr: { type: "button", title: this.tr("copyLink"), "aria-label": this.tr("copyLink") }
+        });
+        setIcon(copy, "copy");
+        copy.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void runAsync(async () => {
+            await navigator.clipboard.writeText(`[${entry.title || hostName(entry.url)}](${entry.url})`);
+            new Notice(this.tr("copiedLink"));
+          });
+        });
+        if (options.deleteEntry) {
+          const remove = inline.createEl("button", {
+            cls: "mwv-mini-action",
+            attr: { type: "button", title: this.tr("delete"), "aria-label": this.tr("delete") }
+          });
+          setIcon(remove, "trash-2");
+          remove.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void runAsync(async () => {
+              await options.deleteEntry?.(entry);
+              const index = entries.indexOf(entry);
+              if (index >= 0) entries.splice(index, 1);
+              rebuild();
+            });
+          });
+        }
+        main.createDiv({ cls: "mwv-utility-url", text: entry.url });
+        const meta = main.createDiv({ cls: "mwv-utility-meta" });
+        meta.createSpan({ cls: "mwv-utility-host", text: hostName(entry.url) });
+        meta.createSpan({ cls: "mwv-utility-time", text: this.formatEntryTime(entry.time) });
+        main.addEventListener("click", () => void this.openUrlInEmbed(embed, entry.url));
+      }
+    };
+    rebuild();
   }
 
   /** "14:32" today, "09/21 14:32" otherwise — full timestamps made every row noisy. */
