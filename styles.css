@@ -2886,6 +2886,15 @@
   display: none;
 }
 
+/* Setting: hide Obsidian's built-in More options (⋯) button on leaves that
+   host this plugin's browser chrome (class applied by the plugin). */
+.workspace-leaf-content.mwv-hide-ob-more .view-actions .more-options,
+.workspace-leaf-content.mwv-hide-ob-more .view-actions .clickable-icon[aria-label="More options"],
+.workspace-leaf-content.mwv-hide-ob-more .view-actions .clickable-icon[aria-label="更多选项"],
+.workspace-leaf-content.mwv-hide-ob-more .view-actions .clickable-icon[aria-label="更多選項"] {
+  display: none !important;
+}
+
 .mwv-browser-address {
   display: grid;
   position: relative;

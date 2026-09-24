@@ -353,7 +353,7 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     MAX_BROWSER_TABS,
     // Chrome / utility-page revision markers, mirrored from main.ts: the
     // extracted bodies compare them to decide "repair vs rebuild".
-    "3",
+    "4",
     "3",
     function Menu() {
       const items = [];
@@ -491,53 +491,50 @@ const stripOf = (doc) => doc.querySelector(".mwv-embed-tabstrip");
  * Checks
  * ------------------------------------------------------------------ */
 
-check("chrome exposes back / forward / home / reload / bookmark in the address row", () => {
+check("chrome exposes back / forward / home / reload in the address row", () => {
   const { embed } = createWorld();
   const chrome = chromeOf(embed);
   assert(chrome, "no chrome was built");
   const address = chrome.querySelector(".mwv-browser-address");
   assert(address, "no address row");
-  for (const nav of ["back", "forward", "home", "reload", "bookmark"]) {
+  for (const nav of ["back", "forward", "home", "reload"]) {
     const button = navButton(embed, nav);
     assert(button, `missing ${nav} button`);
     assert(address.contains(button), `${nav} button is not in the address row`);
     assert(button.getAttribute("type") === "button", `${nav} must not submit the address form`);
   }
-  return "back/forward/home/reload/bookmark present in the address row";
+  return "back/forward/home/reload present in the address row";
 });
 
-check("chrome exposes find and immersive in the address row and routes them", () => {
-  const { win, embed, calls } = createWorld();
+check("bookmark, find and immersive stay out of the address row (rev 4)", () => {
+  const { embed } = createWorld();
   const chrome = chromeOf(embed);
+  for (const nav of ["bookmark", "find", "immersive"]) {
+    assert(!navButton(embed, nav), `${nav} button must not live on the address row anymore`);
+  }
   const address = chrome.querySelector(".mwv-browser-address");
-  const find = navButton(embed, "find");
-  const immersive = navButton(embed, "immersive");
-  assert(find && address.contains(find), "find button missing from the address row");
-  assert(immersive && address.contains(immersive), "immersive button missing from the address row");
-  click(win, find);
-  assert(calls.find === 1, `find routed ${calls.find} times`);
-  click(win, immersive);
-  assert(embed.hasClass("mwv-immersive"), "immersive mode did not toggle on");
-  assert(embed.querySelector(":scope > .mwv-immersive-exit"), "no floating exit handle was mounted");
-  click(win, embed.querySelector(":scope > .mwv-immersive-exit"));
-  assert(!embed.hasClass("mwv-immersive"), "the exit handle did not leave immersive mode");
-  assert(!embed.querySelector(":scope > .mwv-immersive-exit"), "the exit handle lingered after exit");
-  return "find -> toggleEmbedFindPanel; immersive toggles class + exit handle";
+  const navs = Array.from(chrome.querySelectorAll("button[data-mwv-browser-nav]"));
+  assert(navs.every((button) => address.contains(button)), "a nav button escaped the address row");
+  assert(navs.length === 4, `expected exactly 4 nav buttons, got ${navs.length}`);
+  return "address row reduced to 4 nav buttons; tools moved to the More panel";
 });
 
-check("immersive state survives a chrome rebuild with the correct icon", () => {
+check("immersive state survives a chrome rebuild without a row button", () => {
   const { embed, ctx } = createWorld();
   ctx.toggleEmbedImmersive(embed);
-  const before = navButton(embed, "immersive");
-  assert(before.getAttribute("data-icon") === "minimize-2", "immersive button did not switch to the exit icon");
-  // A rev bump rebuilds the chrome from scratch; the mode must be reflected.
+  assert(embed.hasClass("mwv-immersive"), "immersive mode did not toggle on");
+  assert(embed.querySelector(":scope > .mwv-immersive-exit"), "no floating exit handle was mounted");
+  click(embed.ownerDocument.defaultView, embed.querySelector(":scope > .mwv-immersive-exit"));
+  assert(!embed.hasClass("mwv-immersive"), "the exit handle did not leave immersive mode");
+  assert(!embed.querySelector(":scope > .mwv-immersive-exit"), "the exit handle lingered after exit");
+  // A rev bump rebuilds the chrome from scratch; the mode must survive.
+  ctx.toggleEmbedImmersive(embed);
   const chrome = chromeOf(embed);
   chrome.dataset.mwvChromeRev = "1";
   ctx.ensureEmbedChrome(embed);
-  const after = navButton(embed, "immersive");
-  assert(after && after.getAttribute("data-icon") === "minimize-2", "rebuilt chrome lost the immersive icon");
   assert(embed.hasClass("mwv-immersive"), "rebuilt chrome lost the immersive mode");
-  return "rebuild keeps immersive mode and its exit icon";
+  assert(embed.querySelector(":scope > .mwv-immersive-exit"), "rebuilt chrome lost the exit handle");
+  return "immersive mode + exit handle survive a rebuild with no row button";
 });
 
 check("address suggestions draw from bookmarks, reading list and history", () => {
@@ -606,30 +603,21 @@ check("closeTabsToRight keeps the anchor and its left-hand tabs", async () => {
   return "close-right removed only t3";
 });
 
-check("the bookmark star follows the page and is disabled on internal pages", () => {
+check("bookmark sync tolerates the missing star (panel owns the entry now)", () => {
   const { embed, ctx } = createWorld();
-  const star = navButton(embed, "bookmark");
-  assert(star, "missing bookmark star");
-  assert(!star.classList.contains("is-bookmarked"), "star filled without a bookmark");
-  assert(!star.disabled, "star disabled on a bookmarkable page");
   ctx.settings.bookmarks = [{ title: "Example", url: "https://example.org/", time: 0 }];
+  // No star on the row anymore; the sync must be a silent no-op, not a crash.
   ctx.syncEmbedBookmarkState(embed);
-  assert(star.classList.contains("is-bookmarked"), "star not filled for a bookmarked page");
-  assert(star.getAttribute("title") === "removeBookmark", "star title not switched to remove");
-  embed.dataset.url = "mwv://history";
-  ctx.syncEmbedBookmarkState(embed);
-  assert(star.disabled, "star enabled on an internal utility page");
-  assert(!star.classList.contains("is-bookmarked"), "star filled on an internal utility page");
-  return "star reflects the bookmark state; internal pages keep it disabled";
+  assert(!navButton(embed, "bookmark"), "a bookmark star reappeared on the row");
+  assert(chromeOf(embed).querySelectorAll("button[data-mwv-browser-nav='bookmark']").length === 0, "bookmark nav present in chrome");
+  return "sync no-ops cleanly without a star button";
 });
 
-check("tapping reload and the star routes to the embed actions", () => {
+check("tapping reload routes to the embed action", () => {
   const { embed, calls } = createWorld();
   click(embed.ownerDocument.defaultView, navButton(embed, "reload"));
-  click(embed.ownerDocument.defaultView, navButton(embed, "bookmark"));
   assert(calls.reload === 1, `reload routed ${calls.reload} times`);
-  assert(calls.bookmarkToggle === 1, `bookmark routed ${calls.bookmarkToggle} times`);
-  return "reload -> refreshEmbed, star -> toggleEmbedBookmark";
+  return "reload -> refreshEmbed";
 });
 
 check("a stale-rev chrome is rebuilt exactly once by the heartbeat", () => {
@@ -640,7 +628,7 @@ check("a stale-rev chrome is rebuilt exactly once by the heartbeat", () => {
   assert(calls.renderBrowserChrome === 2, `rebuilt ${calls.renderBrowserChrome} times (setup + upgrade expected)`);
   const rebuilt = chromeOf(embed);
   assert(rebuilt !== chrome, "chrome was patched in place instead of rebuilt");
-  assert(rebuilt.dataset.mwvChromeRev === "3", "rebuilt chrome does not carry the current rev");
+  assert(rebuilt.dataset.mwvChromeRev === "4", "rebuilt chrome does not carry the current rev");
   ctx.ensureEmbedChrome(embed);
   ctx.ensureEmbedChrome(embed);
   assert(calls.renderBrowserChrome === 2, "healthy current-rev chrome was rebuilt again");

@@ -504,6 +504,8 @@ type UiTextKey =
   | "interfaceRenderingDesc"
   | "compactMobileToolbar"
   | "compactMobileToolbarDesc"
+  | "hideObsidianMoreButton"
+  | "hideObsidianMoreButtonDesc"
   | "showNoteDrawMagicWand"
   | "showNoteDrawMagicWandDesc"
   | "readerHint"
@@ -876,6 +878,8 @@ const UI_TEXT_EN: Record<UiTextKey, string> = {
   interfaceRendering: "Interface and rendering",
   interfaceRenderingDesc: "Control the mobile toolbar, NoteDraw wand, reader layer, and page scale.",
   compactMobileToolbar: "Compact mobile toolbar",
+  hideObsidianMoreButton: "Hide Obsidian's built-in More options button",
+  hideObsidianMoreButtonDesc: "Hides the native ⋯ (More options) button in the tab header of this plugin's browser views. On by default.",
   compactMobileToolbarDesc: "Use smaller controls for phone screens.",
   showNoteDrawMagicWand: "Show NoteDraw magic wand",
   showNoteDrawMagicWandDesc: "Show the wand button in Mobile Webviewer surfaces when NoteDraw is available.",
@@ -1248,6 +1252,8 @@ const UI_TEXT_ZH_HANS: UiDictionary = {
   interfaceRendering: "界面和渲染",
   interfaceRenderingDesc: "控制手机工具栏、NoteDraw 魔法棒、阅读层和页面比例。",
   compactMobileToolbar: "紧凑手机工具栏",
+  hideObsidianMoreButton: "隐藏 Obsidian 自带更多按钮",
+  hideObsidianMoreButtonDesc: "隐藏本插件浏览器视图标签栏右侧 Obsidian 原生的更多（⋯）按钮。默认开启。",
   compactMobileToolbarDesc: "手机屏幕使用更小的控件。",
   showNoteDrawMagicWand: "显示 NoteDraw 魔法棒",
   showNoteDrawMagicWandDesc: "NoteDraw 可用时在 Mobile Webviewer 界面显示魔法棒。",
@@ -1610,6 +1616,8 @@ const UI_TEXT_ZH_HANT: UiDictionary = {
   openBrowser: "開啟瀏覽器",
   openOnStartup: "啟動時開啟",
   compactMobileToolbar: "精簡行動工具列",
+  hideObsidianMoreButton: "隱藏 Obsidian 自帶更多按鈕",
+  hideObsidianMoreButtonDesc: "隱藏本外掛瀏覽器視圖標籤欄右側 Obsidian 原生的更多（⋯）按鈕。預設開啟。",
   showNoteDrawMagicWand: "顯示 NoteDraw 魔杖",
   frontendMode: "前景模式",
   editableNote: "可編輯筆記",
@@ -6943,6 +6951,9 @@ interface MobileWebviewerSettings {
   jsDisabled: boolean;
   rotatedMode: boolean;
   audioMuted: boolean;
+  // Hide Obsidian's built-in "More options" (⋯) button on leaves that host
+  // this plugin's browser views; on by default per user request.
+  hideObsidianMoreButton: boolean;
   webDarkMode: boolean;
   readerFontScale: number;
   userAgentMode: "mobile" | "desktop";
@@ -7311,6 +7322,7 @@ const DEFAULT_SETTINGS: MobileWebviewerSettings = {
   jsDisabled: false,
   rotatedMode: false,
   audioMuted: false,
+  hideObsidianMoreButton: true,
   webDarkMode: false,
   readerFontScale: 100,
   userAgentMode: "mobile",
@@ -7582,7 +7594,7 @@ function utilityPageUrl(kind: UtilityPageKind, contextUrl = ""): string {
 // heartbeat deliberately repairs instead of rebuilding), so without a rev the
 // old toolbar would survive the update forever. A mismatch triggers exactly
 // one rebuild, after which the fresh chrome carries the current rev.
-const MWV_BROWSER_CHROME_REV = "3";
+const MWV_BROWSER_CHROME_REV = "4";
 const MWV_UTILITY_PAGE_REV = "3";
 
 function utilityPageTitle(kind: UtilityPageKind): string {
@@ -11172,6 +11184,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.installNoteDrawDedupeObserver();
     this.scheduleNoteDrawRebindAfterReload();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
+      this.applyObsidianMoreButtonVisibility();
       this.installNoteDrawRawSurfaceGuard();
       this.disposeAllRawNoteDrawControllers();
       this.enforceNoteBrowserReadingMode();
@@ -17224,20 +17237,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     // duplicate both (plus a third path into the More panel); the address bar
     // is where a refresh and a star are looked for first, so they live here.
     makeNavButton("rotate-cw", this.tr("reload"), false, "reload");
-    const bookmarkable = /^https?:\/\//i.test(url);
-    const bookmarked = bookmarkable && this.isUrlBookmarked(url);
-    const star = makeNavButton("star", bookmarked ? this.tr("removeBookmark") : this.tr("addBookmark"), !bookmarkable, "bookmark");
-    star.toggleClass("is-bookmarked", bookmarked);
-    // In-page find and immersive (chrome-less) mode join the row; both toggle
-    // state that lives on the embed, so a plain delegated action is enough.
-    makeNavButton("search", this.tr("findInPage"), false, "find");
-    const immersive = makeNavButton(
-      embed.hasClass("mwv-immersive") ? "minimize-2" : "expand",
-      embed.hasClass("mwv-immersive") ? this.tr("exitImmersiveMode") : this.tr("immersiveMode"),
-      false,
-      "immersive"
-    );
-    immersive.toggleClass("is-immersive", embed.hasClass("mwv-immersive"));
+    // Bookmark / in-page find / immersive live in the More tools panel, not
+    // on this row: the address row keeps only the four navigation controls
+    // (back, forward, home, reload) so it stays readable on narrow phones.
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
@@ -17733,6 +17735,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.clearProxyCookies();
       new Notice(this.tr("cookiesCleared"));
     });
+    // Moved here from the address row (chrome rev 4): the row stays four
+    // controls, and these toggles live with the rest of the page tools.
+    addAction(pageActions, "search", this.tr("findInPage"), () => {
+      this.toggleEmbedFindPanel(embed);
+      panel.remove();
+    }, false);
     addAction(pageActions, "activity", this.tr("browserStatus"), () => {
       this.toggleEmbedBrowserStatusPanel(body, embed, url);
     }, false);
@@ -17765,6 +17773,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, false);
     addAction(viewActions, "maximize", this.settings.fullScreenMode ? this.tr("exitFullscreen") : this.tr("fullscreen"), async () => {
       await this.toggleFullscreen(embed);
+    }, false);
+    addAction(viewActions, "expand", embed.hasClass("mwv-immersive") ? this.tr("exitImmersiveMode") : this.tr("immersiveMode"), () => {
+      this.toggleEmbedImmersive(embed);
+      panel.remove();
     }, false);
     addAction(viewActions, "file-x", this.settings.jsDisabled ? this.tr("enableJs") : this.tr("disableJs"), async () => {
       await this.toggleBooleanMode("jsDisabled", embed, "JavaScript");
@@ -21156,6 +21168,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  // Obsidian ships a "More options" (⋯) clickable-icon in every leaf header's
+  // view-actions. On the leaves hosting this plugin's browser chrome it sits
+  // right next to the plugin's own tools button, so the setting (on by
+  // default) hides it with a marker class on the leaf content. Re-applied on
+  // load, on layout-change, and when the setting flips.
+  applyObsidianMoreButtonVisibility(): void {
+    const hide = this.settings.hideObsidianMoreButton !== false;
+    for (const leaf of [...this.app.workspace.getLeavesOfType("markdown"), ...this.app.workspace.getLeavesOfType(VIEW_TYPE)]) {
+      leaf.view?.containerEl?.toggleClass("mwv-hide-ob-more", hide);
+    }
+  }
+
   getCancipStatus(): { enabled: boolean; version: string } {
     const plugin = (this.app as App & { plugins?: { plugins?: Record<string, { manifest?: { version?: string } }> } })
       .plugins?.plugins?.cancip;
@@ -22539,6 +22563,8 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.settings.jsDisabled = typeof this.settings.jsDisabled === "boolean" ? this.settings.jsDisabled : false;
     this.settings.rotatedMode = typeof this.settings.rotatedMode === "boolean" ? this.settings.rotatedMode : false;
     this.settings.audioMuted = typeof this.settings.audioMuted === "boolean" ? this.settings.audioMuted : false;
+    this.settings.hideObsidianMoreButton = typeof this.settings.hideObsidianMoreButton === "boolean" ? this.settings.hideObsidianMoreButton : true;
+    this.applyObsidianMoreButtonVisibility();
     this.settings.webDarkMode = typeof this.settings.webDarkMode === "boolean" ? this.settings.webDarkMode : false;
     this.settings.readerFontScale = clampNumber(
       typeof this.settings.readerFontScale === "number" ? Math.round(this.settings.readerFontScale) : 100,
@@ -22860,6 +22886,19 @@ class MobileWebviewerSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.compactToolbar = value;
             await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.tr("hideObsidianMoreButton"))
+      .setDesc(this.plugin.tr("hideObsidianMoreButtonDesc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.hideObsidianMoreButton)
+          .onChange(async (value) => {
+            this.plugin.settings.hideObsidianMoreButton = value;
+            await this.plugin.saveSettings();
+            this.plugin.applyObsidianMoreButtonVisibility();
           })
       );
 
