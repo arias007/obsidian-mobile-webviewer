@@ -23,6 +23,11 @@ const sourcePath = process.env.MWV_SOURCE || "main.ts";
 const source = fs.readFileSync(sourcePath, "utf8");
 const MAX_BROWSER_TABS = 16;
 const MAX_LIVE_TAB_SURFACES = 5;
+// Mirrored from main.ts for the extracted bodies. A check below fails if any of
+// these drifts from the source.
+const MWV_DEDUPE_ROOT_SELECTOR = ".mwv-root, .mwv-note-embed, .mwv-embed";
+const EMBED_RENDER_WATCHDOG_ATTEMPTS = 3;
+const EMBED_RENDER_WATCHDOG_DELAY_MS = 260;
 
 /* ------------------------------------------------------------------ *
  * Extract real method bodies from the TypeScript source
@@ -88,6 +93,9 @@ const METHODS = [
   "renderEmbedTabstrip",
   "findEmbedTabstripItem",
   "ensureEmbedTabstripAdd",
+  "ensureEmbedTabstripToggle",
+  "ensureEmbedTabstripPanel",
+  "closeEmbedTabstripPanels",
   "bindEmbedTabstrip",
   "resolveTabstripEmbed",
   "bindEmbedChrome",
@@ -108,7 +116,9 @@ const METHODS = [
   "toggleEmbedImmersive",
   "toggleEmbedFindPanel",
   "closeEmbedBrowserTabsBatch",
-  "renderTabStrip"
+  "renderTabStrip",
+  "isEmbedPainted",
+  "armEmbedRenderWatchdog"
 ];
 
 function buildMethodTable(src) {
@@ -138,6 +148,9 @@ function buildMethodTable(src) {
     "MAX_BROWSER_TABS",
     "MWV_BROWSER_CHROME_REV",
     "MWV_UTILITY_PAGE_REV",
+    "MWV_DEDUPE_ROOT_SELECTOR",
+    "EMBED_RENDER_WATCHDOG_ATTEMPTS",
+    "EMBED_RENDER_WATCHDOG_DELAY_MS",
     "Menu",
     `${js}\nreturn __M;`
   );
@@ -355,6 +368,9 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     // extracted bodies compare them to decide "repair vs rebuild".
     "4",
     "3",
+    MWV_DEDUPE_ROOT_SELECTOR,
+    EMBED_RENDER_WATCHDOG_ATTEMPTS,
+    EMBED_RENDER_WATCHDOG_DELAY_MS,
     function Menu() {
       const items = [];
       const self = {
@@ -390,6 +406,11 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     renderEmbedTabstrip: table.renderEmbedTabstrip,
     findEmbedTabstripItem: table.findEmbedTabstripItem,
     ensureEmbedTabstripAdd: table.ensureEmbedTabstripAdd,
+    ensureEmbedTabstripToggle: table.ensureEmbedTabstripToggle,
+    ensureEmbedTabstripPanel: table.ensureEmbedTabstripPanel,
+    closeEmbedTabstripPanels: table.closeEmbedTabstripPanels,
+    isEmbedPainted: table.isEmbedPainted,
+    armEmbedRenderWatchdog: table.armEmbedRenderWatchdog,
     bindEmbedTabstrip: table.bindEmbedTabstrip,
     bindEmbedChrome: table.bindEmbedChrome,
     runBrowserAction: table.runBrowserAction,
@@ -1079,6 +1100,121 @@ check("tab taps resolve the live embed at tap time, not the first-bound copy", (
   assert(seen.switch.length === 1 && seen.switch[0] === "live", `switch acted on ${JSON.stringify(seen.switch)}`);
   assert(seen.close.length === 1 && seen.close[0] === "live", `close acted on ${JSON.stringify(seen.close)}`);
   return "both branches acted on the live embed, not the first-bound copy";
+});
+
+check("the tabs button opens the panel and an outside tap closes it", () => {
+  const { win, embed, ctx, doc } = createWorld();
+  const strip = stripOf(doc);
+  ctx.renderEmbedTabstrip(embed);
+  const toggle = strip.querySelector(":scope > .mwv-embed-tab-toggle");
+  const panel = strip.querySelector(":scope > .mwv-embed-tab-panel");
+  assert(toggle, "the strip lost its button");
+  assert(panel, "the strip lost its panel");
+  assert(!strip.hasClass("is-open"), "the panel started open");
+  click(win, toggle);
+  assert(strip.hasClass("is-open"), "the button did not open the panel");
+  assert(panel.hasClass("is-open"), "the panel did not follow the strip class");
+  assert(toggle.hasClass("is-active"), "the button did not show its open state");
+  click(win, doc.body);
+  assert(!strip.hasClass("is-open"), "an outside tap did not dismiss the panel");
+  assert(!panel.hasClass("is-open"), "the panel stayed open after an outside tap");
+  assert(!toggle.hasClass("is-active"), "the button kept its open state after dismissal");
+  return "opened from the button, dismissed by an outside tap";
+});
+
+check("an outside tap still dismisses the panel after a plugin reload", () => {
+  const { win, embed, ctx, doc } = createWorld();
+  const strip = stripOf(doc);
+  const toggle = strip.querySelector(":scope > .mwv-embed-tab-toggle");
+  click(win, toggle);
+  assert(strip.hasClass("is-open"), "precondition: the panel is open");
+  // A plugin reload hands the same DOM node to a brand-new instance.
+  const reloaded = Object.create(ctx);
+  reloaded.bindEmbedTabstrip(strip, embed);
+  assert(strip._mwvTabDismissOwner === reloaded, "the reloaded instance did not re-own the dismiss listener");
+  click(win, doc.body);
+  assert(!strip.hasClass("is-open"), "the panel stayed open after the reload");
+  return "the reloaded instance took the dismiss listener over";
+});
+
+check("only the button and the panel survive as direct strip children", () => {
+  const { embed, ctx, doc } = createWorld();
+  const strip = stripOf(doc);
+  // An upgrade leaves the previous revision's chips and "+" behind as direct
+  // children of the strip node, which the new revision never searches again.
+  const legacyTab = doc.createElement("div");
+  legacyTab.className = "mwv-embed-tab";
+  legacyTab.dataset.mwvTabId = "t-legacy";
+  strip.appendChild(legacyTab);
+  const legacyAdd = doc.createElement("div");
+  legacyAdd.className = "mwv-embed-tab-new";
+  strip.appendChild(legacyAdd);
+  ctx.renderEmbedTabstrip(embed);
+  const direct = Array.from(strip.children).map((node) => node.className);
+  assert(!direct.some((cls) => cls.includes("mwv-embed-tab-new")), `a legacy "+" survived: ${direct.join(", ")}`);
+  assert(!direct.some((cls) => cls.split(" ").includes("mwv-embed-tab")), `a legacy chip survived: ${direct.join(", ")}`);
+  assert(strip.querySelector(":scope > .mwv-embed-tab-toggle"), "the button was swept away too");
+  assert(strip.querySelectorAll(".mwv-embed-tab").length === ctx.settings.browserTabs.length, "the panel lost tabs");
+  return "legacy chips and the legacy add button were swept";
+});
+
+check("the harness mirrors the render watchdog constants", () => {
+  assert(
+    source.includes(`const MWV_DEDUPE_ROOT_SELECTOR = "${MWV_DEDUPE_ROOT_SELECTOR}";`),
+    "MWV_DEDUPE_ROOT_SELECTOR drifted from main.ts"
+  );
+  assert(
+    source.includes(`const EMBED_RENDER_WATCHDOG_ATTEMPTS = ${EMBED_RENDER_WATCHDOG_ATTEMPTS};`),
+    "EMBED_RENDER_WATCHDOG_ATTEMPTS drifted from main.ts"
+  );
+  assert(
+    source.includes(`const EMBED_RENDER_WATCHDOG_DELAY_MS = ${EMBED_RENDER_WATCHDOG_DELAY_MS};`),
+    "EMBED_RENDER_WATCHDOG_DELAY_MS drifted from main.ts"
+  );
+  return "harness constants match main.ts";
+});
+
+check("a painted surface arms no render watchdog", () => {
+  const { win, ctx, doc } = createWorld();
+  ctx.embedWatchdogSeq = 0;
+  const painted = doc.createElement("div");
+  painted.className = "mwv-embed";
+  const chrome = doc.createElement("div");
+  chrome.className = "mwv-browser-chrome";
+  painted.appendChild(chrome);
+  doc.body.appendChild(painted);
+  const timers = [];
+  const original = win.setTimeout;
+  win.setTimeout = (fn) => { timers.push(fn); return 0; };
+  ctx.armEmbedRenderWatchdog(painted, "https://asked.example/", 0);
+  win.setTimeout = original;
+  assert(timers.length === 0, `a painted surface armed ${timers.length} retries`);
+  return "no retry once the chrome is present";
+});
+
+check("the render watchdog re-renders the URL the surface asked for", () => {
+  const { win, ctx, doc } = createWorld();
+  ctx.embedWatchdogSeq = 0;
+  ctx.addConsole = () => {};
+  const rendered = [];
+  ctx.renderEmbed = (el, url) => { rendered.push(url); return Promise.resolve(); };
+  const blank = doc.createElement("div");
+  blank.className = "mwv-embed";
+  blank.dataset.url = "https://asked.example/";
+  doc.body.appendChild(blank);
+  const timers = [];
+  const original = win.setTimeout;
+  win.setTimeout = (fn) => { timers.push(fn); return 0; };
+  ctx.armEmbedRenderWatchdog(blank, "https://asked.example/", 0);
+  win.setTimeout = original;
+  assert(timers.length === 1, `expected 1 armed retry, got ${timers.length}`);
+  timers[0]();
+  assert(rendered.length === 1, `the retry did not render (${rendered.length} renders)`);
+  assert(
+    rendered[0] === "https://asked.example/",
+    `the retry rendered ${JSON.stringify(rendered[0])} instead of the requested URL`
+  );
+  return "the lost paint is retried against the requested URL";
 });
 
 check("resolveTabstripEmbed falls back to a connected preferred embed", () => {

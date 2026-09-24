@@ -17,6 +17,7 @@ import {
   WorkspaceLeaf,
   normalizePath,
   setIcon,
+  type EventRef,
   type SettingDefinitionItem,
   type IconName
 } from "obsidian";
@@ -39,6 +40,26 @@ const MOBILE_WEBVIEWER_API_VERSION = "1.0.0";
 const DEFAULT_HOME = "https://www.bing.com/";
 const DEFAULT_SEARCH = "https://www.bing.com/search?q={{query}}";
 const WEBVIEW_NOTE_PATH = "Mobile Webviewer.md";
+/** One tap can reach both the click handler and `open-url`; claim window in ms. */
+const EXTERNAL_CLAIM_WINDOW_MS = 600;
+/** How many times a blank NoteWeb surface is re-rendered before giving up. */
+const EMBED_RENDER_WATCHDOG_ATTEMPTS = 3;
+/** Base delay between watchdog retries; scaled by the attempt number. */
+const EMBED_RENDER_WATCHDOG_DELAY_MS = 260;
+/** View types owned by Obsidian's built-in Web viewer core plugin. */
+const OBSIDIAN_WEB_VIEWER_TYPES = ["webviewer", "webviewer-history"] as const;
+
+/**
+ * The payload Obsidian hands to the (undocumented) `workspace` `open-url`
+ * event. The built-in Web viewer reads `detail.url` / `detail.leaf` / `active`
+ * from it, so those are the fields this plugin relies on too.
+ */
+interface OpenUrlLikeEvent extends Event {
+  url?: string;
+  leaf?: WorkspaceLeaf | null;
+  active?: boolean;
+  detail?: { url?: string; leaf?: WorkspaceLeaf | null; active?: boolean };
+}
 const BING_RESULTS_PER_PAGE = 10;
 const BING_DEFAULT_PAGES = 3;
 const BING_DEFAULT_MAX_RESULTS = 24;
@@ -11039,6 +11060,15 @@ export default class MobileWebviewerPlugin extends Plugin {
   processorSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   embedRenderTokens = new WeakMap<HTMLElement, number>();
   embedRenderSeq = 0;
+  // Watchdog sequence for a surface that finished a render without painting
+  // anything (see armEmbedRenderWatchdog). A newer watchdog run invalidates the
+  // pending timer of the older one.
+  embedWatchdogSeq = 0;
+  // Last external link this plugin claimed from `open-url`, and when. A single
+  // tap can reach both the capture-phase click handler and Obsidian's own
+  // open-url dispatch, and the Web viewer core plugin acts on the latter; the
+  // stamp is what keeps one tap from being claimed twice.
+  private externalClaim = { url: "", at: 0 };
   // Sequence for anonymous parked-surface ids (surfaces created before a tab
   // record existed); only used for dataset bookkeeping, never persisted.
   embedSurfaceSeq = 0;
@@ -11156,6 +11186,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.registerDomEvent(appDocument(), "auxclick", (event) => {
       void this.handleGlobalBingEvent(event);
     }, { capture: true });
+    // Obsidian's own external-link dispatch. Core plugins — the built-in Web
+    // viewer in particular — register on this event before any community plugin
+    // and never look at `defaultPrevented`, so a capture-phase click handler
+    // alone can never win that race. This is the event they act on.
+    const openUrlWorkspace = this.app.workspace as unknown as {
+      on: (name: string, callback: (event: OpenUrlLikeEvent) => unknown) => EventRef;
+    };
+    this.registerEvent(openUrlWorkspace.on("open-url", (event: OpenUrlLikeEvent) => {
+      this.handleOpenUrlEvent(event);
+    }));
     this.registerDomEvent(appDocument(), "click", (event) => {
       this.handleNoteDrawHeaderButtonActivation(event);
     }, { capture: true });
@@ -11585,6 +11625,12 @@ export default class MobileWebviewerPlugin extends Plugin {
         // rebuilds its header DOM. Remove only the classes/elements owned by
         // NoteWeb so the ordinary note's native toolbar remains authoritative.
         leaf.removeClass("mwv-note-browser-view");
+        // The tabs button and its panel live in the LEAF's header (or in the
+        // chrome), not in the note document, so rebuilding the note never
+        // removes them. Leaving them behind is exactly what put a tab icon in
+        // the header of an ordinary note after NoteWeb had used the same leaf —
+        // the strip outlives the document that justified it.
+        leaf.querySelectorAll<HTMLElement>(".mwv-embed-tabstrip").forEach((strip) => strip.remove());
         leaf.querySelectorAll<HTMLElement>(
           ".mwv-note-browser-mode-action, .mwv-note-browser-native-nav, .mwv-note-browser-replaced-edit-action, .mwv-note-browser-native-title"
         ).forEach((element) => {
@@ -11879,12 +11925,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     const enabled = await this.setNoteWebRawElementSelector(embed, true);
     if (!enabled && embed.isConnected && embed.dataset.mwvNotewebElementEdit === "true") {
-      // Unsupported kernels (iframe/proxy surfaces) cannot host the guest
-      // editor — leave immediately. For real webviews a single transient
-      // failure (guest still painting, navigation race) must NOT tear the
-      // editor down: that reads as a toolbar "flash crash". Retry instead.
+      // Unsupported kernels cannot host the guest editor — leave immediately.
+      // A same-origin iframe CAN (that is what the mobile proxy pipeline
+      // produces), so it retries together with real webviews: a single
+      // transient failure (guest still painting, navigation race) must NOT tear
+      // the editor down, because that reads as a toolbar "flash crash".
       const frame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
-      if (!this.isElectronWebview(frame)) {
+      if (!this.isElectronWebview(frame) && !this.rawElementEditorHost(frame)) {
         await this.leaveNoteWebRawElementEditing(embed);
       } else {
         let injected = false;
@@ -11991,18 +12038,19 @@ export default class MobileWebviewerPlugin extends Plugin {
           void this.setNoteWebRawElementSelector(surface, enable);
           return;
         }
-        // NoteWeb's Markdown presentation is backed by NoteDraw's webview
-        // controller on some plugin versions. Treat it exactly like the
-        // preview controller so the shared button enters native Markdown
-        // text editing instead of becoming a no-op.
+        // The button says "select a page element to edit its text", so that is
+        // what it has to do. It used to fall through to NoteDraw's Markdown
+        // text tool whenever the surface was not already in a raw editing
+        // session — which is why the select tool looked dead in NoteWeb. Enter
+        // the element editor instead. A Note presentation is switched to the
+        // Web front first, because the editor acts on the live page, not on the
+        // Markdown layer that NoteWeb renders on top of it.
         if (!this.isNoteDrawControllerActive(controller)) {
           this.activateNoteDrawWebviewController(controller, surface);
         }
-        const editing = controller.toolMode === "edit-md";
-        this.setNoteDrawWebviewTool(controller, editing ? "select" : "edit-md");
-        button.toggleClass("is-active", !editing);
-        button.setAttribute("aria-pressed", String(!editing));
-        this.queueNoteDrawControllerSync(surface, false);
+        if (!this.isNoteBrowserWebMode(surface)) this.setNoteBrowserEmbedMode(surface, "web");
+        void this.toggleNoteWebRawElementEditing(surface);
+        return;
       } else if (controller.surfaceType === "preview") {
         const editing = controller.toolMode === "edit-md";
         this.setNoteDrawWebviewTool(controller, editing ? "select" : "edit-md");
@@ -12017,8 +12065,8 @@ export default class MobileWebviewerPlugin extends Plugin {
   syncNoteWebElementSelectButton(controller: NoteDrawControllerLike, surface: HTMLElement): void {
     const button = controller._mwvNoteWebElementSelectButton;
     if (!button?.isConnected) return;
-    const active = controller.surfaceType === "webview" && this.isNoteBrowserRawEditingMode(surface)
-      ? surface.dataset.mwvNotewebElementSelector === "true"
+    const active = controller.surfaceType === "webview"
+      ? this.isNoteBrowserRawEditingMode(surface) && surface.dataset.mwvNotewebElementSelector === "true"
       : controller.toolMode === "edit-md";
     button.toggleClass("is-active", active);
     button.setAttribute("aria-pressed", String(active));
@@ -12154,26 +12202,78 @@ export default class MobileWebviewerPlugin extends Plugin {
     this.syncNoteWebRawDrawingState(embed);
 
     const frame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
-    if (!this.isElectronWebview(frame)) {
+    // A webview reports its own live URL; an iframe is described by the embed.
+    const liveUrl = this.isElectronWebview(frame) ? this.safeWebviewUrl(frame) : "";
+    const url = liveUrl || embed.dataset.url || this.settings.homeUrl;
+    const edits = enabled ? this.rawElementEditsForUrl(url) : [];
+    const code = this.noteWebRawElementEditorScript(enabled, edits);
+
+    // Desktop: the guest is an Electron <webview>.
+    if (this.isElectronWebview(frame)) {
+      frame._mwvRawElementEditorEnabled = enabled;
+      if (!this.isBrowserSurfaceReady(frame) || typeof frame.executeJavaScript !== "function") {
+        return !enabled || Boolean(frame.isConnected && frame._mwvDestroyed !== true);
+      }
+      try {
+        await frame.executeJavaScript(code, true);
+        return true;
+      } catch (error) {
+        console.warn("[mobile-webviewer] raw page element editor skipped", error);
+        if (enabled) new Notice("网页元素编辑器启动失败");
+        return !enabled;
+      }
+    }
+
+    // Mobile: there is no <webview> tag, so the page is painted into an
+    // <iframe>. A proxied page is same-origin and hosts the very same editor
+    // script; only a cross-origin frame cannot, which is the one case still
+    // refused instead of leaving a button that silently does nothing.
+    const runInFrame = this.rawElementEditorHost(frame);
+    if (!runInFrame) {
       if (enabled) new Notice("当前网页内核不支持元素编辑");
       return !enabled;
     }
-    frame._mwvRawElementEditorEnabled = enabled;
-    if (!this.isBrowserSurfaceReady(frame) || typeof frame.executeJavaScript !== "function") {
-      return !enabled || Boolean(frame.isConnected && frame._mwvDestroyed !== true);
-    }
-
-    const url = this.safeWebviewUrl(frame) || embed.dataset.url || this.settings.homeUrl;
-    const edits = enabled ? this.rawElementEditsForUrl(url) : [];
-    const code = this.noteWebRawElementEditorScript(enabled, edits);
     try {
-      await frame.executeJavaScript(code, true);
+      await runInFrame(code);
       return true;
     } catch (error) {
       console.warn("[mobile-webviewer] raw page element editor skipped", error);
       if (enabled) new Notice("网页元素编辑器启动失败");
       return !enabled;
     }
+  }
+
+  /**
+   * Resolve a way to run the page-element editor inside a browser surface.
+   *
+   * `<webview>` goes through Electron's `executeJavaScript`. A same-origin
+   * `<iframe>` — which is what the mobile proxy pipeline produces, and the only
+   * kind a WebView platform can host — is driven through its own
+   * `contentWindow.eval`, so the editor script still runs with the GUEST's
+   * `document` in scope, exactly as it does inside a webview. A cross-origin
+   * frame throws on `contentDocument` and yields null here, which the caller
+   * turns into a real message rather than a dead button.
+   */
+  rawElementEditorHost(frame: BrowserSurfaceElement | null | undefined): ((code: string) => Promise<unknown>) | null {
+    if (!frame?.isConnected) return null;
+    if (this.isElectronWebview(frame)) {
+      if (!this.isBrowserSurfaceReady(frame)) return null;
+      const exec = frame.executeJavaScript;
+      if (typeof exec !== "function") return null;
+      return (code) => Promise.resolve(exec.call(frame, code, true));
+    }
+    if (frame.tagName.toLowerCase() !== "iframe") return null;
+    let view: Window | null = null;
+    try {
+      view = (frame as HTMLIFrameElement).contentWindow;
+      // Touching `document` is the actual same-origin probe: a cross-origin
+      // WindowProxy hands out a window object happily and only throws here.
+      if (!view?.document) return null;
+    } catch {
+      return null;
+    }
+    const target = view as Window & { eval: (source: string) => unknown };
+    return async (code) => target.eval(code);
   }
 
   noteWebRawElementEditorScript(enabled: boolean, edits: BrowserWebTextEdit[]): string {
@@ -14576,8 +14676,60 @@ export default class MobileWebviewerPlugin extends Plugin {
         })
         .finally(() => {
           if (embed.dataset.mwvRendering === this.processorSessionId) delete embed.dataset.mwvRendering;
+          // A render that loses its race leaves the surface blank and nothing
+          // re-arms it (see armEmbedRenderWatchdog).
+          this.armEmbedRenderWatchdog(embed, url, 0);
         });
     }
+  }
+
+  /**
+   * Has this surface actually painted?
+   *
+   * Both `renderEmbed` and `renderBingShellEmbed` abandon their `await`s when a
+   * newer render token supersedes them, and the winner can itself bail while
+   * losing its own race (a leaf detached mid-flight, a superseding processor
+   * pass). Nothing used to re-arm the loser, so the surface stayed empty until
+   * some later layout change happened to repaint it — which is the "home page
+   * sometimes doesn't open" report. The chrome is the cheapest proof of a
+   * finished paint: every terminal branch of both renderers installs one.
+   */
+  isEmbedPainted(embed: HTMLElement): boolean {
+    if (!embed.isConnected) return true;
+    if (!embed.matches(MWV_DEDUPE_ROOT_SELECTOR)) return true;
+    return Boolean(embed.querySelector(":scope > .mwv-browser-chrome")) ||
+      Boolean(embed.querySelector(":scope > .mwv-bing-note-content, :scope > .mwv-live-browser"));
+  }
+
+  /**
+   * Re-run a render whose result never landed.
+   *
+   * Retries are bounded and de-duplicated per embed: the newest run stamps
+   * `mwvWatchdog`, which turns every pending timer for that embed into a no-op,
+   * so a burst of layout events cannot stack passes.
+   */
+  armEmbedRenderWatchdog(embed: HTMLElement, url: string, attempt: number): void {
+    if (this.disposed || !embed.isConnected) return;
+    if (this.isEmbedPainted(embed)) return;
+    if (attempt >= EMBED_RENDER_WATCHDOG_ATTEMPTS) {
+      void this.addConsole("warn", "NoteWeb surface stayed empty after retries", url);
+      return;
+    }
+    const token = ++this.embedWatchdogSeq;
+    embed.dataset.mwvWatchdog = String(token);
+    window.setTimeout(() => {
+      if (this.disposed || !embed.isConnected) return;
+      if (embed.dataset.mwvWatchdog !== String(token)) return;
+      if (this.isEmbedPainted(embed)) return;
+      // Retry the URL this surface was actually asked for. Falling back to
+      // `noteBrowserUrl` first would silently navigate away from it whenever the
+      // embed's URL came from a live sibling rather than the setting — the retry
+      // must finish the paint that was lost, not paint something else.
+      const target = url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+      void this.renderEmbed(embed, target)
+        .catch((error) => console.warn("[mobile-webviewer] NoteWeb render retry skipped", error))
+        .finally(() => this.armEmbedRenderWatchdog(embed, target, attempt + 1));
+    }, EMBED_RENDER_WATCHDOG_DELAY_MS * (attempt + 1));
   }
 
   dedupeNoteBrowserEmbedRoots(root: HTMLElement): void {
@@ -15043,7 +15195,14 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   handleExternalLinkClick(event: MouseEvent): void {
-    if (event.defaultPrevented) return;
+    // A prevented click is NOT ours to skip. Core plugins register their
+    // listeners before community plugins, so Obsidian's own link handling has
+    // already run by the time this capture handler fires: the default may be
+    // prevented and `open-url` may already be in flight, which the desktop Web
+    // viewer core plugin turns into its own tab. Bailing out on
+    // `defaultPrevented` was exactly why a clicked link opened there instead of
+    // here. The decision is made on the link, and `noteExternalClaim` keeps one
+    // tap from being claimed twice when both paths see it.
     if (event.type === "click" && event.button !== 0) return;
     if (event.type === "auxclick" && event.button !== 1) return;
 
@@ -15066,6 +15225,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
+      this.noteExternalClaim(rawHref);
       runAsync(() => this.openExternalUrlWithDefaultMode(rawHref, true));
       return;
     }
@@ -15090,7 +15250,84 @@ export default class MobileWebviewerPlugin extends Plugin {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
+    this.noteExternalClaim(url);
     runAsync(() => this.openExternalUrlWithDefaultMode(url, true));
+  }
+
+  /** Record the link this plugin is about to open so `open-url` cannot re-claim it. */
+  noteExternalClaim(url: string): void {
+    this.externalClaim = { url, at: Date.now() };
+  }
+
+  /** True while `url` was claimed by this plugin moments ago (one tap, one open). */
+  private hasFreshExternalClaim(url: string): boolean {
+    return this.externalClaim.url === url && Date.now() - this.externalClaim.at < EXTERNAL_CLAIM_WINDOW_MS;
+  }
+
+  /**
+   * Obsidian's `open-url` is where every external link ends up — the reading
+   * view's anchors, and the links CodeMirror resolves in the editor, which never
+   * reach a click listener at all. The desktop Web viewer core plugin listens
+   * here too and, whenever its own "open external links" option is on, it
+   * preventDefaults and opens its own tab **without ever looking at
+   * `defaultPrevented`**. Registering on the same event is therefore the only
+   * way to route these links to this plugin: the link is claimed here, and the
+   * tab the core plugin just opened for it is closed again.
+   *
+   * A leaf that is already one of our own surfaces (or the core plugin's) is
+   * left alone — its navigation belongs to whoever owns it.
+   */
+  handleOpenUrlEvent(event: OpenUrlLikeEvent): void {
+    const detail = event?.detail ?? event;
+    const url = typeof detail?.url === "string" ? detail.url.trim() : "";
+    if (!/^https?:\/\//i.test(url)) return;
+    if (this.settings.defaultOpenMode === "obsidian") return;
+    if (this.hasFreshExternalClaim(url)) return;
+    const leaf = detail?.leaf ?? null;
+    const viewType = leaf?.view?.getViewType?.();
+    if (viewType === "webviewer" || viewType === "webviewer-history") return;
+    if (viewType === VIEW_TYPE) return;
+
+    // Stop Obsidian's own fallback (the system browser) from also acting on it.
+    try { event.preventDefault?.(); } catch { /* not a cancelable event on older builds */ }
+    void this.openExternalUrlWithDefaultMode(url, true);
+    this.noteExternalClaim(url);
+    this.discardWebViewerTabsOpenedFor(url);
+  }
+
+  /** Every tab the Web viewer core plugin currently owns. */
+  private webViewerLeaves(): Set<WorkspaceLeaf> {
+    const leaves = new Set<WorkspaceLeaf>();
+    for (const type of OBSIDIAN_WEB_VIEWER_TYPES) {
+      try {
+        for (const leaf of this.app.workspace.getLeavesOfType(type)) leaves.add(leaf);
+      } catch {
+        // The core plugin is disabled/absent: nothing to sweep.
+      }
+    }
+    return leaves;
+  }
+
+  /**
+   * Close the Web viewer tab the core plugin opened for this same hand-off.
+   *
+   * Only tabs that did not exist before the claim are touched, and only while
+   * the claim is still fresh — so a Web viewer tab the user opened themselves is
+   * never closed. Two sweeps, because the core plugin may create its leaf after
+   * this returns.
+   */
+  private discardWebViewerTabsOpenedFor(url: string): void {
+    const before = this.webViewerLeaves();
+    const sweep = () => {
+      if (this.disposed || !this.hasFreshExternalClaim(url)) return;
+      const opened = this.webViewerLeaves();
+      for (const leaf of opened) {
+        if (before.has(leaf)) continue;
+        try { leaf.detach(); } catch (error) { console.warn("[mobile-webviewer] web viewer hand-off cleanup skipped", error); }
+      }
+    };
+    window.setTimeout(sweep, 60);
+    window.setTimeout(sweep, 300);
   }
 
   async handleGlobalBingEvent(event: Event): Promise<void> {
@@ -16549,20 +16786,50 @@ export default class MobileWebviewerPlugin extends Plugin {
     strip.toggleClass("mwv-embed-tabstrip-in-header", strip.parentElement === header);
     this.bindEmbedTabstrip(strip, embed);
 
-    // The row shows the up-to-12 MOST RECENT tabs: the record grows to the
-    // right, so the tail holds the tabs the user is actually working with.
-    const wantedTabs = this.settings.browserTabs.slice(-12);
+    // The strip is no longer a row of chips. On a phone the row took the whole
+    // header (and stayed behind in an ordinary note's header when the leaf was
+    // reused); it also had to be capped at twelve tabs because a header has no
+    // room to scroll. What is left is one "Tabs" button showing the active
+    // tab's name and the tab count, plus a panel that holds the FULL list and
+    // the "+" action and only exists while the button is open. Open/closed is a
+    // class on the strip, so the panel's nodes stay in the same place across
+    // re-renders and the delegated listener keeps working.
+    const tabs = this.settings.browserTabs;
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
-    const wantedIds = new Set(wantedTabs.map((tab) => tab.id));
-    for (const node of Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab"))) {
+    const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[tabs.length - 1];
+    const activeLabel = activeTab ? activeTab.title || hostName(activeTab.url || "") : this.tr("tabs");
+
+    const toggle = this.ensureEmbedTabstripToggle(strip);
+    // Upgrade sweep: before this revision the strip WAS the row, so a strip that
+    // has been alive across an update still carries its old chips and its old
+    // "+" as direct children. They are never searched again (the panel owns
+    // that role now), so without this they would sit in the header forever as
+    // unresponsive ghosts next to the button.
+    for (const node of Array.from(strip.children)) {
+      if (node === toggle || node.classList.contains("mwv-embed-tab-panel")) continue;
+      node.remove();
+    }
+    const toggleTitle = toggle.querySelector<HTMLElement>(".mwv-embed-tab-toggle-title");
+    if (toggleTitle && toggleTitle.textContent !== activeLabel) toggleTitle.textContent = activeLabel;
+    const toggleCount = toggle.querySelector<HTMLElement>(".mwv-embed-tab-toggle-count");
+    const countText = String(tabs.length);
+    if (toggleCount && toggleCount.textContent !== countText) toggleCount.textContent = countText;
+    toggle.setAttribute("title", activeLabel);
+    toggle.setAttribute("aria-label", `${this.tr("tabs")}: ${activeLabel} (${countText})`);
+    toggle.toggleClass("is-active", strip.hasClass("is-open"));
+
+    const panel = this.ensureEmbedTabstripPanel(strip);
+    panel.toggleClass("is-open", strip.hasClass("is-open"));
+    const wantedIds = new Set(tabs.map((tab) => tab.id));
+    for (const node of Array.from(panel.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab"))) {
       if (!wantedIds.has(node.dataset.mwvTabId ?? "")) node.remove();
     }
     const addButton = this.ensureEmbedTabstripAdd(embed, strip);
-    let cursor: ChildNode | null = strip.firstChild;
-    for (const tab of wantedTabs) {
+    let cursor: ChildNode | null = panel.firstChild;
+    for (const tab of tabs) {
       let item = this.findEmbedTabstripItem(strip, tab.id);
       if (!item) {
-        item = strip.createDiv({ cls: "mwv-embed-tab" });
+        item = panel.createDiv({ cls: "mwv-embed-tab" });
         item.dataset.mwvTabId = tab.id;
         item.createSpan({ cls: "mwv-embed-tab-title" });
         const close = item.createSpan({
@@ -16577,10 +16844,55 @@ export default class MobileWebviewerPlugin extends Plugin {
       item.setAttribute("title", tab.url || label);
       item.toggleClass("is-active", tab.id === activeId);
       // Reordering moves the existing node; it never recreates it.
-      if (item !== cursor) strip.insertBefore(item, cursor);
+      if (item !== cursor) panel.insertBefore(item, cursor);
       cursor = item.nextSibling;
     }
-    if (addButton.parentElement !== strip || strip.lastElementChild !== addButton) strip.appendChild(addButton);
+    if (addButton.parentElement !== panel || panel.lastElementChild !== addButton) panel.appendChild(addButton);
+  }
+
+  /**
+   * The one button that replaced the tab row. It owns no state of its own: the
+   * strip's `is-open` class is the single source of truth, and the button is
+   * rebuilt from it on every render so a re-render can never leave the arrow
+   * and the panel disagreeing.
+   */
+  ensureEmbedTabstripToggle(strip: HTMLElement): HTMLElement {
+    let toggle = strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-toggle");
+    if (!toggle) {
+      toggle = strip.createDiv({
+        cls: "mwv-embed-tab-toggle",
+        attr: { role: "button", tabindex: "0", "data-mwv-tab-action": "toggle" }
+      });
+      setIcon(toggle.createSpan({ cls: "mwv-embed-tab-toggle-icon" }), "files");
+      toggle.createSpan({ cls: "mwv-embed-tab-toggle-title" });
+      toggle.createSpan({ cls: "mwv-embed-tab-toggle-count" });
+      // Clicking is handled by the strip's delegated listener so a reloaded
+      // plugin reclaims the button along with the rest of the row.
+    }
+    return toggle;
+  }
+
+  /**
+   * The panel that holds the tab list. It is a sibling of the toggle inside the
+   * strip — not a document-level overlay — because the strip already lives in
+   * the leaf header, so the panel inherits the header's stacking context and
+   * cannot be clipped by the note scroller. It is rendered even while closed
+   * (CSS hides it) so tab nodes keep their identity across open/close and the
+   * delegated listener never has to re-bind.
+   */
+  ensureEmbedTabstripPanel(strip: HTMLElement): HTMLElement {
+    let panel = strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-panel");
+    if (!panel) panel = strip.createDiv({ cls: "mwv-embed-tab-panel", attr: { role: "list" } });
+    return panel;
+  }
+
+  /** Close every open tab panel. Called when the user taps outside the strip. */
+  closeEmbedTabstripPanels(root: ParentNode = appDocument()): void {
+    root.querySelectorAll<HTMLElement>(".mwv-embed-tabstrip.is-open").forEach((strip) => {
+      strip.removeClass("is-open");
+      strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-panel")?.removeClass("is-open");
+      strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-toggle")?.removeClass("is-active");
+    });
   }
 
   /**
@@ -16648,9 +16960,25 @@ export default class MobileWebviewerPlugin extends Plugin {
       // surface at tap time instead (see resolveTabstripEmbed).
       const surface = this.resolveTabstripEmbed(strip, embed);
       if (!surface) return;
+      const panel = strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-panel");
+      const closePanel = () => {
+        strip.removeClass("is-open");
+        panel?.removeClass("is-open");
+        strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-toggle")?.removeClass("is-active");
+      };
+      if (target.closest(".mwv-embed-tab-toggle")) {
+        event.preventDefault();
+        event.stopPropagation();
+        // Open/closed lives on the strip; re-render so the button's state, the
+        // panel's class and the tab list are all refreshed from one place.
+        strip.toggleClass("is-open", !strip.hasClass("is-open"));
+        this.renderEmbedTabstrip(surface);
+        return;
+      }
       if (target.closest(".mwv-embed-tab-new")) {
         event.preventDefault();
         event.stopPropagation();
+        closePanel();
         void this.newEmbedBrowserTab(surface);
         return;
       }
@@ -16660,9 +16988,30 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (!tabId) return;
       event.preventDefault();
       event.stopPropagation();
+      // Switching or closing is a decision: collapse the list and show the page.
+      closePanel();
       if (target.closest(".mwv-embed-tab-close")) void this.closeEmbedBrowserTab(surface, tabId);
       else void this.switchEmbedBrowserTab(surface, tabId);
     });
+    // A tap anywhere outside the strip dismisses the panel. The marker records
+    // WHICH instance bound the listener, not merely that one did: the strip node
+    // survives a plugin reload, so a plain boolean would make the new instance
+    // skip binding while the old closure went inert on its ownership check —
+    // leaving a panel that opens but can never be dismissed by tapping away.
+    const dismissible = strip as HTMLElement & { _mwvTabDismissOwner?: unknown };
+    if (dismissible._mwvTabDismissOwner !== this) {
+      dismissible._mwvTabDismissOwner = this;
+      strip.ownerDocument.addEventListener("click", (event) => {
+        if (dismissible._mwvTabDismissOwner !== this) return;
+        if (!strip.hasClass("is-open")) return;
+        const target = event.target as HTMLElement | null;
+        if (target && strip.contains(target)) return;
+        // Tap went somewhere else entirely: collapse the list. Routed through the
+        // shared helper so the button, the panel class and the strip class can
+        // never drift apart in one of the two close paths.
+        this.closeEmbedTabstripPanels(strip.ownerDocument);
+      }, true);
+    }
     // Desktop right-click on a tab: the batch close actions that a long-press
     // would offer on mobile. Same owner guard as the click path above.
     strip.addEventListener("contextmenu", (event) => {
@@ -16756,15 +17105,21 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   findEmbedTabstripItem(strip: HTMLElement, tabId: string): HTMLElement | null {
-    return Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab")).find((node) => node.dataset.mwvTabId === tabId) ?? null;
+    // Tabs live inside the panel now, so this is no longer a direct-child
+    // query. It stays scoped to this one strip so a second surface can never
+    // hand back the wrong node.
+    return Array.from(strip.querySelectorAll<HTMLElement>(".mwv-embed-tab"))
+      .find((node) => node.dataset.mwvTabId === tabId) ?? null;
   }
 
   ensureEmbedTabstripAdd(embed: HTMLElement, strip: HTMLElement): HTMLElement {
     void embed;
-    let add = strip.querySelector<HTMLElement>(":scope > .mwv-embed-tab-new");
+    const host = this.ensureEmbedTabstripPanel(strip);
+    let add = host.querySelector<HTMLElement>(":scope > .mwv-embed-tab-new");
     if (!add) {
-      add = strip.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
+      add = host.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
       setIcon(add, "plus");
+      add.createSpan({ cls: "mwv-embed-tab-new-label", text: this.tr("newTab") });
       // The click is handled by the strip's delegated listener
       // (bindEmbedTabstrip) so a reloaded plugin can reclaim the row instead of
       // inheriting a listener bound to the instance that no longer runs.
@@ -21176,7 +21531,16 @@ export default class MobileWebviewerPlugin extends Plugin {
   applyObsidianMoreButtonVisibility(): void {
     const hide = this.settings.hideObsidianMoreButton !== false;
     for (const leaf of [...this.app.workspace.getLeavesOfType("markdown"), ...this.app.workspace.getLeavesOfType(VIEW_TYPE)]) {
-      leaf.view?.containerEl?.toggleClass("mwv-hide-ob-more", hide);
+      const container = leaf.view?.containerEl;
+      if (!container) continue;
+      // The marker hides Obsidian's own "More options" button because this
+      // plugin's browser chrome replaces it. An ordinary note has no such
+      // replacement, yet the marker used to be applied to every Markdown leaf —
+      // which silently hid that button in ordinary notes too. Ownership decides
+      // now: the class is set only while the leaf really hosts a NoteWeb
+      // surface, and removed the moment it stops.
+      const ownsSurface = leaf.view?.getViewType?.() === VIEW_TYPE || this.isNoteBrowserLeaf(leaf);
+      container.toggleClass("mwv-hide-ob-more", hide && ownsSurface);
     }
   }
 
