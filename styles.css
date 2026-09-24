@@ -4185,12 +4185,88 @@
 .mwv-browser-chrome .mwv-embed-tabstrip::-webkit-scrollbar {
   display: none;
 }
-.mwv-embed-tab {
+
+/* --- Tabs button + panel (replaces the always-on chip row) --- */
+/* One button per surface; the list itself only exists while it is open. The
+   panel hangs off the strip inside the leaf header, so it inherits the header's
+   stacking context instead of being clipped by the note scroller. */
+.mwv-embed-tabstrip {
+  position: relative;
+}
+.mwv-embed-tab-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  max-width: 150px;
+  gap: 6px;
+  min-width: 0;
+  max-width: 52vw;
   padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  flex: 0 1 auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.mwv-embed-tab-toggle.is-active {
+  border-color: var(--interactive-accent);
+  color: var(--text-accent);
+}
+.mwv-embed-tab-toggle-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.mwv-embed-tab-toggle-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.mwv-embed-tab-toggle-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 34vw;
+}
+.mwv-embed-tab-toggle-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.mwv-embed-tab-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--layer-menu, 30);
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  max-width: min(78vw, 320px);
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.26);
+}
+.mwv-embed-tabstrip.is-open > .mwv-embed-tab-panel,
+.mwv-embed-tab-panel.is-open {
+  display: flex;
+}
+.mwv-embed-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
   border-radius: 8px;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
@@ -4209,7 +4285,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 110px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .mwv-embed-tab .mwv-embed-tab-close {
   display: inline-flex;
@@ -4224,17 +4301,26 @@
   height: 12px;
 }
 .mwv-embed-tab-new {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
   flex: 0 0 auto;
   border-radius: 8px;
   background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
+  border: 1px dashed var(--background-modifier-border);
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+.mwv-embed-tab-new-label {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- NoteWeb (Note + Web fronts): browser tabs share the header row with the native buttons --- */
@@ -4242,6 +4328,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  /* The tab panel is absolutely positioned inside the strip, so the header must
+     not clip its children any more. */
+  overflow: visible;
 }
 .workspace-leaf-content.mwv-note-browser-view .view-header-title,
 .workspace-leaf-content.mwv-note-browser-view .view-header-title-container,
@@ -4249,7 +4338,7 @@
   display: none;
 }
 .workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   margin: 0 2px;
   padding: 0;
@@ -4298,9 +4387,10 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  overflow-x: auto;
+  /* The panel is absolutely positioned inside the strip; a scrolling host would
+     clip it, so this row never scrolls any more. */
+  overflow: visible;
   padding: 0 0 2px;
-  scrollbar-width: none;
 }
 .mwv-browser-chrome .mwv-browser-address {
   display: flex !important;
