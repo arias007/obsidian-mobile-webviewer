@@ -4360,18 +4360,12 @@
   padding: 0;
   align-items: center;
 }
-/* Desktop keeps the classic chip row: it stretches so the native action
+/* Desktop keeps the classic 0.4.28 chip row: a plain block host whose inline
+   chips flow and wrap, stretching (flex: 1 1 auto) so the native action
    buttons stay pinned at the right end of the header. The phone's single
    button keeps its compact fixed size. */
 .workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode {
   flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-}
-.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode::-webkit-scrollbar {
-  display: none;
 }
 .workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-panel-mode {
   flex: 0 0 auto;
@@ -4420,9 +4414,19 @@
   align-items: center;
   gap: 4px;
   /* The panel is absolutely positioned inside the strip; a scrolling host would
-     clip it, so this row never scrolls any more. */
+     clip it, so the phone shape never scrolls. */
   overflow: visible;
   padding: 0 0 2px;
+}
+/* Desktop chip row follows 0.4.28 exactly: the strip scrolls horizontally with
+   a hidden scrollbar instead of spilling over the actions area. */
+.mwv-browser-chrome .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.mwv-browser-chrome .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode::-webkit-scrollbar {
+  display: none;
 }
 .mwv-browser-chrome .mwv-browser-address {
   display: flex !important;
