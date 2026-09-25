@@ -4261,12 +4261,12 @@
   display: flex;
 }
 .mwv-embed-tab {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
+  gap: 4px;
+  max-width: 150px;
   box-sizing: border-box;
-  padding: 5px 8px;
+  padding: 3px 8px;
   border-radius: 8px;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
@@ -4274,6 +4274,14 @@
   flex: 0 0 auto;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+/* Inside the mobile dropdown the same nodes become full-width list entries. */
+.mwv-embed-tab-panel .mwv-embed-tab {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: none;
+  padding: 5px 8px;
 }
 .mwv-embed-tab.is-active {
   background: var(--interactive-accent);
@@ -4285,8 +4293,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 110px;
+}
+.mwv-embed-tab-panel .mwv-embed-tab .mwv-embed-tab-title {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: none;
 }
 .mwv-embed-tab .mwv-embed-tab-close {
   display: inline-flex;
@@ -4301,20 +4313,25 @@
   height: 12px;
 }
 .mwv-embed-tab-new {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 5px 8px;
+  width: 24px;
   flex: 0 0 auto;
   border-radius: 8px;
   background: var(--background-secondary);
-  border: 1px dashed var(--background-modifier-border);
+  border: 1px solid var(--background-modifier-border);
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+/* Mobile dropdown tail: full-width dashed entry with a label. */
+.mwv-embed-tab-panel .mwv-embed-tab-new {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px dashed var(--background-modifier-border);
 }
 .mwv-embed-tab-new-label {
   font-size: 12px;
@@ -4338,11 +4355,26 @@
   display: none;
 }
 .workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip {
-  flex: 0 0 auto;
   min-width: 0;
   margin: 0 2px;
   padding: 0;
   align-items: center;
+}
+/* Desktop keeps the classic chip row: it stretches so the native action
+   buttons stay pinned at the right end of the header. The phone's single
+   button keeps its compact fixed size. */
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode::-webkit-scrollbar {
+  display: none;
+}
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-panel-mode {
+  flex: 0 0 auto;
 }
 
 /* --- RealWeb immersive: chrome collapses to a single address row --- */

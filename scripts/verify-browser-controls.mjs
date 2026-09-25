@@ -112,7 +112,9 @@ const METHODS = [
   "renderBrowserChrome",
   "renderTabStrip",
   "isEmbedPainted",
-  "armEmbedRenderWatchdog"
+  "armEmbedRenderWatchdog",
+  "renderEmbedTabstripPanelMode",
+  "renderEmbedTabstripRowMode"
 ];
 
 function buildMethodTable(src) {
@@ -143,6 +145,7 @@ function buildMethodTable(src) {
     "MWV_DEDUPE_ROOT_SELECTOR",
     "EMBED_RENDER_WATCHDOG_ATTEMPTS",
     "EMBED_RENDER_WATCHDOG_DELAY_MS",
+    "Platform",
     `${js}\nreturn __M;`
   );
   return factory;
@@ -356,7 +359,8 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     MAX_BROWSER_TABS,
     ".mwv-root, .mwv-note-embed, .mwv-embed",
     3,
-    260
+    260,
+    { isMobile: true }
   );
 
   const ctx = Object.assign(table, {
@@ -375,6 +379,9 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     ensureEmbedTabstripPanel: table.ensureEmbedTabstripPanel,
     closeEmbedTabstripPanels: table.closeEmbedTabstripPanels,
     isEmbedPainted: table.isEmbedPainted,
+    renderEmbedTabstripPanelMode: table.renderEmbedTabstripPanelMode,
+    renderEmbedTabstripRowMode: table.renderEmbedTabstripRowMode,
+    Platform: { isMobile: true },
     armEmbedRenderWatchdog: table.armEmbedRenderWatchdog,
     bindEmbedTabstrip: table.bindEmbedTabstrip,
     bindEmbedChrome: table.bindEmbedChrome,

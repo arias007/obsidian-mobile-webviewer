@@ -16465,29 +16465,43 @@ export default class MobileWebviewerPlugin extends Plugin {
     strip.toggleClass("mwv-embed-tabstrip-in-header", strip.parentElement === header);
     this.bindEmbedTabstrip(strip, embed);
 
-    // The strip is no longer a row of chips. On a phone the row took the whole
-    // header (and stayed behind in an ordinary note's header when the leaf was
-    // reused); it also had to be capped at twelve tabs because a header has no
-    // room to scroll. What is left is one "Tabs" button showing the active
-    // tab's name and the tab count, plus a panel that holds the FULL list and
-    // the "+" action and only exists while the button is open. Open/closed is a
-    // class on the strip, so the panel's nodes stay in the same place across
-    // re-renders and the delegated listener keeps working.
+    // Two presentations of the same strip. The phone gets one "Tabs" button +
+    // dropdown panel (a chip row ate the whole mobile header); the desktop
+    // keeps the classic side-by-side chip row it always had. The two modes
+    // sweep each other's leftovers, so a plugin update can switch the shape
+    // without leaving ghost controls behind. The right-hand view-actions
+    // buttons (web toggle, NoteDraw wand, More, …) are untouched by both.
+    if (Platform.isMobile) {
+      strip.addClass("mwv-embed-tabstrip-panel-mode");
+      strip.removeClass("mwv-embed-tabstrip-row-mode");
+      this.renderEmbedTabstripPanelMode(strip, embed);
+    } else {
+      strip.addClass("mwv-embed-tabstrip-row-mode");
+      strip.removeClass("mwv-embed-tabstrip-panel-mode");
+      this.renderEmbedTabstripRowMode(strip, embed);
+    }
+  }
+
+  /**
+   * Mobile presentation: one "Tabs" button showing the active tab's name and
+   * the tab count, plus a panel that holds the FULL list and the "+" action.
+   * Open/closed is a class on the strip, so the panel's nodes stay in the same
+   * place across re-renders and the delegated listener keeps working.
+   */
+  renderEmbedTabstripPanelMode(strip: HTMLElement, embed: HTMLElement): void {
+    // Sweep leftovers from the desktop row shape: old chips and a square "+"
+    // as direct children would sit in the header as unresponsive ghosts.
+    for (const node of Array.from(strip.children)) {
+      if (node.classList.contains("mwv-embed-tab-toggle")) continue;
+      if (node.classList.contains("mwv-embed-tab-panel")) continue;
+      node.remove();
+    }
     const tabs = this.settings.browserTabs;
     const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
     const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[tabs.length - 1];
     const activeLabel = activeTab ? activeTab.title || hostName(activeTab.url || "") : this.tr("tabs");
 
     const toggle = this.ensureEmbedTabstripToggle(strip);
-    // Upgrade sweep: before this revision the strip WAS the row, so a strip that
-    // has been alive across an update still carries its old chips and its old
-    // "+" as direct children. They are never searched again (the panel owns
-    // that role now), so without this they would sit in the header forever as
-    // unresponsive ghosts next to the button.
-    for (const node of Array.from(strip.children)) {
-      if (node === toggle || node.classList.contains("mwv-embed-tab-panel")) continue;
-      node.remove();
-    }
     const toggleTitle = toggle.querySelector<HTMLElement>(".mwv-embed-tab-toggle-title");
     if (toggleTitle && toggleTitle.textContent !== activeLabel) toggleTitle.textContent = activeLabel;
     const toggleCount = toggle.querySelector<HTMLElement>(".mwv-embed-tab-toggle-count");
@@ -16527,6 +16541,51 @@ export default class MobileWebviewerPlugin extends Plugin {
       cursor = item.nextSibling;
     }
     if (addButton.parentElement !== panel || panel.lastElementChild !== addButton) panel.appendChild(addButton);
+  }
+
+  /**
+   * Desktop presentation: the classic side-by-side chip row. The row shows the
+   * up-to-12 MOST RECENT tabs: the record grows to the right, so the tail
+   * holds the tabs the user is actually working with. The "+" is the small
+   * square it always was, and the leaf-header action buttons stay right of it.
+   */
+  renderEmbedTabstripRowMode(strip: HTMLElement, embed: HTMLElement): void {
+    // Sweep leftovers from the mobile panel shape.
+    for (const node of Array.from(strip.children)) {
+      if (node.classList.contains("mwv-embed-tab-toggle") || node.classList.contains("mwv-embed-tab-panel")) node.remove();
+    }
+    strip.removeClass("is-open");
+    const tabs = this.settings.browserTabs;
+    const wantedTabs = tabs.slice(-12);
+    const activeId = embed.dataset.mwvActiveTabId || this.settings.activeBrowserTabId;
+    const wantedIds = new Set(wantedTabs.map((tab) => tab.id));
+    for (const node of Array.from(strip.querySelectorAll<HTMLElement>(":scope > .mwv-embed-tab"))) {
+      if (!wantedIds.has(node.dataset.mwvTabId ?? "")) node.remove();
+    }
+    const addButton = this.ensureEmbedTabstripAdd(embed, strip);
+    let cursor: ChildNode | null = strip.firstChild;
+    for (const tab of wantedTabs) {
+      let item = this.findEmbedTabstripItem(strip, tab.id);
+      if (!item) {
+        item = strip.createDiv({ cls: "mwv-embed-tab" });
+        item.dataset.mwvTabId = tab.id;
+        item.createSpan({ cls: "mwv-embed-tab-title" });
+        const close = item.createSpan({
+          cls: "mwv-embed-tab-close",
+          attr: { "aria-label": this.tr("close"), role: "button", "data-mwv-tab-action": "close" }
+        });
+        setIcon(close, "x");
+      }
+      const label = tab.title || hostName(tab.url || "");
+      const titleNode = item.querySelector<HTMLElement>(".mwv-embed-tab-title");
+      if (titleNode && titleNode.textContent !== label) titleNode.textContent = label;
+      item.setAttribute("title", tab.url || label);
+      item.toggleClass("is-active", tab.id === activeId);
+      // Reordering moves the existing node; it never recreates it.
+      if (item !== cursor) strip.insertBefore(item, cursor);
+      cursor = item.nextSibling;
+    }
+    if (addButton.parentElement !== strip || strip.lastElementChild !== addButton) strip.appendChild(addButton);
   }
 
   /**
@@ -16795,15 +16854,23 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   ensureEmbedTabstripAdd(embed: HTMLElement, strip: HTMLElement): HTMLElement {
     void embed;
-    const host = this.ensureEmbedTabstripPanel(strip);
+    // The "+" lives in the panel's tail on a phone (full-width row) and is the
+    // small square at the end of the chip row on desktop.
+    const host = Platform.isMobile ? this.ensureEmbedTabstripPanel(strip) : strip;
     let add = host.querySelector<HTMLElement>(":scope > .mwv-embed-tab-new");
     if (!add) {
       add = host.createDiv({ cls: "mwv-embed-tab-new", attr: { "aria-label": this.tr("newTab"), title: this.tr("newTab") } });
       setIcon(add, "plus");
-      add.createSpan({ cls: "mwv-embed-tab-new-label", text: this.tr("newTab") });
+      if (Platform.isMobile) add.createSpan({ cls: "mwv-embed-tab-new-label", text: this.tr("newTab") });
       // The click is handled by the strip's delegated listener
       // (bindEmbedTabstrip) so a reloaded plugin can reclaim the row instead of
       // inheriting a listener bound to the instance that no longer runs.
+    }
+    if (!Platform.isMobile) {
+      // A "+" that was previously created inside the panel (or the label span
+      // from the mobile shape) must not survive on the desktop row.
+      add.querySelector<HTMLElement>(":scope > .mwv-embed-tab-new-label")?.remove();
+      if (add.parentElement !== strip) strip.appendChild(add);
     }
     return add;
   }
