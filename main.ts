@@ -16211,6 +16211,24 @@ export default class MobileWebviewerPlugin extends Plugin {
       // reactivated parked tab. Callers drive url-sync through the active
       // frame (the sameWebPage checks), so nothing is reloaded here and the
       // page keeps its live document, history and scroll position.
+      // A destroyed-marked webview that is still mounted is a zombie from a
+      // DOM move: force one reload so a fresh dom-ready rebuilds the guest
+      // and restores the ready bookkeeping, otherwise every later gated
+      // action (the Notedraw wand above all) silently no-ops on it.
+      const zombie = activeFrame as BrowserSurfaceElement;
+      if (this.isElectronWebview(zombie) && zombie._mwvDestroyed === true) {
+        zombie._mwvDestroyed = false;
+        zombie._mwvReady = false;
+        try {
+          const live = this.safeWebviewUrl(zombie);
+          if (live && live !== "about:blank") {
+            if (zombie.loadURL) zombie.loadURL(live);
+            else zombie.src = live;
+          }
+        } catch {
+          // Guest may already be rebuilding; dom-ready will settle the flags.
+        }
+      }
       this.notifyNoteDrawWebviewChanged(embed);
       return;
     }
@@ -20333,7 +20351,16 @@ export default class MobileWebviewerPlugin extends Plugin {
       listeners.push([type, handler]);
     };
     const onDomReady: EventListener = () => {
-      if (!webview.isConnected || webview._mwvDestroyed) return;
+      if (!webview.isConnected) return;
+      // A webview that was moved in the DOM (tab park -> promote, embed
+      // re-render) fires 'destroyed' for its old guest and then a fresh
+      // dom-ready for the rebuilt one. Treating the stale destroyed flag as
+      // fatal here left a perfectly alive page permanently marked destroyed:
+      // isBrowserSurfaceReady stayed false forever, so the Notedraw wand
+      // could never inject the page-element editor and every other gated
+      // action silently no-oped. dom-ready on a connected element IS the
+      // proof the guest is alive again.
+      if (webview._mwvDestroyed) webview._mwvDestroyed = false;
       webview._mwvReady = true;
       const pendingUrl = webview.dataset.mwvPendingUrl;
       delete webview.dataset.mwvPendingUrl;
@@ -20837,7 +20864,16 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   setBrowserSurfaceUrl(surface: BrowserSurfaceElement, url: string): void {
     if (this.isElectronWebview(surface)) {
-      if (surface._mwvDestroyed === true || !surface.isConnected) return;
+      if (!surface.isConnected) return;
+      // A stale destroyed flag must not wedge the frame. The flag is set when
+      // the guest is torn down (DOM moves, renderer death), but this same
+      // navigation is the thing that rebuilds the guest and fires a fresh
+      // dom-ready. Refusing to navigate here made a destroyed-marked frame
+      // permanent: no navigation -> no dom-ready -> the flag never cleared ->
+      // isBrowserSurfaceReady stayed false and the Notedraw wand could never
+      // inject the element editor. Reset the flag and let the dom-ready
+      // handler own the authoritative ready/destroyed bookkeeping.
+      if (surface._mwvDestroyed === true) surface._mwvDestroyed = false;
       // The UA must be selected before the main document request. Bing's
       // legacy mobile variant otherwise returns a malformed homepage even
       // though all of its stylesheets load successfully.
