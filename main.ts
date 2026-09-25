@@ -236,9 +236,137 @@ const MWV_PROXY_BRIDGE_SOURCE = [
   "  var data = ev.data;",
   "  if (!data || typeof data !== 'object') return;",
   "  if (data.mwvFetchResult && typeof data.requestId === 'number') { resolveFetch(data.requestId, data); return; }",
+  "  if (data.mwvEditor) { applyElementEditor(data.mwvEditor); send('editor-ack', {enabled: !!(data.mwvEditor && data.mwvEditor.enabled), ok: true}); return; }",
   "  if (typeof data.mwvFind === 'string') findInPage(data.mwvFind, data.mwvDir >= 0 ? 1 : -1, data.requestId);",
   "  else if (data.mwvClearFind) clearFind();",
   "});",
+  "var editorApi = null;",
+  "function elementEditorPath(el){",
+  "  var parts = []; var cur = el;",
+  "  while (cur && cur !== document.body && cur.nodeType === 1) {",
+  "    var tag = String(cur.localName || '').toLowerCase();",
+  "    if (!tag || !cur.parentElement) return '';",
+  "    var sibs = []; var kids = cur.parentElement.children;",
+  "    for (var i = 0; i < kids.length; i++) { if (kids[i].localName === cur.localName) sibs.push(kids[i]); }",
+  "    parts.unshift(tag + ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')');",
+  "    cur = cur.parentElement;",
+  "  }",
+  "  return cur === document.body && parts.length ? 'body > ' + parts.join(' > ') : '';",
+  "}",
+  "// Page-element editor (the Notedraw 'select a page element' tool), driven",
+  "// entirely through postMessage. The host cannot eval() into a proxied",
+  "// document on mobile — Obsidian's CSP has no unsafe-eval, which silently",
+  "// killed every contentWindow.eval attempt — but this bridge already runs",
+  "// inside the document, so activation travels in through the same channel",
+  "// find-in-page uses and text edits travel back out as 'webnote' messages.",
+  "function applyElementEditor(cmd){",
+  "  var enabled = !!(cmd && cmd.enabled);",
+  "  if (editorApi) { try { editorApi.destroy(); } catch (e) {} editorApi = null; }",
+  "  if (!enabled || !document.body || !document.documentElement) return;",
+  "  var EDITABLE = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td,th,label,summary,figcaption,caption,pre,a,span,div';",
+  "  var BLOCKED = \"button,input,textarea,select,img,svg,canvas,video,audio,webview,iframe,[role='button'],[contenteditable='true']\";",
+  "  var MARKER = 'data-mwv-noteweb-selected';",
+  "  var style = document.createElement('style');",
+  "  style.id = 'mwv-noteweb-element-editor-style';",
+  "  style.textContent = 'html.mwv-noteweb-element-selecting, html.mwv-noteweb-element-selecting * { cursor: crosshair !important; } html.mwv-noteweb-element-selecting [' + MARKER + '=\"true\"] { cursor: text !important; outline: 2px solid #3b82f6 !important; outline-offset: 2px !important; }';",
+  "  var staleStyle = document.getElementById(style.id);",
+  "  if (staleStyle && staleStyle.parentNode) staleStyle.parentNode.removeChild(staleStyle);",
+  "  document.documentElement.appendChild(style);",
+  "  function normalize(v){ return String(v == null ? '' : v).replace(/\\s+/g, ' ').trim(); }",
+  "  function findSavedTarget(edit){",
+  "    var target = null;",
+  "    try { target = edit.path ? document.querySelector(edit.path) : null; } catch (e) {}",
+  "    var original = normalize(edit.originalText);",
+  "    var edited = normalize(edit.editedText);",
+  "    var currentText = target ? normalize(target.innerText) : '';",
+  "    if (target && (currentText === original || currentText === edited)) return target;",
+  "    var nodes = document.body.querySelectorAll(EDITABLE);",
+  "    for (var i = 0; i < nodes.length; i++) {",
+  "      var text = normalize(nodes[i].innerText);",
+  "      if (text && (text === original || text === edited)) return nodes[i];",
+  "    }",
+  "    return null;",
+  "  }",
+  "  var seedEdits = (cmd && cmd.edits) || [];",
+  "  for (var s = 0; s < seedEdits.length; s++) {",
+  "    var edit = seedEdits[s];",
+  "    if (!edit || edit.kind !== 'text' || !edit.path || typeof edit.editedText !== 'string') continue;",
+  "    var saved = findSavedTarget(edit);",
+  "    if (saved && normalize(saved.innerText) !== normalize(edit.editedText)) saved.innerText = edit.editedText;",
+  "  }",
+  "  var current = null; var originalText = ''; var previousEditable = null; var hadEditable = false;",
+  "  function sendEdit(el, before, after){",
+  "    var path = elementEditorPath(el);",
+  "    if (!path || normalize(before) === normalize(after)) return;",
+  "    send('webnote', {url: BASE, title: document.title || '', pageEdited: true, webEdit: {kind: 'text', path: path, originalText: String(before || ''), editedText: String(after || ''), updatedAt: new Date().toISOString()}});",
+  "  }",
+  "  function finish(){",
+  "    if (!current) return;",
+  "    var target = current; var before = originalText;",
+  "    current = null;",
+  "    target.removeAttribute(MARKER);",
+  "    if (hadEditable) target.setAttribute('contenteditable', previousEditable || '');",
+  "    else target.removeAttribute('contenteditable');",
+  "    target.removeAttribute('spellcheck');",
+  "    sendEdit(target, before, target.innerText || target.textContent || '');",
+  "  }",
+  "  function pickTarget(ev){",
+  "    var source = ev.target;",
+  "    if (ev.composedPath && typeof ev.composedPath === 'function') { try { var cpath = ev.composedPath(); if (cpath && cpath.length && cpath[0] instanceof Element) source = cpath[0]; } catch (e) {} }",
+  "    if (!(source instanceof Element) || !source.closest || source.closest(BLOCKED)) return null;",
+  "    var target = source.closest(EDITABLE);",
+  "    while (target && target !== document.body) {",
+  "      if (!target.closest(BLOCKED) && normalize(target.innerText)) return target;",
+  "      target = target.parentElement && target.parentElement.closest ? target.parentElement.closest(EDITABLE) : null;",
+  "    }",
+  "    return null;",
+  "  }",
+  "  function onClick(ev){",
+  "    var target = pickTarget(ev);",
+  "    if (!target) return;",
+  "    ev.preventDefault(); ev.stopPropagation();",
+  "    if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();",
+  "    finish();",
+  "    current = target;",
+  "    originalText = target.innerText || target.textContent || '';",
+  "    hadEditable = target.hasAttribute('contenteditable');",
+  "    previousEditable = target.getAttribute('contenteditable');",
+  "    target.setAttribute(MARKER, 'true');",
+  "    target.setAttribute('contenteditable', 'true');",
+  "    target.setAttribute('spellcheck', 'true');",
+  "    try { target.focus({preventScroll: true}); } catch (e) { try { target.focus(); } catch (e2) {} }",
+  "    try {",
+  "      var sel = window.getSelection(); var range = document.createRange();",
+  "      range.selectNodeContents(target);",
+  "      sel.removeAllRanges(); sel.addRange(range);",
+  "    } catch (e) {}",
+  "  }",
+  "  function onKeyDown(ev){",
+  "    if (!current) return;",
+  "    if (ev.key === 'Escape' || ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter')) { ev.preventDefault(); finish(); }",
+  "  }",
+  "  function onBlur(ev){",
+  "    if (!current || ev.target !== current) return;",
+  "    setTimeout(function(){ if (current && document.activeElement !== current) finish(); }, 80);",
+  "  }",
+  "  function onPageHide(){ finish(); }",
+  "  document.addEventListener('click', onClick, true);",
+  "  document.addEventListener('keydown', onKeyDown, true);",
+  "  document.addEventListener('blur', onBlur, true);",
+  "  window.addEventListener('pagehide', onPageHide, true);",
+  "  document.documentElement.classList.add('mwv-noteweb-element-selecting');",
+  "  editorApi = {",
+  "    destroy: function(){",
+  "      finish();",
+  "      document.removeEventListener('click', onClick, true);",
+  "      document.removeEventListener('keydown', onKeyDown, true);",
+  "      document.removeEventListener('blur', onBlur, true);",
+  "      window.removeEventListener('pagehide', onPageHide, true);",
+  "      document.documentElement.classList.remove('mwv-noteweb-element-selecting');",
+  "      if (style.parentNode) style.parentNode.removeChild(style);",
+  "    }",
+  "  };",
+  "}",
   "var INIT = window.__mwvInit || {};",
   "var cook = {};",
   "(function(){ var seed = INIT.cookies || {}; for (var k in seed) cook[k] = String(seed[k]); })();",
@@ -11984,7 +12112,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         return !enabled || Boolean(frame.isConnected && frame._mwvDestroyed !== true);
       }
       try {
-        await frame.executeJavaScript(code, true);
+        await this.withWebviewTimeout(frame.executeJavaScript(code, true), 8000, undefined);
         return true;
       } catch (error) {
         console.warn("[mobile-webviewer] raw page element editor skipped", error);
@@ -11994,19 +12122,28 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     // Mobile: there is no <webview> tag, so the page is painted into an
-    // <iframe>. A proxied page is same-origin and hosts the very same editor
-    // script. A DIRECT cross-origin frame cannot be reached from the host —
-    // that used to be a hard refusal, which is why Notedraw's select tool
-    // "simply did not work" in RealWeb on a phone. The page content is already
-    // flowing through our fetch pipeline for the embed-block probe, so instead
-    // of refusing we convert the frame to the same-origin proxy document and
-    // inject there; only a page we cannot even fetch still refuses.
+    // <iframe>. The proxied page carries the in-bridge editor, which is
+    // activated through postMessage — contentWindow.eval is NOT a reliable
+    // channel here because Obsidian's mobile CSP has no unsafe-eval, so every
+    // eval-based activation on a phone was silently swallowed even after the
+    // frame became same-origin. Only fall back to eval for same-origin frames
+    // where the bridge is absent, and convert a direct cross-origin frame to
+    // the proxy when the user explicitly enters editing (that conversion
+    // reloads the page, acceptable only at that moment).
+    if (frame && frame.tagName.toLowerCase() === "iframe" && this.proxyFrameState.has(frame)) {
+      const viaBridge = await this.activateProxyEditorViaMessage(frame, enabled, edits);
+      if (viaBridge) return true;
+    }
     let runInFrame = this.rawElementEditorHost(frame);
     if (!runInFrame && enabled && frame && frame.tagName.toLowerCase() === "iframe") {
       const editUrl = url;
       if (/^https?:\/\//i.test(editUrl) && frame.dataset.mwvProxyUrl !== editUrl) {
         const converted = await this.convertFrameToProxyForEditing(frame, editUrl);
-        if (converted) runInFrame = this.rawElementEditorHost(frame);
+        if (converted) {
+          const viaBridge = await this.activateProxyEditorViaMessage(frame, enabled, edits);
+          if (viaBridge) return true;
+          runInFrame = this.rawElementEditorHost(frame);
+        }
       }
     }
     if (!runInFrame) {
@@ -15473,6 +15610,14 @@ export default class MobileWebviewerPlugin extends Plugin {
    */
   reconcileNoteWebDocumentWithLiveSurface(embed: HTMLElement): void {
     const retainedFrame = embed.querySelector<BrowserSurfaceElement>(":scope > .mwv-live-browser > .mwv-live-frame");
+    if (!retainedFrame) return;
+    // A guest whose main-frame load failed must not drag the note back to its
+    // dead URL: the frame keeps reporting the unreachable target while the
+    // note already shows the correct reader/fallback for the page the user
+    // asked for. Reconciling here made every open of an unreachable site
+    // flash its error note and then snap back to whatever page was live
+    // before — and the fresh reader panel vanished with it.
+    if (retainedFrame.hasClass?.("has-load-error")) return;
     const liveUrl = retainedFrame ? this.safeBrowserSurfaceUrl(retainedFrame) : "";
     if (!liveUrl || !/^https?:\/\//i.test(liveUrl)) return;
     // Compare against the URL the note document was last painted for, not
@@ -19368,7 +19513,50 @@ export default class MobileWebviewerPlugin extends Plugin {
       .filter((rule) => rule.enabled && this.matchesUserScriptRule(rule, url));
   }
 
+  /**
+   * Electron's `executeJavaScript` promise never settles when the guest is
+   * inside a navigation window or mid-destroy — it neither resolves nor
+   * rejects. Every `await` on it is a place the reader/editor/autofill
+   * pipeline can freeze with the UI stuck on "extracting..." forever, so all
+   * call sites go through this bounded wrapper.
+   */
+  withWebviewTimeout<T>(promise: PromiseLike<T>, ms = 6000, fallback: T): Promise<T> {
+    return new Promise<T>((resolve) => {
+      let settled = false;
+      const timer = window.setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(fallback);
+        }
+      }, ms);
+      Promise.resolve(promise).then(
+        (value) => {
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(value);
+          }
+        },
+        () => {
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(fallback);
+          }
+        }
+      );
+    });
+  }
+
   buildFrameSandbox(allowDownloads = false): string {
+    // `allow-scripts` is unconditional: the in-document bridge (link
+    // interception, find-in-page, cookie/storage relay, and the Notedraw page
+    // element editor) cannot run without it, and with `jsDisabled` on a phone
+    // the whole proxy document used to go fully inert — which is the real
+    // reason Notedraw's select tool "did nothing" on those pages. The
+    // "page JavaScript disabled" semantics are enforced by stripping the
+    // page's own scripts in `rewriteProxyHtml` instead; only our bundled
+    // bridge remains, and it never loads external code.
     const tokens = [
       allowDownloads ? "allow-downloads" : "",
       "allow-forms",
@@ -19377,7 +19565,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       "allow-popups",
       "allow-popups-to-escape-sandbox",
       "allow-same-origin",
-      this.settings.jsDisabled ? "" : "allow-scripts",
+      "allow-scripts",
       "allow-top-navigation-by-user-activation"
     ];
     return tokens.filter(Boolean).join(" ");
@@ -19487,11 +19675,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
-  private readonly proxyFrameState = new WeakMap<BrowserSurfaceElement, { url: string; dispose: () => void }>();
+  private readonly proxyFrameState = new WeakMap<BrowserSurfaceElement, { url: string; dispose: () => void; editorActive?: boolean; editorEdits?: BrowserWebTextEdit[] }>();
   private proxyFindSeq = 0;
   private proxyProbeSeq = 0;
   private lastCrossViewSync = { url: "", at: 0 };
   private readonly proxyFindResolvers = new Map<number, (count: number) => void>();
+  /** Frames awaiting the bridge's editor-ack reply after a postMessage activation. */
+  private readonly proxyEditorAcks = new Map<BrowserSurfaceElement, (ok: boolean) => void>();
   /** Hosts observed refusing to be framed (X-Frame-Options / CSP), per session. */
   private readonly embedBlockedHostMemory = new Set<string>();
 
@@ -19527,10 +19717,13 @@ export default class MobileWebviewerPlugin extends Plugin {
     // neither touch `contentWindow.document` nor `eval` into it — every
     // RealWeb/NoteWeb element-selection attempt on a phone silently refused.
     // The proxied document is HTML we fetched and rewrote ourselves, so
-    // granting it the app's origin is the same trust boundary as the rest of
-    // the reader pipeline.
-    const tokens = ["allow-forms", "allow-modals", "allow-popups", "allow-popups-to-escape-sandbox", "allow-pointer-lock", "allow-same-origin"];
-    if (!this.settings.jsDisabled) tokens.push("allow-scripts");
+    // same-origin is a controlled environment, not an escape hatch.
+    // `allow-scripts` is also unconditional now: the bridge and the element
+    // editor are our own bundled ES5 code, and the user's "disable page
+    // JavaScript" preference is enforced by stripping the page's own scripts
+    // in `rewriteProxyHtml`, not by sandboxing away every script including
+    // ours (which made the proxy document fully inert before).
+    const tokens = ["allow-forms", "allow-modals", "allow-popups", "allow-popups-to-escape-sandbox", "allow-pointer-lock", "allow-same-origin", "allow-scripts"];
     return tokens.join(" ");
   }
 
@@ -19576,6 +19769,21 @@ export default class MobileWebviewerPlugin extends Plugin {
       // Subresource integrity fails once we re-host the document.
       doc.querySelectorAll("[integrity]").forEach((node) => node.removeAttribute("integrity"));
       doc.querySelectorAll("base").forEach((node) => node.remove());
+      // "Disable page JavaScript" is enforced here, at the document level,
+      // rather than by withholding the sandbox's allow-scripts token: the
+      // bundled bridge (link interception, find-in-page, cookie/storage relay,
+      // the Notedraw page-element editor) needs scripts to run at all, and
+      // with the old sandbox approach a jsDisabled user got a completely
+      // inert proxy page on the phone — every tool that runs inside the
+      // document died together with the page's own scripts.
+      if (this.settings?.jsDisabled) {
+        doc.querySelectorAll("script").forEach((node) => node.remove());
+        doc.querySelectorAll("*").forEach((node) => {
+          for (const attr of Array.from(node.attributes)) {
+            if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
+          }
+        });
+      }
       const head = doc.head ?? doc.documentElement;
       const base = doc.createElement("base");
       base.setAttribute("href", url);
@@ -19587,7 +19795,21 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  /**
+   * Short-lived cache for proxied top-level documents. NoteWeb <-> RealWeb
+   * switches and back/forward navigations used to pay a full network fetch
+   * every single time; a one-minute TTL keeps the common re-visit instant
+   * without ever serving stale content beyond the same editing session feel.
+   */
+  private readonly liveDocCache = new Map<string, { text: string; headers: Record<string, string>; at: number }>();
+  private static readonly LIVE_DOC_CACHE_TTL_MS = 60000;
+  private static readonly LIVE_DOC_CACHE_LIMIT = 8;
+
   async fetchLiveDocument(url: string): Promise<{ text: string; headers: Record<string, string> } | null> {
+    const cached = this.liveDocCache.get(url);
+    if (cached && Date.now() - cached.at < MobileWebviewerPlugin.LIVE_DOC_CACHE_TTL_MS) {
+      return { text: cached.text, headers: cached.headers };
+    }
     try {
       const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 12000));
       const headers = this.requestHeaders("text/html,application/xhtml+xml,*/*");
@@ -19599,7 +19821,13 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.captureSetCookies(url, response.headers);
       const contentType = headerValue(response.headers, "content-type") || "";
       if (contentType && !/text\/html|application\/xhtml/i.test(contentType)) return null;
-      return { text: response.text, headers: response.headers };
+      const doc = { text: response.text, headers: response.headers };
+      if (this.liveDocCache.size >= MobileWebviewerPlugin.LIVE_DOC_CACHE_LIMIT) {
+        const oldest = this.liveDocCache.keys().next();
+        if (!oldest.done) this.liveDocCache.delete(oldest.value);
+      }
+      this.liveDocCache.set(url, { ...doc, at: Date.now() });
+      return doc;
     } catch {
       return null;
     }
@@ -19652,6 +19880,28 @@ export default class MobileWebviewerPlugin extends Plugin {
         this.handleProxyStorageSet(pageUrl, String(data.kind ?? "local"), String(data.key ?? ""), data.value === null || data.value === undefined ? null : String(data.value));
         return;
       }
+      if (kind === "editor-ack") {
+        const resolve = this.proxyEditorAcks.get(frame);
+        if (resolve) {
+          this.proxyEditorAcks.delete(frame);
+          resolve(data.ok === true);
+        }
+        return;
+      }
+      if (kind === "webnote") {
+        // Page-element edits from the in-bridge editor. Same patch shape the
+        // desktop webview reports over its console bridge.
+        const pageUrl = String(data.url || "") || this.proxyFrameState.get(frame)?.url || "";
+        if (!pageUrl) return;
+        const webEdit = (data.webEdit && typeof data.webEdit === "object" ? data.webEdit : undefined) as BrowserWebTextEdit | undefined;
+        void callbacks.onWebNotePatch?.({
+          url: pageUrl,
+          title: typeof data.title === "string" ? data.title : "",
+          pageEdited: true,
+          webEdit
+        });
+        return;
+      }
       if (kind === "find-result") {
         const requestId = Number(data.requestId ?? 0);
         const resolve = this.proxyFindResolvers.get(requestId);
@@ -19663,6 +19913,45 @@ export default class MobileWebviewerPlugin extends Plugin {
     };
     window.addEventListener("message", onMessage);
     this.proxyFrameState.set(frame, { url: "", dispose: () => window.removeEventListener("message", onMessage) });
+  }
+
+  waitForProxyEditorAck(frame: BrowserSurfaceElement, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.proxyEditorAcks.delete(frame);
+        window.clearTimeout(timer);
+        resolve(ok);
+      };
+      const timer = window.setTimeout(() => done(false), timeoutMs);
+      this.proxyEditorAcks.set(frame, (ok) => done(ok));
+    });
+  }
+
+  /**
+   * Activate/deactivate the page-element editor inside a proxied frame through
+   * the postMessage bridge. Returns true only when the bridge confirms with
+   * its `editor-ack` reply, so a frame without the bridge (direct iframe) or a
+   * bridge that failed to boot falls through to the eval fallback in the
+   * caller instead of silently pretending the editor is running.
+   */
+  async activateProxyEditorViaMessage(frame: BrowserSurfaceElement | null | undefined, enabled: boolean, edits: BrowserWebTextEdit[], timeoutMs = 800): Promise<boolean> {
+    if (!frame?.isConnected || frame.tagName.toLowerCase() !== "iframe") return false;
+    if (!this.proxyFrameState.has(frame)) return false;
+    try {
+      (frame as HTMLIFrameElement).contentWindow?.postMessage({ mwvEditor: { enabled, edits: normalizeBrowserWebTextEdits(edits) } }, "*");
+    } catch {
+      return false;
+    }
+    const acked = await this.waitForProxyEditorAck(frame, timeoutMs);
+    const state = this.proxyFrameState.get(frame);
+    if (state) {
+      state.editorActive = acked ? enabled : false;
+      state.editorEdits = acked ? normalizeBrowserWebTextEdits(edits) : [];
+    }
+    return acked;
   }
 
   private static readonly STRIPPED_RESPONSE_HEADERS = new Set(["set-cookie", "content-encoding", "transfer-encoding", "content-length", "connection"]);
@@ -19751,6 +20040,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     frame.removeAttribute("src");
     frame.srcdoc = this.rewriteProxyHtml(rawHtml, url);
     void callbacks.onLoading?.(false, url);
+    // A re-render replaces the whole document, so the in-bridge element
+    // editor is gone. If the user was mid-selection, re-activate it in the
+    // fresh document (twice, the second pass covers a slow srcdoc boot).
+    if (state?.editorActive) {
+      const revive = () => void this.activateProxyEditorViaMessage(frame, true, state.editorEdits ?? [], 600);
+      window.setTimeout(revive, 150);
+      window.setTimeout(revive, 650);
+    }
   }
 
   async smartLoadBrowserFrame(frame: BrowserSurfaceElement, url: string, callbacks: BrowserSurfaceCallbacks = {}): Promise<void> {
@@ -19766,21 +20063,15 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     this.wireProxyBridge(frame, callbacks);
     // Hosts that already refused to be framed once (Bing does this
-    // intermittently by region) are served through the proxy immediately on
-    // every later visit. Without this memory every navigation re-gambled on a
-    // direct iframe, which is exactly the "home opens unreliably" pattern:
-    // same URL, different edge node, different X-Frame-Options.
-    if (this.embedBlockedHostMemory.has(hostName(clean))) {
-      const remembered = await this.fetchLiveDocument(clean);
-      if (!frame.isConnected) return;
-      if (remembered) {
-        this.renderProxyDocument(frame, clean, remembered.text, callbacks);
-        void callbacks.onNavigate?.(clean);
-        return;
-      }
-      // The remembered host became fetchable-transparent again; fall through
-      // and let the direct iframe try (the probe below re-records the block).
-    }
+    // intermittently by region) are watched by the parallel probe below, which
+    // swaps the frame to the built-in proxy as soon as the fetch confirms the
+    // block. That memory used to be served by a BLOCKING pre-fetch here —
+    // every navigation to a remembered host stalled behind a full document
+    // download before the frame even started loading, which read as "opening
+    // web pages is very slow". The direct iframe now always starts
+    // immediately; for a remembered host the failing frame is replaced by the
+    // proxy render the moment its fetch lands, so the worst case equals the
+    // first-visit path and the common case is instant.
     // Load natively right away so ordinary sites open instantly with their
     // own cookies and full page JavaScript. The embed-blocked probe runs in
     // parallel and swaps the frame to the built-in proxy only when the site
@@ -19795,7 +20086,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     void (async () => {
       const doc = await this.fetchLiveDocument(clean);
       if (!frame.isConnected || frame.dataset.mwvProbeToken !== String(probeToken)) return;
-      if (!doc || !this.isEmbedBlockedByHeaders(doc.headers)) return;
+      if (!doc || !this.isEmbedBlockedByHeaders(doc.headers)) {
+        // The remembered refusal was regional or transient; let later
+        // navigations trust the direct iframe again without paying for the
+        // extra probe round-trip mentally.
+        try {
+          const host = hostName(clean);
+          if (host) this.embedBlockedHostMemory.delete(host);
+        } catch {
+          // hostName cannot throw on an http URL.
+        }
+        return;
+      }
       this.rememberEmbedBlockedHost(clean);
       this.renderProxyDocument(frame, clean, doc.text, callbacks);
     })();
@@ -20517,7 +20819,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         else document.addEventListener("DOMContentLoaded", cleanupLegacyWebNoteOverlay, { once: true });
       })();
     `;
-    webview.executeJavaScript(code, false).catch(() => {
+    this.withWebviewTimeout(webview.executeJavaScript(code, false), 8000, undefined).catch(() => {
       void callbacks.onConsole?.("warn", "Browser bridge injection failed", this.safeWebviewUrl(webview));
     });
   }
@@ -20699,7 +21001,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!surface) return "";
     if (this.isBrowserSurfaceReady(surface) && this.isElectronWebview(surface) && surface.executeJavaScript) {
       try {
-        const selected = await surface.executeJavaScript("window.getSelection ? String(window.getSelection() || '') : ''", false);
+        const selected = await this.withWebviewTimeout(surface.executeJavaScript("window.getSelection ? String(window.getSelection() || '') : ''", false), 4000, undefined);
         return typeof selected === "string" ? selected.trim() : "";
       } catch {
         return "";
@@ -21111,7 +21413,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       })();
     `;
     try {
-      await webview.executeJavaScript(code, false);
+      await this.withWebviewTimeout(webview.executeJavaScript(code, false), 8000, undefined);
     } catch {
       await this.addConsole("warn", "Webview runtime filters limited", this.safeWebviewUrl(webview));
     }
@@ -21777,7 +22079,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         })();
       `;
       try {
-        const result = await frame.executeJavaScript(code, true);
+        const result = await this.withWebviewTimeout(frame.executeJavaScript(code, true), 8000, undefined);
         const count = typeof result === "number" ? result : 0;
         await this.addConsole("info", `Autofill touched ${count} field(s)`, url);
         return count;
@@ -21944,11 +22246,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
 
     void this.addConsole("info", "Fetch reader layer", url);
-    const response = await requestUrl({
-      url,
-      method: "GET",
-      headers: this.requestHeaders("text/html,application/xhtml+xml")
-    });
+    // Electron's requestUrl inherits a ~21 s connect timeout. An unreachable
+    // host (blocked or offline) therefore made the reader hang on a single
+    // fetch for that full window — and the fallback path used to pay it twice.
+    // A bounded race keeps the worst case at this timeout instead.
+    const response = await Promise.race([
+      requestUrl({
+        url,
+        method: "GET",
+        headers: this.requestHeaders("text/html,application/xhtml+xml")
+      }),
+      new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("net::ERR_CONNECTION_TIMED_OUT (reader fetch aborted after 12s)")), 12000))
+    ]);
 
     const fetchedHtml = typeof response.text === "string" ? response.text : "";
 
@@ -22069,9 +22378,29 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   async fetchFallbackNotePage(url: string, reason = ""): Promise<NotePage> {
+    // An unreachable host just paid the full connect timeout on the primary
+    // fetch; retrying the same host immediately would burn another timeout on
+    // a foregone conclusion. Serve the error page right away in that case.
     try {
       return await this.fetchNotePage(url);
     } catch (error) {
+      const message = `${reason} ${error instanceof Error ? error.message : String(error)}`;
+      if (/TIMED_OUT|timeout|ECONN|ENOTFOUND|ERR_(CONNECTION|NAME|NETWORK|INTERNET|ADDRESS)/i.test(message)) {
+        const cached = this.getCachedPage(url);
+        if (cached) return cached;
+        const title = hostName(url) || "Web page";
+        const detail = "The site could not be reached (connection timed out).";
+        const loadFailedRetry = this.tr("loadFailedRetry");
+        return {
+          title,
+          url,
+          byline: title,
+          excerpt: detail,
+          images: [],
+          content: [`# ${title}`, "", `> ${loadFailedRetry}`, "", detail, "", url].join("\n"),
+          links: []
+        };
+      }
       const cached = this.getCachedPage(url);
       if (cached) return cached;
       const title = hostName(url) || "Web page";
@@ -22160,7 +22489,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         `(__mwvReadLive)(${JSON.stringify({ minChars: READER_MIN_CONTENT_CHARS, fallbackMinChars: 120 })});`
       ].join("\n");
       try {
-        const raw = (await frame.executeJavaScript(code, true)) as LiveReaderPayload | null | undefined;
+        const raw = await this.withWebviewTimeout(frame.executeJavaScript(code, true) as PromiseLike<LiveReaderPayload | null | undefined>, 6000, null) as LiveReaderPayload | null | undefined;
         if (raw && raw.ok === false && raw.reason) {
           void this.addConsole("warn", `Live reader found nothing: ${raw.reason}`, url);
         }
