@@ -19316,7 +19316,10 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (left === right) return true;
     const short = left.length <= right.length ? left : right;
     const long = left.length <= right.length ? right : left;
-    if (short.length >= 14 && long.includes(short)) return true;
+    // Short CJK phrases are still identifying: a Morse table row is six
+    // characters, and requiring fourteen would leave every table row without a
+    // counterpart until the interpolation had to guess for it.
+    if (short.length >= 5 && long.includes(short)) return true;
     const shared = Math.min(left.length, right.length, 60);
     if (shared < 12) return false;
     let prefix = 0;
@@ -19363,15 +19366,101 @@ export default class MobileWebviewerPlugin extends Plugin {
       // morse-code table cell is literally ".-"): the alignment interpolates
       // those between their matched neighbours instead of dropping the region.
       if (!text.trim()) continue;
-      const rect = node.getBoundingClientRect();
-      if (rect.height <= 0.5) continue;
-      blocks.push({
-        top: Math.min(1, Math.max(0, (rect.top - frameRect.top + scroller.scrollTop) / denominator)),
-        height: Math.max(1, rect.height) / denominator,
-        text
-      });
+      // One element is not one paragraph. A CMS often renders several
+      // paragraphs, a caption and an image straight into one `<p>` with `<br>`s
+      // (`<p>基本说明<br><img><br>摩尔斯电码由…`), and its single rect then spans
+      // all of them. Trusting that rect is what put a stroke beside the wrong
+      // sentence even though the line anchor was right. Rendered line rects
+      // give the real geometry, so each visual line becomes its own block.
+      const lineRects = this.nodeLineRects(node);
+      if (lineRects.length <= 1) {
+        const rect = node.getBoundingClientRect();
+        if (rect.height <= 0.5) continue;
+        blocks.push({
+          top: Math.min(1, Math.max(0, (rect.top - frameRect.top + scroller.scrollTop) / denominator)),
+          height: Math.max(1, rect.height) / denominator,
+          text
+        });
+        continue;
+      }
+      const totalWidth = lineRects.reduce((sum, item) => sum + Math.max(1, item.width), 0);
+      let consumed = 0;
+      const characters = Array.from(text);
+      const lines: Array<{ top: number; height: number; text: string }> = [];
+      for (const lineRect of lineRects) {
+        const share = Math.max(1, lineRect.width) / totalWidth;
+        const take = Math.max(1, Math.round(characters.length * share));
+        const slice = characters.slice(consumed, consumed + take).join("");
+        consumed += take;
+        if (slice.trim()) lines.push({ top: lineRect.top, height: lineRect.height, text: slice });
+        if (consumed >= characters.length) break;
+      }
+      // Lines of one paragraph are merged back into a single block: a fragment
+      // like "表达字母和数字。" is too short to identify anything, and leaving
+      // them apart made each one match a different Markdown block. A real gap —
+      // the space an image takes — still starts a new block, which is exactly
+      // the seam that has to be found inside a merged CMS paragraph.
+      let run: { top: number; height: number; text: string } | null = null;
+      let runBottom = 0;
+      for (const line of lines) {
+        const gap = line.top - runBottom;
+        const sameRun = run && gap <= Math.max(2, line.height * 1.6);
+        if (sameRun && run) {
+          run.text = `${run.text} ${line.text}`;
+          run.height = line.top + line.height - run.top;
+        } else {
+          if (run) blocks.push(this.toInkBlock(run, frameRect, scroller, denominator));
+          run = { ...line };
+        }
+        runBottom = line.top + line.height;
+      }
+      if (run) blocks.push(this.toInkBlock(run, frameRect, scroller, denominator));
     }
     return blocks;
+  }
+
+  /** Page pixels -> the document fractions ink is stored in. */
+  toInkBlock(
+    block: { top: number; height: number; text: string },
+    frameRect: DOMRect,
+    scroller: HTMLElement,
+    denominator: number
+  ): InkTextBlock {
+    return {
+      top: Math.min(1, Math.max(0, (block.top - frameRect.top + scroller.scrollTop) / denominator)),
+      height: Math.max(1, block.height) / denominator,
+      text: block.text
+    };
+  }
+
+  /** The rendered line boxes of one element, top to bottom. */
+  nodeLineRects(node: HTMLElement): Array<{ top: number; height: number; width: number }> {
+    const rects: Array<{ top: number; height: number; width: number }> = [];
+    try {
+      const range = node.ownerDocument.createRange();
+      range.selectNodeContents(node);
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.height <= 0.5 || rect.width <= 0.5) continue;
+        rects.push({ top: rect.top, height: rect.height, width: rect.width });
+      }
+    } catch (error) {
+      void error;
+      return [];
+    }
+    // A single visual line can arrive as several rects (inline code, links,
+    // images). Merge those that share a row before treating each row as a line.
+    rects.sort((left, right) => left.top - right.top);
+    const merged: Array<{ top: number; height: number; width: number }> = [];
+    for (const rect of rects) {
+      const last = merged[merged.length - 1];
+      if (last && Math.abs(rect.top - last.top) < Math.max(2, rect.height * 0.6)) {
+        last.width += rect.width;
+        last.height = Math.max(last.height, rect.height);
+        continue;
+      }
+      merged.push({ ...rect });
+    }
+    return merged;
   }
 
   /**
@@ -19466,7 +19555,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (target.length < 2) continue;
       let found = -1;
       const limit = Math.min(markdownBlocks.length, cursor + 80);
-      for (let probe = cursor; probe < limit; probe += 1) {
+      // `cursor - 1` is allowed on purpose: one Markdown paragraph renders as
+      // several visual lines, so consecutive page lines legitimately belong to
+      // the same block.
+      for (let probe = Math.max(0, cursor - 1); probe < limit; probe += 1) {
         if (this.inkTextMatches(target, normalized[probe])) { found = probe; break; }
       }
       if (found < 0) {
@@ -19479,7 +19571,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       if (found < 0) continue;
       map.set(pageIndex, found);
-      cursor = Math.max(cursor, found + 1);
+      cursor = Math.max(cursor, found < cursor ? cursor : found + 1);
     }
     // Second pass: blocks the converter dropped, merged or turned into symbols
     // (an image, a caption, a `.-` table cell) have no text to match on. They
@@ -19526,6 +19618,97 @@ export default class MobileWebviewerPlugin extends Plugin {
     if (!markdownBlocks.length) return 0;
     const alignment = this.alignWebBlocksToMarkdown(pageBlocks, markdownBlocks);
     if (!alignment.size) return 0;
+    const markdownLines = markdown.split("\n");
+
+    // Everything below works in *characters*, not lines.
+    //
+    // Lines are a terrible ruler for this: one image is five source lines that
+    // occupy a third of the page, while a Morse table is sixty lines squeezed
+    // into a strip. Mapping a fraction of the page onto a fraction of the lines
+    // therefore compresses the note — ink drifts upward, increasingly so further
+    // down. Characters are the unit both sides really share: the page shows the
+    // same words the Markdown stores.
+    const lineChars = markdownLines.map((line) => this.normalizeInkText(line));
+    const cumulative: number[] = [0];
+    for (const chars of lineChars) cumulative.push(cumulative[cumulative.length - 1] + chars.length);
+    const totalChars = cumulative[cumulative.length - 1];
+    if (!totalChars) return 0;
+
+    // Blocks that share one Markdown block split its characters by rank, so a
+    // sixty-row table gives each row its own slice instead of the whole range.
+    const groups = new Map<number, number[]>();
+    for (const [pageIndex, markdownIndex] of Array.from(alignment.entries())) {
+      const list = groups.get(markdownIndex) ?? [];
+      list.push(pageIndex);
+      groups.set(markdownIndex, list);
+    }
+    const anchors: Array<{ y: number; char: number }> = [];
+    for (const [markdownIndex, pageIndexes] of Array.from(groups.entries())) {
+      const markdownBlock = markdownBlocks[markdownIndex];
+      if (!markdownBlock) continue;
+      const from = cumulative[Math.max(0, Math.min(markdownBlock.start, markdownLines.length))] ?? 0;
+      const to = Math.max(
+        from + 1,
+        cumulative[Math.max(0, Math.min(markdownBlock.end + 1, markdownLines.length))] ?? from + 1
+      );
+      const ordered = pageIndexes.slice().sort((left, right) => (pageBlocks[left]?.top ?? 0) - (pageBlocks[right]?.top ?? 0));
+      ordered.forEach((pageIndex, rank) => {
+        const pageBlock = pageBlocks[pageIndex];
+        if (!pageBlock) return;
+        const sliceFrom = from + ((to - from) * rank) / ordered.length;
+        const sliceTo = from + ((to - from) * (rank + 1)) / ordered.length;
+        anchors.push({ y: pageBlock.top, char: sliceFrom });
+        anchors.push({ y: pageBlock.top + pageBlock.height, char: sliceTo });
+      });
+    }
+    if (!anchors.length) return 0;
+    anchors.sort((left, right) => left.y - right.y || left.char - right.char);
+    // The map must be non-decreasing: a lower row of the page can never be an
+    // earlier passage of the note.
+    for (let index = 1; index < anchors.length; index += 1) {
+      if (anchors[index].char < anchors[index - 1].char) anchors[index].char = anchors[index - 1].char;
+    }
+    // Ink above or below every matched passage is carried only a little way
+    // past it; a stroke drawn in a footer the converter dropped has no line to
+    // claim, and keeping its document fraction is more truthful than stacking
+    // it on the last line.
+    const first = anchors[0];
+    const last = anchors[anchors.length - 1];
+    const edgeMargin = 0.04;
+    const charAt = (y: number): number | null => {
+      if (!Number.isFinite(y)) return null;
+      if (y < first.y - edgeMargin) return null;
+      if (y > last.y + edgeMargin) return null;
+      if (y <= first.y) return first.char;
+      if (y >= last.y) return last.char;
+      for (let index = 0; index < anchors.length - 1; index += 1) {
+        const from = anchors[index];
+        const to = anchors[index + 1];
+        if (y < from.y || y > to.y) continue;
+        if (to.y - from.y < 1e-9) return to.char;
+        const ratio = (y - from.y) / (to.y - from.y);
+        return from.char + ratio * (to.char - from.char);
+      }
+      return last.char;
+    };
+    // Character offset -> source line, walking over empty lines forward.
+    const lineAt = (position: number): number => {
+      const clamped = Math.min(totalChars - 0.0001, Math.max(0, position));
+      let low = 0;
+      let high = lineChars.length - 1;
+      while (low < high) {
+        const middle = Math.floor((low + high + 1) / 2);
+        if (cumulative[middle] <= clamped) low = middle;
+        else high = middle - 1;
+      }
+      let line = low;
+      while (line < lineChars.length - 1 && lineChars[line].length === 0) line += 1;
+      const base = cumulative[line];
+      const span = Math.max(1, lineChars[line].length);
+      const fraction = Math.min(1, Math.max(0, (clamped - base) / span));
+      return line + (lineChars[line].length ? fraction : 0);
+    };
+    const lastLine = Math.max(0, markdownLines.length - 1);
     let anchored = 0;
     for (const item of strokes) {
       if (!item || typeof item !== "object") continue;
@@ -19537,30 +19720,10 @@ export default class MobileWebviewerPlugin extends Plugin {
         .map((corner) => Number(corner?.y))
         .filter((value) => Number.isFinite(value));
       if (!ys.length) continue;
-      const inkTop = Math.min(...ys);
-      const inkBottom = Math.max(...ys);
-      const inkCenter = (inkTop + inkBottom) / 2;
-      // Prefer the block the ink actually sits in; a block it merely touches is
-      // only used when nothing contains it.
-      let pageIndex = -1;
-      let bestScore = Number.POSITIVE_INFINITY;
-      for (let index = 0; index < pageBlocks.length; index += 1) {
-        const block = pageBlocks[index];
-        const inside = inkCenter >= block.top && inkCenter <= block.top + block.height;
-        const distance = inside
-          ? 0
-          : Math.min(Math.abs(inkCenter - block.top), Math.abs(inkCenter - (block.top + block.height)));
-        if (distance > (inside ? 0.0001 : 0.18)) continue;
-        const score = distance + block.height * 0.001;
-        if (score < bestScore) { bestScore = score; pageIndex = index; }
-      }
-      if (pageIndex < 0) continue;
-      const markdownIndex = alignment.get(pageIndex);
-      if (markdownIndex === undefined) continue;
-      const pageBlock = pageBlocks[pageIndex];
-      const markdownBlock = markdownBlocks[markdownIndex];
-      const ratio = Math.min(0.999, Math.max(0, (inkCenter - pageBlock.top) / Math.max(pageBlock.height, 1e-6)));
-      const line = markdownBlock.start + ratio * Math.max(1, markdownBlock.end - markdownBlock.start + 1);
+      const inkCenter = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const mapped = charAt(inkCenter);
+      if (mapped === null) continue;
+      const line = Math.min(lastLine, Math.max(0, lineAt(mapped)));
       for (const corner of Object.values(corners)) {
         if (!corner || typeof corner !== "object") continue;
         corner.line = line;

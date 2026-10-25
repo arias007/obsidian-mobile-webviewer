@@ -983,7 +983,7 @@ const inkFor = (y) => ({
 const pageInk = {
   version: 2,
   sourcePath: pageFile.path,
-  strokes: [inkFor(0.170), inkFor(0.320), inkFor(0.750)],
+  strokes: [inkFor(0.170), inkFor(0.345), inkFor(0.750)],
   markdownBlocks: [],
   elementGroups: [],
   webEdits: []
@@ -1007,6 +1007,71 @@ check("ink beside the table lands on the table's lines",
   inTable.layout.corners.topLeft.line <= tableBlock.end + 1);
 check("ink nowhere near any text keeps its pixel fallback", orphan.layout.corners.topLeft.line === null);
 check("only the strokes that matched are reported as anchored", anchoredCount === 2);
+
+// One rendered paragraph is many visual lines: they must all land on the same
+// Markdown block, and the mapping must never run backwards.
+const splitLines = [
+  { top: 0.500, height: 0.010, text: "摩尔斯电码是一种时通时断的信号" },
+  { top: 0.512, height: 0.010, text: "信号代码，通过不同的排列顺序表达" },
+  { top: 0.524, height: 0.010, text: "不同的排列顺序表达字母和数字" },
+  { top: 0.600, height: 0.012, text: "点 短信号" }
+];
+const splitAlignment = exportCtx.alignWebBlocksToMarkdown(splitLines, mdBlocks);
+const sameBlock = mdIndexOf("摩尔斯电码是一种时通时断");
+check("three visual lines of one paragraph all map to that paragraph",
+  splitAlignment.get(0) === sameBlock &&
+  splitAlignment.get(1) === sameBlock &&
+  splitAlignment.get(2) === sameBlock);
+check("the next real block still advances afterwards",
+  splitAlignment.get(3) === mdIndexOf("点 短信号"));
+const reversed = exportCtx.alignWebBlocksToMarkdown([
+  { top: 0.100, height: 0.010, text: "结尾一段用来测试对齐不会被漏掉的块拖偏。" },
+  { top: 0.900, height: 0.010, text: "带画的页面" }
+], mdBlocks);
+// A long Markdown block (a table the converter kept as one block) that several
+// page rows share must give each row its own slice, never the whole range.
+const rowLines = [];
+for (let index = 0; index < 20; index += 1) {
+  rowLines.push(`填充段落${index}`);
+  rowLines.push("");
+}
+const tableStart = rowLines.length;
+rowLines.push("| 字符 | 编码 |");
+rowLines.push("| --- | --- |");
+for (let index = 0; index < 12; index += 1) rowLines.push(`| 行${index} | 编码码${index} |`);
+const tableEnd = rowLines.length - 1;
+rowLines.push("");
+rowLines.push("结尾说明段落用于收束。");
+const rowMarkdown = rowLines.join("\n");
+const rowMdBlocks = exportCtx.markdownLineBlocks(rowMarkdown);
+const tableBlockMd = rowMdBlocks.find((block) => block.start === tableStart);
+check("the table is one Markdown block", Boolean(tableBlockMd) && tableBlockMd.end === tableEnd);
+
+const tableRowBlocks = [];
+for (let index = 0; index < 6; index += 1) {
+  tableRowBlocks.push({ top: 0.100 + index * 0.010, height: 0.009, text: `行${index} 编码码${index}` });
+}
+const rowMap = exportCtx.alignWebBlocksToMarkdown(tableRowBlocks, rowMdBlocks);
+check("rows of one long Markdown block all map to it",
+  tableRowBlocks.every((row, index) => rowMap.get(index) === rowMdBlocks.indexOf(tableBlockMd)));
+const rowInk = {
+  version: 2,
+  sourcePath: pageFile.path,
+  strokes: tableRowBlocks.map((row) => inkFor(row.top + row.height * 0.5)),
+  markdownBlocks: [],
+  elementGroups: [],
+  webEdits: []
+};
+exportCtx.anchorInkToMarkdownLines(rowInk, rowMarkdown, tableRowBlocks);
+const mapped = rowInk.strokes.map((stroke) => stroke.layout.corners.topLeft.line);
+check("each shared row gets its own line slice, not the whole range",
+  mapped.every((line) => Number.isFinite(line)) &&
+  mapped.every((line, index) => index === 0 || line > mapped[index - 1]) &&
+  mapped[0] >= tableStart && mapped[mapped.length - 1] <= tableEnd + 1);
+
+check("the line map never runs backwards",
+  Array.from(reversed.entries()).every((entry, index, list) =>
+    index === 0 || list[index - 1][1] <= entry[1]));
 
 /* ------------------------------------------------------------------ */
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
