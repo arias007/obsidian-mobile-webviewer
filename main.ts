@@ -8992,7 +8992,7 @@ function htmlToMarkdownFromElement(root: HTMLElement): string {
     .join("\n\n");
 }
 
-function webNoteMarkdown(entry: WebNoteEntry): string {
+function webNoteMarkdown(entry: WebNoteEntry, includeDoodle = true): string {
   const title = entry.title || entry.sourceTitle || hostName(entry.url);
   // `存 MD` writes the note as it reads on screen. The Markdown the page was
   // converted from is kept verbatim, so an untouched note exports exactly that
@@ -9008,7 +9008,13 @@ function webNoteMarkdown(entry: WebNoteEntry): string {
   const pageEdit = entry.pageText
     ? `\n\n## Page edits\n\n${escapeMarkdownText(entry.pageText)}`
     : "";
-  const doodle = entry.doodleSvg ? `\n\n## Doodle\n\n\`\`\`svg\n${entry.doodleSvg}\n\`\`\`` : "";
+  // The SVG dump is the fallback record of ink drawn with the reader's own
+  // doodle layer. Once the page's NoteDraw strokes are carried onto the saved
+  // note (see readWebNoteInk / writeWebNoteInk), a reverse-SVG block in the
+  // Markdown is just noise, so it is skipped.
+  const doodle = entry.doodleSvg && includeDoodle
+    ? `\n\n## Doodle\n\n\`\`\`svg\n${entry.doodleSvg}\n\`\`\``
+    : "";
   return [
     "---",
     `source: ${entry.url}`,
@@ -10557,7 +10563,7 @@ class MobileWebviewerView extends ItemView {
   async exportCurrentWebNote(status?: HTMLElement): Promise<void> {
     const saved = await this.saveCurrentWebNote(false, status);
     if (!saved) return;
-    const exported = await this.plugin.exportWebNoteMarkdown(saved);
+    const exported = await this.plugin.exportWebNoteMarkdown(saved, this.surfaceEl);
     this.currentWebNote = exported;
     status?.setText("");
     new Notice(this.tr("savedTo", { path: exported.markdownPath }));
@@ -11515,6 +11521,13 @@ export default class MobileWebviewerPlugin extends Plugin {
         hideSourceButton(button);
       }
     }
+    // NoteDraw mounts one wand per surface it drives, and every one of them is
+    // legitimate on its own — leaving them all visible is what produced two
+    // wands in one header. Follow every pass with the one-wand rule.
+    for (const surface of new Set(baseSurfaces)) {
+      const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
+      if (leaf) this.enforceSingleNoteDrawWand(leaf);
+    }
   }
 
   /**
@@ -11531,6 +11544,46 @@ export default class MobileWebviewerPlugin extends Plugin {
       button.removeAttribute("aria-hidden");
       if (button.getAttribute("tabindex") === "-1") button.removeAttribute("tabindex");
     });
+  }
+
+  /**
+   * Exactly one wand per leaf, and it is the one that edits the page.
+   *
+   * NoteDraw mounts a wand per surface it controls: the markdown note gets one
+   * in `view-actions`, and a NoteWeb surface gets its own — inline inside the
+   * note body when NoteDraw finds a `.mwv-*` action row, or appended to
+   * `view-actions` when it does not. Both are correct for NoteDraw and both
+   * stayed on screen once this plugin stopped hiding anything, which is exactly
+   * the "two wands" users saw. Nothing here fabricates, moves or re-parents a
+   * button; the loser is only hidden by class. Removing it instead would make
+   * NoteDraw install a fresh one, and the two then trade places forever — the
+   * flicker this plugin already paid for once.
+   */
+  enforceSingleNoteDrawWand(leaf: HTMLElement): void {
+    if (!leaf?.isConnected) return;
+    if (!leaf.hasClass("mwv-notedraw-surface-leaf") && !leaf.querySelector(MWV_DEDUPE_ROOT_SELECTOR)) return;
+    const buttons = Array.from(leaf.querySelectorAll<NoteDrawButtonElement>(NOTEDRAW_BUTTON_SELECTOR))
+      .filter((button) => button.isConnected && !button.hasClass("mwv-notedraw-launcher"));
+    if (buttons.length < 2) {
+      buttons.forEach((button) => button.classList.remove("mwv-notedraw-dup-hidden"));
+      return;
+    }
+    // The page's own wand wins over the note's, and the header beats anything
+    // NoteDraw dropped inside the note body.
+    const rank = (button: NoteDrawButtonElement): number => {
+      let score = 0;
+      if (button.closest(".view-actions")) score += 8;
+      if (button._noteDrawController?.surfaceType === "webview") score += 4;
+      if (button.hasClass("notedraw-header-button")) score += 2;
+      if (!button.closest(MWV_DEDUPE_ROOT_SELECTOR)) score += 1;
+      return score;
+    };
+    const winner = buttons.reduce((best, button) => (rank(button) > rank(best) ? button : best), buttons[0]);
+    for (const button of buttons) button.classList.toggle("mwv-notedraw-dup-hidden", button !== winner);
+    winner.classList.remove("mwv-notedraw-source-button");
+    winner.classList.remove("mwv-notedraw-webviewer-header-hidden");
+    winner.removeAttribute("aria-hidden");
+    if (winner.getAttribute("tabindex") === "-1") winner.removeAttribute("tabindex");
   }
 
   cleanupStaleNoteDrawButtonResidue(scope: HTMLElement = this.app.workspace.containerEl): void {
@@ -11778,6 +11831,8 @@ export default class MobileWebviewerPlugin extends Plugin {
           }
         }
         this.ensureNoteWebWandProxy(embed);
+        const leaf = embed.closest<HTMLElement>(".workspace-leaf-content");
+        if (leaf) this.enforceSingleNoteDrawWand(leaf);
       }, delay);
     }
   }
@@ -15371,6 +15426,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
       this.ensureNoteWebWandProxy(embed);
       this.queueNoteWebWandAdopt(embed);
+      this.enforceSingleNoteDrawWand(leafContent);
     } else {
       // Reconcile immediately when returning to Note/Split mode so buttons
       // hidden for Web mode are restored and the current controller is the
@@ -18142,7 +18198,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       new Notice(this.tr("readerNoteNotReady"));
       return;
     }
-    const exported = await this.exportWebNoteMarkdown(note);
+    const exported = await this.exportWebNoteMarkdown(note, embed);
     panel?.querySelector<HTMLElement>(".mwv-webnote-status")?.setText("");
     new Notice(this.tr("savedTo", { path: exported.markdownPath }));
   }
@@ -19197,19 +19253,94 @@ export default class MobileWebviewerPlugin extends Plugin {
       (identity !== "" && this.noteDrawWebviewIdentity(entry.url) === identity));
   }
 
-  async exportWebNoteMarkdown(entry: WebNoteEntry): Promise<WebNoteEntry> {
+  /**
+   * The ink a page already carries, ready to be carried onto the note that
+   * 存 MD writes.
+   *
+   * NoteDraw keeps drawings per file path, so a saved note is an ordinary note
+   * with its own drawing layer. Copying the page's strokes onto that layer is
+   * what makes the export a real conversion instead of a flattening: the
+   * Markdown is the page, and the doodles stay editable on top of it. Live
+   * controller data wins over disk because a stroke drawn a second ago may not
+   * have been autosaved yet.
+   */
+  async readWebNoteInk(entry: WebNoteEntry, embed?: HTMLElement): Promise<NoteDrawDrawingDataLike | null> {
+    const api = this.getNoteDrawPlugin()?.api;
+    if (typeof api?.readDrawings !== "function") return null;
+    const controller = embed ? this.findWebviewNoteDrawController(embed, false) : null;
+    if (controller && controller.drawingsLoaded === false) return null;
+    const file = controller?.file ?? this.noteDrawWebviewFileForUrl(entry.url);
+    if (!file?.path) return null;
+    const live = controller?.drawingData;
+    const data = live && !this.noteDrawDrawingIsEmpty(live)
+      ? live
+      : await api.readDrawings(file).catch(() => null);
+    return data && !this.noteDrawDrawingIsEmpty(data) ? data : null;
+  }
+
+  /**
+   * Put that ink on the saved note. Every anchor has to be re-pointed at the
+   * note's path first: NoteDraw ignores records that still claim another file,
+   * so an unre-based copy would look like it arrived and then render as
+   * nothing. The readback is the proof — same stroke count, no foreign anchors.
+   */
+  async writeWebNoteInk(data: NoteDrawDrawingDataLike, markdownPath: string): Promise<number> {
+    const api = this.getNoteDrawPlugin()?.api;
+    if (!markdownPath || typeof api?.readDrawings !== "function" || typeof api.writeDrawings !== "function") return 0;
+    const counts = this.noteDrawDataCounts(data);
+    if (counts.total === 0) return 0;
+    const target: NoteDrawFileLike = {
+      path: markdownPath,
+      name: markdownPath.split("/").pop() ?? "note.md",
+      extension: "md"
+    };
+    const existing = await api.readDrawings(target).catch(() => null);
+    // The note may already carry more ink than the page does (the reader drew
+    // straight on the saved note). Never replace a richer drawing layer.
+    if (existing && this.noteDrawDataCounts(existing).total > counts.total) return 0;
+    const carried = JSON.parse(JSON.stringify(data)) as NoteDrawDrawingDataLike;
+    carried.sourcePath = markdownPath;
+    carried.updatedAt = new Date().toISOString();
+    carried.strokes = (carried.strokes ?? []).map((item) => this.rebaseLegacyNoteDrawStroke(item, markdownPath));
+    await api.writeDrawings(target, carried);
+    const verified = await api.readDrawings(target).catch(() => null);
+    const verifiedCounts = this.noteDrawDataCounts(verified);
+    if (verifiedCounts.strokes !== counts.strokes || this.noteDrawDataHasForeignAnchors(verified, markdownPath)) {
+      throw new Error("NoteDraw ink transfer readback did not match");
+    }
+    await api.refresh?.(target).catch(() => undefined);
+    return verifiedCounts.strokes;
+  }
+
+  async exportWebNoteMarkdown(entry: WebNoteEntry, embed?: HTMLElement): Promise<WebNoteEntry> {
     const folder = normalizePath(this.settings.webNoteFolder || DEFAULT_WEB_NOTE_FOLDER);
     await this.ensureVaultFolder(folder);
     const fileName = appendFileExtension(sanitizeFileName(entry.title || hostName(entry.url), "web-note"), "md");
     const preferred = entry.markdownPath && /\.md$/i.test(entry.markdownPath) ? entry.markdownPath : "";
     const path = preferred || await this.uniqueVaultPath(folder, fileName);
-    const data = webNoteMarkdown(entry);
+    // Read the page's ink before writing, so the file that lands is already the
+    // final one and the SVG fallback can be left out when the strokes travel.
+    const ink = await this.readWebNoteInk(entry, embed).catch((error) => {
+      console.warn("[mobile-webviewer] NoteDraw ink read skipped", error);
+      return null;
+    });
+    const data = webNoteMarkdown(entry, !ink);
     // Written through the vault API, not `adapter.write`: the adapter puts the
     // bytes on disk but tells Obsidian nothing, so on Android the new file never
     // showed up in the file explorer and `存 MD` looked like it did nothing.
     const existing = this.app.vault.getAbstractFileByPath(path);
     if (existing instanceof TFile) await this.app.vault.modify(existing, data);
     else await this.app.vault.create(path, data);
+    let carried = 0;
+    if (ink) {
+      carried = await this.writeWebNoteInk(ink, path).catch((error) => {
+        console.warn("[mobile-webviewer] NoteDraw ink transfer skipped", error);
+        return 0;
+      });
+      if (carried > 0) {
+        await this.addConsole("info", `NoteDraw ink carried to Markdown: ${path} (${carried} strokes)`, entry.url);
+      }
+    }
     const saved = await this.saveWebNote({
       ...entry,
       markdownPath: path,

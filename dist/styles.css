@@ -4002,6 +4002,15 @@
   pointer-events: auto;
 }
 
+/* NoteDraw mounts one wand per surface it drives: the markdown note gets one in
+   the leaf header and the NoteWeb surface gets its own. Both are correct on
+   their own; on screen together they read as a bug. The extra one is hidden by
+   class and never removed — a removed button makes NoteDraw install a fresh
+   copy and the two trade places forever. */
+.workspace-leaf-content .mwv-notedraw-dup-hidden {
+  display: none !important;
+}
+
 /* NoteDraw's own wand, left exactly as NoteDraw drew it.
    The host used to force a 32px box here and NoteDraw marks a webview-targeting
    header button with `.notedraw-webview-button`, whose own rule paints a

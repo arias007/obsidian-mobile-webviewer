@@ -598,7 +598,10 @@ const fakeVault = {
   }
 };
 
-const exportMethods = ["exportWebNoteMarkdown", "ensureVaultFolder", "findWebNoteByUrl", "noteDrawWebviewIdentity", "exportEmbedWebNote"];
+const exportMethods = ["exportWebNoteMarkdown", "ensureVaultFolder", "findWebNoteByUrl", "noteDrawWebviewIdentity", "exportEmbedWebNote",
+  "readWebNoteInk", "writeWebNoteInk", "rebaseLegacyNoteDrawStroke",
+  "noteDrawDrawingIsEmpty", "noteDrawWebviewFileForUrl", "noteDrawWebviewFileForIdentity", "noteDrawWebviewLabel",
+  "noteDrawWebviewIdentity", "getNoteDrawPlugin"];
 const exportEntries = exportMethods.map((name) => {
   const extracted = extractMethod(source, name);
   return `  ${name}: ${extracted.isAsync ? "async " : ""}function${extracted.paramsAndBody}`;
@@ -638,6 +641,37 @@ const exportCtx = Object.assign({}, exportTable, {
   htmlToMarkdownFromElement: (el) => el.innerHTML
 });
 for (const name of exportMethods) exportCtx[name] = exportTable[name].bind(exportCtx);
+
+// NoteDraw stands in for the real plugin: drawings are keyed by file path, and
+// every write is kept so the test can prove what the note received.
+const noteInk = new Map();
+const noteDrawStub = {
+  api: {
+    readDrawings: async (file) => {
+      const stored = noteInk.get(file?.path);
+      return stored ? JSON.parse(JSON.stringify(stored)) : null;
+    },
+    writeDrawings: async (file, data) => {
+      noteInk.set(file.path, JSON.parse(JSON.stringify(data)));
+      return data;
+    },
+    refresh: async () => ({ ok: true })
+  }
+};
+exportCtx.getNoteDrawPlugin = () => noteDrawStub;
+exportCtx.findWebviewNoteDrawController = () => null;
+// Same contracts as the plugin, kept here because their object return types
+// defeat the source extractor (`findBodyEnd` stops at the type literal).
+exportCtx.noteDrawDataCounts = (data) => {
+  const strokes = Array.isArray(data?.strokes) ? data.strokes.length : 0;
+  const webEdits = Array.isArray(data?.webEdits) ? data.webEdits.length : 0;
+  return { strokes, webEdits, total: strokes + webEdits };
+};
+exportCtx.noteDrawDataHasForeignAnchors = (data, path) => (data?.strokes ?? []).some((stroke) => {
+  const corners = Object.values(stroke?.layout?.corners ?? {});
+  return corners.some((corner) => corner?.path !== path) ||
+    (stroke?.points ?? []).some((point) => point?.anchor && point.anchor.path !== path);
+});
 
 // A note is found by page identity, not by the exact URL string.
 exportCtx.settings.webNotes = [{
@@ -683,6 +717,180 @@ await exportCtx.exportEmbedWebNote(embedEl);
 const fresh = [...vaultFiles.keys()].find((path) => path.includes("Fresh Page"));
 check("存 MD writes a note even when nothing was autosaved yet", Boolean(fresh));
 check("the note written from the panel keeps the page text", (vaultFiles.get(fresh) ?? "").includes("正文"));
+
+/* ------------------------------------------------------------------ *
+ * 4b. 存 MD carries the page's NoteDraw ink onto the saved note
+ * ------------------------------------------------------------------ */
+// A page with real ink: strokes anchored to the page's virtual file, plus the
+// reader's own SVG doodle layer as the pre-ink fallback.
+const inkedPage = {
+  id: "n2",
+  url: "https://inked.example/article/",
+  title: "带画的页面",
+  sourceTitle: "带画的页面",
+  noteHtml: "",
+  noteText: "正文",
+  noteMarkdown: "## 正文",
+  doodleSvg: '<path d="M0 0L10 10"/>',
+  pageHtml: "",
+  pageText: "",
+  pageEdits: [],
+  markdownPath: "",
+  updatedAt: 0,
+  createdAt: 0
+};
+const pageFile = exportCtx.noteDrawWebviewFileForUrl(inkedPage.url);
+const pageStroke = (id) => ({
+  elementId: id,
+  layout: {
+    v: "1",
+    id,
+    basis: "note-element-frame-v1",
+    primary: "topLeft",
+    corners: {
+      topLeft: { x: 0.1, y: 0.2, path: pageFile.path },
+      bottomRight: { x: 0.3, y: 0.4, path: pageFile.path }
+    },
+    sourceFrame: { surfaceWidth: 360, documentHeight: 1200 }
+  },
+  points: [
+    { x: 0.1, y: 0.2, anchor: { path: pageFile.path, line: 3 } },
+    { x: 0.3, y: 0.4, anchor: { path: pageFile.path, line: 3 } }
+  ]
+});
+noteInk.set(pageFile.path, {
+  version: 2,
+  sourcePath: pageFile.path,
+  strokes: [pageStroke("el-1"), pageStroke("el-2")],
+  markdownBlocks: [],
+  elementGroups: [],
+  webEdits: [],
+  updatedAt: "2026-10-25T00:00:00.000Z"
+});
+const inkedExport = await exportCtx.exportWebNoteMarkdown(inkedPage);
+const carriedInk = noteInk.get(inkedExport.markdownPath);
+const carriedPaths = (carriedInk?.strokes ?? []).flatMap((stroke) =>
+  Object.values(stroke.layout?.corners ?? {}).map((corner) => corner?.path)
+);
+check("存 MD carries the page's strokes onto the saved note",
+  (carriedInk?.strokes ?? []).length === 2 &&
+  (carriedInk?.strokes ?? []).every((stroke) => Object.values(stroke.layout?.corners ?? {}).every((corner) => corner.path === inkedExport.markdownPath)));
+check("carried strokes point their points at the note, not the page",
+  (carriedInk?.strokes ?? []).every((stroke) => stroke.points.every((point) => point.anchor?.path === inkedExport.markdownPath)));
+check("the carried drawing belongs to the note file",
+  carriedInk?.sourcePath === inkedExport.markdownPath && carriedPaths.every((p) => p === inkedExport.markdownPath));
+check("the SVG doodle block is dropped once the ink travels",
+  !(vaultFiles.get(inkedExport.markdownPath) ?? "").includes("## Doodle"));
+
+// A note the reader has already drawn on keeps its own, richer ink.
+const richer = {
+  version: 2,
+  sourcePath: inkedExport.markdownPath,
+  strokes: [pageStroke("note-1"), pageStroke("note-2"), pageStroke("note-3"), pageStroke("note-4")],
+  markdownBlocks: [],
+  elementGroups: [],
+  webEdits: [],
+  updatedAt: "2026-10-25T01:00:00.000Z"
+};
+noteInk.set(inkedExport.markdownPath, JSON.parse(JSON.stringify(richer)));
+await exportCtx.exportWebNoteMarkdown(inkedExport);
+check("re-exporting never replaces a note's own richer ink",
+  (noteInk.get(inkedExport.markdownPath)?.strokes ?? []).length === 4);
+
+// Without NoteDraw the SVG fallback still has to survive.
+exportCtx.getNoteDrawPlugin = () => null;
+const plainExport = await exportCtx.exportWebNoteMarkdown({ ...inkedPage, id: "n3", url: "https://plain.example/x", title: "没有 NoteDraw" });
+check("without NoteDraw the SVG doodle block is kept",
+  (vaultFiles.get(plainExport.markdownPath) ?? "").includes("## Doodle"));
+exportCtx.getNoteDrawPlugin = () => noteDrawStub;
+
+/* ------------------------------------------------------------------ *
+ * 5. One wand per leaf
+ * ------------------------------------------------------------------ */
+const wandMethods = ["enforceSingleNoteDrawWand", "noteDrawButtonBelongsToSurface"];
+const wandEntries = wandMethods.map((name) => {
+  const extracted = extractMethod(source, name);
+  return `  ${name}: ${extracted.isAsync ? "async " : ""}function${extracted.paramsAndBody}`;
+});
+const wandJs = esbuild.transformSync(`const __W = {\n${wandEntries.join(",\n")}\n};\n__W;`, {
+  loader: "ts", format: "cjs", target: "es2020"
+}).code;
+const WAND_SELECTOR = ".notedraw-header-button, .notedraw-webview-button, .notedraw-fallback-button, .notedraw-webview-inline-button";
+const wandTable = new Function("NOTEDRAW_BUTTON_SELECTOR", "MWV_DEDUPE_ROOT_SELECTOR", `${wandJs}\nreturn __W;`)(
+  WAND_SELECTOR,
+  ".mwv-root, .mwv-embed, .mwv-note-embed, .mwv-bing-home"
+);
+const wandCtx = Object.assign({}, wandTable, {
+  isMobileWebviewerSurface: () => true,
+  isNoteWebOwnedElement: () => true,
+  isNoteDrawSurfaceElement: () => true
+});
+
+function makeWandLeaf({ header = true, headerWeb = false, inlineWand = false } = {}) {
+  const leaf = window.document.createElement("div");
+  leaf.className = "workspace-leaf-content mwv-notedraw-surface-leaf";
+  const view = window.document.createElement("div");
+  const actions = window.document.createElement("div");
+  actions.className = "view-actions";
+  view.appendChild(actions);
+  leaf.appendChild(view);
+  const embed = window.document.createElement("div");
+  embed.className = "mwv-embed";
+  embed.dataset.url = "https://example.com/";
+  leaf.appendChild(embed);
+  const surfaceWand = (parent, cls, surfaceType) => {
+    const button = window.document.createElement("div");
+    button.className = cls;
+    button._noteDrawController = { surfaceType };
+    parent.appendChild(button);
+    return button;
+  };
+  if (header) surfaceWand(actions, "clickable-icon view-action notedraw-header-button", "preview");
+  if (headerWeb) surfaceWand(actions, "clickable-icon view-action notedraw-webview-button", "webview");
+  if (inlineWand) {
+    const row = window.document.createElement("div");
+    row.className = "mwv-note-actions";
+    embed.appendChild(row);
+    surfaceWand(row, "clickable-icon mwv-icon-button notedraw-webview-button notedraw-webview-inline-button", "webview");
+  }
+  window.document.body.appendChild(leaf);
+  return leaf;
+}
+
+const dupLeaves = [];
+{
+  const leaf = makeWandLeaf({ header: true, headerWeb: true });
+  dupLeaves.push(leaf);
+  wandCtx.enforceSingleNoteDrawWand(leaf);
+  const buttons = [...leaf.querySelectorAll(WAND_SELECTOR)];
+  check("two wands in one header leave exactly one visible",
+    buttons.length === 2 && buttons.filter((b) => !b.classList.contains("mwv-notedraw-dup-hidden")).length === 1);
+  check("the header wand that edits the page is the one kept",
+    !buttons[1].classList.contains("mwv-notedraw-dup-hidden") &&
+    buttons[0].classList.contains("mwv-notedraw-dup-hidden"));
+  check("a duplicate wand is hidden, never removed", buttons.length === 2 && buttons.every((b) => b.isConnected));
+}
+{
+  const leaf = makeWandLeaf({ header: true, inlineWand: true });
+  dupLeaves.push(leaf);
+  wandCtx.enforceSingleNoteDrawWand(leaf);
+  const buttons = [...leaf.querySelectorAll(WAND_SELECTOR)];
+  const visible = buttons.filter((b) => !b.classList.contains("mwv-notedraw-dup-hidden"));
+  check("a wand dropped inside the note body never doubles the header one",
+    buttons.length === 2 && visible.length === 1 && visible[0].closest(".view-actions"));
+  check("the kept wand is never marked as a hidden source button",
+    !visible[0].classList.contains("mwv-notedraw-source-button"));
+}
+{
+  const leaf = makeWandLeaf({ header: true });
+  dupLeaves.push(leaf);
+  wandCtx.enforceSingleNoteDrawWand(leaf);
+  const buttons = [...leaf.querySelectorAll(WAND_SELECTOR)];
+  check("a single wand is left completely alone",
+    buttons.length === 1 && !buttons[0].classList.contains("mwv-notedraw-dup-hidden"));
+}
+for (const leaf of dupLeaves) leaf.remove();
+
 
 /* ------------------------------------------------------------------ */
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
