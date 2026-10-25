@@ -1,0 +1,57 @@
+/**
+ * Attach the three release files to an existing tag.
+ *
+ * `uploads.github.com` is unreachable from where this plugin is normally
+ * released (TLS reset at the SNI layer), so the upload cannot happen from the
+ * build machine. A runner inside GitHub has no such problem: this workflow
+ * rebuilds the tag and uploads `main.js`, `manifest.json` and `styles.css` to
+ * the release with the same name.
+ *
+ * `--verify-tag` is deliberate: the tag must already exist, so a run can never
+ * publish a release for code that was not pushed.
+ */
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Plain version number, e.g. 0.5.0"
+        required: true
+      ref:
+        description: "Git ref to build (defaults to the tag)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || inputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build and verify
+        run: npm run build
+
+      - name: Check the build matches the requested version
+        env:
+          VER: ${{ inputs.version }}
+        run: |
+          node -e 'const m=require("./manifest.json");if(m.version!==process.env.VER){console.error(`manifest ${m.version} != ${process.env.VER}`);process.exit(1)}'
+
+      - name: Upload the three files to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ inputs.version }}
+        run: |
+          gh release view "$VER" >/dev/null 2>&1 || gh release create "$VER" --title "$VER" --verify-tag --notes "Mobile Webviewer $VER"
+          gh release upload "$VER" main.js manifest.json styles.css --clobber
+          gh release view "$VER" --json assets --jq '.assets[].name + " " + (.size|tostring)'
