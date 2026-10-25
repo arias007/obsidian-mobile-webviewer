@@ -1,0 +1,4483 @@
+.mwv-root {
+  --mwv-bg: color-mix(in srgb, var(--background-primary) 96%, var(--background-secondary));
+  --mwv-panel: color-mix(in srgb, var(--background-primary) 86%, var(--background-secondary));
+  --mwv-border: var(--background-modifier-border);
+  --mwv-text: var(--text-normal);
+  --mwv-muted: var(--text-muted);
+  --mwv-accent: var(--interactive-accent);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  padding: 6px;
+  background: var(--mwv-bg);
+  color: var(--mwv-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Arial, sans-serif;
+  letter-spacing: 0;
+}
+
+.mwv-night-mode,
+.mwv-night-mode .mwv-browser-chrome,
+.mwv-night-mode .mwv-extension-panel,
+.mwv-night-mode .mwv-note-surface,
+.mwv-night-mode .mwv-reader-panel {
+  background: #101112;
+  color: #e5e7eb;
+}
+
+.mwv-night-mode .mwv-frame,
+.mwv-night-mode .mwv-live-frame,
+.mwv-night-mode .mwv-real-webview {
+  filter: brightness(0.78) contrast(1.08);
+}
+
+.mwv-eye-protection .mwv-home,
+.mwv-eye-protection .mwv-note-surface,
+.mwv-eye-protection .mwv-reader-panel,
+.mwv-eye-protection .mwv-md-content {
+  background: color-mix(in srgb, var(--background-primary) 82%, #b7d7aa);
+}
+
+.mwv-no-images img,
+.mwv-no-images picture,
+.mwv-no-images .mwv-page-media,
+.mwv-no-images .mwv-result-media {
+  display: none;
+}
+
+.mwv-ad-hidden {
+  display: none;
+}
+
+.mwv-mark-ads .mwv-ad-candidate,
+.mwv-mark-ads [id*="ad" i],
+.mwv-mark-ads [class*="ad-" i],
+.mwv-mark-ads [class*="ads" i],
+.mwv-mark-ads [class*="advert" i],
+.mwv-mark-ads [id*="sponsor" i],
+.mwv-mark-ads [class*="sponsor" i],
+.mwv-mark-ads [id*="promo" i],
+.mwv-mark-ads [class*="promo" i],
+.mwv-mark-ads [data-ad],
+.mwv-mark-ads [data-ads],
+.mwv-mark-ads [data-ad-client],
+.mwv-mark-ads [data-ad-slot],
+.mwv-mark-ads iframe[src*="ad" i],
+.mwv-mark-ads iframe[src*="doubleclick" i],
+.mwv-mark-ads iframe[src*="googlesyndication" i],
+.mwv-mark-ads iframe[src*="adservice" i],
+.mwv-mark-ads [aria-label*="advert" i],
+.mwv-mark-ads [aria-label*="sponsor" i],
+.mwv-mark-ads ins.adsbygoogle {
+  outline: 2px dashed #ef4444;
+  outline-offset: 2px;
+}
+
+.mwv-incognito {
+  --mwv-accent: #a78bfa;
+}
+
+.mwv-rotated .mwv-frame,
+.mwv-rotated .mwv-live-frame,
+.mwv-rotated .mwv-real-webview {
+  min-width: 760px;
+}
+
+.mwv-root,
+.mwv-note-embed,
+.mwv-reader-panel,
+.mwv-note-surface {
+  font-size: calc(1em * var(--mwv-reader-font-scale, 1));
+}
+
+.mwv-root *,
+.mwv-root input,
+.mwv-root button {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Arial, sans-serif;
+  letter-spacing: 0;
+}
+
+.mwv-rtl,
+.mwv-rtl .mwv-note-surface,
+.mwv-rtl .mwv-reader-panel,
+.mwv-rtl .mwv-extension-panel {
+  direction: rtl;
+  text-align: right;
+}
+
+.mwv-rtl .mwv-address,
+.mwv-rtl .mwv-browser-url,
+.mwv-rtl .mwv-bing-input,
+.mwv-rtl .mwv-utility-url,
+.mwv-rtl .mwv-download-item-path,
+.mwv-rtl .mwv-assets-url,
+.mwv-rtl .mwv-source-code,
+.mwv-rtl .mwv-qr-url {
+  direction: ltr;
+  text-align: left;
+}
+
+.mwv-header {
+  display: grid;
+  gap: 5px;
+  position: relative;
+  z-index: 1205;
+  min-width: 0;
+}
+
+.mwv-address-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 38px 38px;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 72%, transparent);
+  border-radius: 999px;
+  background: var(--mwv-panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.mwv-address-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mwv-muted);
+}
+
+.mwv-address-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.mwv-address {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mwv-text);
+  font-size: 14px;
+  outline: none;
+}
+
+.mwv-address:focus {
+  box-shadow: none;
+}
+
+.mwv-icon-button,
+.mwv-tool-button,
+.mwv-tab,
+.mwv-list-item,
+.mwv-pill-button {
+  border: 1px solid var(--mwv-border);
+  background: var(--interactive-normal);
+  color: var(--mwv-text);
+  cursor: pointer;
+}
+
+.mwv-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.mwv-primary {
+  border-color: color-mix(in srgb, var(--mwv-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--mwv-accent) 14%, transparent);
+  color: var(--mwv-accent);
+}
+
+.mwv-wand-inline {
+  color: #8b5cf6;
+}
+
+.mwv-meta {
+  display: none;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mwv-tab-strip {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  padding: 2px 2px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--mwv-border) 72%, transparent);
+}
+
+
+.mwv-embed-tab-strip {
+  position: relative;
+  z-index: 1207;
+  padding: 3px 6px 0;
+  background: var(--background-secondary);
+}
+
+.mwv-browser-tab,
+.mwv-browser-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 80%, transparent);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.mwv-browser-tab {
+  gap: 6px;
+  max-width: 210px;
+  margin-right: -1px;
+  padding: 0 8px 0 12px;
+}
+
+.mwv-browser-tab.is-active {
+  border-color: color-mix(in srgb, var(--mwv-accent) 42%, var(--mwv-border));
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: 0 -1px 0 var(--background-primary) inset;
+}
+
+.mwv-browser-tab-title {
+  overflow: hidden;
+  min-width: 42px;
+  max-width: 128px;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-utility-page {
+  min-height: 70vh;
+}
+
+.mwv-utility-content {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.mwv-utility-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mwv-utility-summary-card {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, var(--background-modifier-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-secondary));
+}
+
+.mwv-utility-summary-label {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-utility-summary-value {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text-normal);
+  font-size: 15px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-utility-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mwv-utility-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary) 88%, var(--background-primary));
+}
+
+.mwv-utility-main {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.mwv-utility-meta {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.mwv-utility-host,
+.mwv-utility-time {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-utility-host {
+  color: var(--interactive-accent);
+}
+
+.mwv-utility-title,
+.mwv-cancip-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-utility-url,
+.mwv-cancip-desc {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mwv-utility-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 1px;
+}
+
+.mwv-cancip-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 32%, var(--background-modifier-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
+}
+
+.mwv-browser-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.mwv-browser-tab-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mwv-browser-tab-close:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-browser-tab-add {
+  width: 36px;
+  padding: 0;
+  margin-left: 6px;
+}
+
+.mwv-browser-tab-add svg {
+  width: 15px;
+  height: 15px;
+}
+
+.mwv-title,
+.mwv-subtitle,
+.mwv-list-title,
+.mwv-list-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mwv-subtitle {
+  color: var(--mwv-muted);
+  font-size: 11px;
+}
+
+.mwv-frame-wrap {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  contain: strict;
+}
+
+.mwv-frame-wrap.is-live-page {
+  display: grid;
+  grid-template-rows: minmax(360px, 1fr) auto;
+  overflow: auto;
+  contain: content;
+}
+
+.mwv-frame-wrap.is-note-front {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
+.mwv-frame-wrap.is-web-front {
+  grid-template-rows: minmax(360px, 1fr) 0;
+}
+
+.mwv-frame-wrap.is-split-front {
+  grid-template-rows: minmax(320px, 48vh) auto;
+}
+
+.mwv-frame,
+.mwv-real-webview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
+
+.mwv-real-webview.is-loading {
+  box-shadow: inset 0 2px 0 var(--interactive-accent);
+}
+
+.mwv-real-webview.has-load-error {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, #dc2626 70%, transparent);
+}
+
+.mwv-webview-probe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mwv-frame.mwv-desktop-frame,
+.mwv-live-frame.mwv-desktop-frame,
+.mwv-real-webview.mwv-desktop-frame {
+  width: 980px;
+  max-width: none;
+}
+
+.mwv-frame.is-hidden,
+.mwv-real-webview.is-hidden {
+  display: none;
+}
+
+.mwv-frame-wrap.is-live-page .mwv-frame,
+.mwv-frame-wrap.is-live-page .mwv-real-webview {
+  min-height: 64vh;
+  border-bottom: 1px solid var(--mwv-border);
+}
+
+.mwv-frame-wrap.is-note-front .mwv-frame,
+.mwv-frame-wrap.is-note-front .mwv-real-webview {
+  min-height: 0;
+  height: 0;
+  visibility: hidden;
+}
+
+.mwv-frame-wrap.is-web-front .mwv-home {
+  display: none;
+}
+
+.mwv-home {
+  display: none;
+  height: 100%;
+  min-height: 100%;
+  overflow: auto;
+  padding: 18px 12px 110px;
+  background: var(--background-primary);
+  color: var(--mwv-text);
+}
+
+.mwv-virtual-md {
+  font-family: var(--font-text);
+  color: var(--text-normal);
+  background:
+    linear-gradient(to bottom, transparent 0, transparent 26px, color-mix(in srgb, var(--background-modifier-border) 14%, transparent) 27px),
+    var(--background-primary);
+  background-size: 100% 28px;
+}
+
+.mwv-home.is-visible {
+  display: block;
+}
+
+.mwv-home.is-visible:not(.mwv-reader-strip) {
+  min-height: 100%;
+}
+
+.mwv-home.mwv-reader-strip {
+  height: auto;
+  max-height: 42vh;
+  padding: 10px 12px 64px;
+  border-top: 1px solid var(--mwv-border);
+  background: var(--background-primary);
+}
+
+/* Raw Web mode is a single guest surface. Keep the original site out of the
+   browser's grid/containment rules and never let the note pane reserve a row
+   or leave a second canvas above the page. This is scoped to the standalone
+   Mobile Webviewer root; ordinary Markdown notes do not match it. */
+.mwv-root.is-raw-web {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mwv-root.is-raw-web .mwv-frame-wrap {
+  position: relative;
+  display: block;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  contain: none;
+  background: transparent;
+}
+
+.mwv-root.is-raw-web .mwv-home,
+.mwv-root.is-raw-web .mwv-drawer,
+.mwv-root.is-raw-web .notedraw-header-button,
+.mwv-root.is-raw-web .notedraw-webview-button,
+.mwv-root.is-raw-web .notedraw-fallback-button,
+.mwv-root.is-raw-web .notedraw-webview-inline-button,
+.mwv-root.is-raw-web .mwv-notedraw-anchor,
+.mwv-root.is-raw-web .notedraw-underlay-embed-layer,
+.mwv-root.is-raw-web .notedraw-embed-layer,
+.mwv-root.is-raw-web .notedraw-underlay-canvas,
+.mwv-root.is-raw-web .notedraw-static-canvas,
+.mwv-root.is-raw-web .notedraw-canvas,
+.mwv-root.is-raw-web .notedraw-toolbar,
+.mwv-root.is-raw-web .notedraw-palette-panel,
+.mwv-root.is-raw-web .notedraw-brush-panel,
+.mwv-root.is-raw-web .notedraw-text-panel,
+.mwv-root.is-raw-web .notedraw-selection-menu,
+.mwv-root.is-raw-web .notedraw-format-toolbar,
+.mwv-root.is-raw-web .notedraw-file-input {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-root.is-raw-web .mwv-real-webview,
+.mwv-root.is-raw-web .mwv-frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  border: 0;
+  transform: none !important;
+  filter: none !important;
+  zoom: 1 !important;
+  background: transparent;
+}
+
+.mwv-find-panel {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px 34px auto;
+  gap: 6px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 80%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-content > .mwv-find-panel,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .mwv-find-panel {
+  position: absolute;
+  top: 58px;
+  right: 10px;
+  left: 10px;
+}
+
+.mwv-find-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--mwv-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.mwv-find-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.mwv-find-button:hover,
+.mwv-find-button:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mwv-find-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mwv-find-status {
+  min-width: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.mwv-find-mark {
+  border-radius: 3px;
+  background: color-mix(in srgb, #fde047 72%, var(--background-primary));
+  color: #111827;
+  padding: 0 1px;
+}
+
+.mwv-reader-strip .mwv-note-surface {
+  max-width: 920px;
+  min-height: 0;
+  padding: 8px 8px 18px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mwv-reader-strip .mwv-note-surface h1 {
+  margin-bottom: 8px;
+  font-size: 17px;
+}
+
+.mwv-reader-strip .mwv-note-content p {
+  margin-bottom: 8px;
+}
+
+.mwv-home-search {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 4px 5px 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background-primary) 88%, var(--background-secondary));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  margin: 8px 0 14px;
+}
+
+.mwv-search-note {
+  min-height: calc(100dvh - 132px);
+}
+
+
+
+.mwv-home-search-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mwv-muted);
+}
+
+.mwv-home-input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--mwv-text);
+  font-size: 16px;
+  outline: none;
+}
+
+.mwv-home-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mwv-accent) 14%, transparent);
+  color: var(--mwv-accent);
+}
+
+.mwv-home-note {
+  color: var(--mwv-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.mwv-home-quick {
+  display: none;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 720px;
+  margin: 16px auto;
+}
+
+.mwv-home-chip {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--mwv-border);
+  border-radius: 999px;
+  background: var(--mwv-panel);
+  color: var(--mwv-text);
+  font-size: 12px;
+}
+
+.mwv-results {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+  margin: 14px auto 0;
+}
+
+.mwv-result {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 76%, transparent);
+  border-radius: 14px;
+  background: var(--mwv-panel);
+  color: var(--mwv-text);
+  text-align: left;
+  overflow: hidden;
+  user-select: text;
+}
+
+.mwv-result-title {
+  color: #1a5fb4;
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.mwv-result-title:hover,
+.mwv-result-title:focus-visible {
+  color: #174ea6;
+  text-decoration: underline;
+}
+
+.mwv-result-url {
+  overflow: hidden;
+  color: color-mix(in srgb, #15803d 78%, var(--mwv-muted));
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-result-snippet {
+  color: var(--mwv-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.mwv-more-results {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 28%, var(--background-modifier-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+  color: var(--text-accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mwv-more-results:disabled {
+  opacity: 0.66;
+}
+
+.mwv-note-surface {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 760px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 18px 16px 120px;
+  color: var(--text-normal);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mwv-note-surface *,
+.mwv-reader-panel *,
+.mwv-md-content *,
+.mwv-note-content *,
+.mwv-webnote-editor *,
+.mwv-bing-result *,
+.mwv-result * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mwv-md-content,
+.mwv-note-content,
+.mwv-webnote-editor,
+.mwv-reader-panel {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mwv-md-content pre,
+.mwv-md-content code,
+.mwv-note-content pre,
+.mwv-note-content code,
+.mwv-webnote-editor pre,
+.mwv-webnote-editor code,
+.mwv-reader-panel pre,
+.mwv-reader-panel code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mwv-md-content table,
+.mwv-note-content table,
+.mwv-webnote-editor table,
+.mwv-reader-panel table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mwv-note-source {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mwv-note-surface h1 {
+  margin: 0 0 14px;
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 760;
+}
+
+.mwv-virtual-md .mwv-note-surface h1 {
+  font-family: var(--font-interface);
+}
+
+.mwv-note-content h1,
+.mwv-note-content h2,
+.mwv-note-content h3,
+.mwv-note-related h2 {
+  margin: 22px 0 8px;
+  line-height: 1.25;
+}
+
+.mwv-note-content h1 {
+  font-size: 24px;
+}
+
+.mwv-note-content h2,
+.mwv-note-related h2 {
+  font-size: 20px;
+}
+
+.mwv-note-content h3 {
+  font-size: 17px;
+}
+
+.mwv-note-content p {
+  margin: 0 0 13px;
+  overflow-wrap: anywhere;
+}
+
+.mwv-note-content ul,
+.mwv-note-content ol {
+  margin: 0 0 13px 20px;
+  padding: 0;
+}
+
+.mwv-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.mwv-note-actions button,
+.mwv-note-link {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.mwv-note-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.mwv-note-actions button.mwv-note-action-icon {
+  display: inline-flex;
+  width: 34px;
+  min-width: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.mwv-note-actions button.mwv-note-action-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mwv-note-actions button.is-active {
+  border-color: color-mix(in srgb, var(--interactive-accent) 50%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+  color: var(--text-accent);
+}
+
+.mwv-webnote-status {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.mwv-webnote-wrap {
+  position: relative;
+}
+
+.mwv-webnote-editor {
+  min-height: 260px;
+  border-radius: 8px;
+  outline: none;
+}
+
+.mwv-webnote-editor:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+}
+
+.mwv-doodle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.mwv-note-surface.is-doodling .mwv-doodle-layer,
+.mwv-reader-panel.is-doodling .mwv-doodle-layer {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.mwv-note-surface.is-doodling .mwv-webnote-editor,
+.mwv-reader-panel.is-doodling .mwv-webnote-editor {
+  user-select: none;
+}
+
+.mwv-note-related {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.mwv-note-link {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+}
+
+.mwv-note-link-title {
+  color: var(--text-accent);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.mwv-note-link-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-floating-wand {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid color-mix(in srgb, #8b5cf6 40%, var(--mwv-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background-primary) 92%, #8b5cf6);
+  color: #8b5cf6;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+.mwv-floating-wand svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mwv-floating-wand.is-hidden {
+  display: none;
+}
+
+.mwv-pill-button {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mwv-drawer {
+  position: absolute;
+  right: 8px;
+  bottom: 64px;
+  left: 8px;
+  z-index: 8;
+  display: none;
+  gap: 8px;
+  max-height: min(46vh, 360px);
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--mwv-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+}
+
+.mwv-drawer.is-open {
+  display: grid;
+}
+
+.mwv-more-panel {
+  position: absolute;
+  right: 8px;
+  bottom: 64px;
+  left: 8px;
+  z-index: 12;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 9px;
+  max-height: min(78vh, 680px);
+  overflow: hidden;
+  padding: 10px;
+  border: 1px solid var(--mwv-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.mwv-drawer-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  align-items: center;
+}
+
+.mwv-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mwv-tab {
+  overflow: hidden;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--mwv-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-tab.is-active {
+  border-color: var(--mwv-accent);
+  color: var(--mwv-text);
+}
+
+.mwv-list {
+  display: grid;
+  gap: 5px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mwv-list-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.mwv-console-list-item {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 76%, transparent);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.mwv-console-list-meta {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.mwv-console-list-item.is-warn .mwv-console-list-meta {
+  color: #b45309;
+}
+
+.mwv-console-list-item.is-error .mwv-console-list-meta {
+  color: #dc2626;
+}
+
+.mwv-console-list-message {
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mwv-console-list-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-download-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mwv-download-list-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary) 88%, var(--background-primary));
+}
+
+.mwv-download-list-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.mwv-download-list-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-download-list-state {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mwv-download-list-item.is-completed .mwv-download-list-state {
+  color: #15803d;
+}
+
+.mwv-download-list-item.is-error .mwv-download-list-state {
+  color: #dc2626;
+}
+
+.mwv-download-list-url,
+.mwv-download-list-path,
+.mwv-download-list-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-download-list-path {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.mwv-download-list-meta {
+  color: var(--text-faint);
+}
+
+.mwv-download-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mwv-mini-action {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 78%, transparent);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mwv-mini-action:hover,
+.mwv-mini-action:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-list-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mwv-list-url,
+.mwv-empty {
+  color: var(--mwv-muted);
+  font-size: 11px;
+}
+
+.mwv-empty {
+  padding: 10px;
+  text-align: center;
+}
+
+.mwv-toolbar {
+  display: flex;
+  position: relative;
+  z-index: 1205;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 3px 3px max(3px, env(safe-area-inset-bottom));
+  border: 1px solid color-mix(in srgb, var(--mwv-border) 72%, transparent);
+  border-radius: 16px;
+  background: var(--mwv-panel);
+}
+
+.mwv-tool-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 46px;
+  min-width: 0;
+  height: 42px;
+  padding: 4px;
+  border-color: transparent;
+  border-radius: 12px;
+  background: transparent;
+  font-size: 10px;
+}
+
+.mwv-tool-button:hover,
+.mwv-tool-button:active {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-tool-button svg,
+.mwv-icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.mwv-tool-label {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-compact .mwv-tool-button {
+  height: 42px;
+}
+
+.mwv-compact .mwv-tool-label {
+  display: none;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-content {
+  padding: 0;
+}
+
+.mwv-settings input[type="text"] {
+  width: 100%;
+}
+
+.mwv-settings textarea {
+  width: 100%;
+  min-height: 96px;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mwv-settings-section {
+  margin: 24px 0 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mwv-settings-section-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.mwv-settings-section-desc {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.mwv-settings-support {
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mwv-settings-support-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: 800;
+}
+
+.mwv-settings-support-desc {
+  margin-top: 4px;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.mwv-settings-support-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 160px));
+  gap: 14px;
+  align-items: start;
+}
+
+.mwv-settings-support-card {
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+}
+
+.mwv-settings-support-image {
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mwv-settings-support-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.mwv-script-rule-setting {
+  margin: 10px 0 14px;
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mwv-script-rule-setting .setting-item {
+  padding: 8px 0;
+}
+
+.mwv-script-rule-setting textarea {
+  min-height: 84px;
+}
+
+.markdown-preview-view .mwv-embed,
+.markdown-rendered .mwv-embed {
+  display: block;
+}
+
+/* The browser document owns the entire Obsidian pane. Obsidian's readable-line
+   -width rule (`.markdown-preview-view.is-readable-line-width
+   .markdown-preview-sizer`) is one step more specific than a two-class
+   selector, so the file-margin variables are reset on the document element and
+   the sizing chain is pinned with matching specificity. */
+.markdown-preview-view.mwv-note-browser-document,
+.markdown-rendered.mwv-note-browser-document,
+.mwv-note-browser-document {
+  --file-margins: 0px;
+  --file-line-width: 100%;
+  --line-width: 100%;
+  --line-width-adaptive: 100%;
+}
+
+.markdown-preview-view.mwv-note-browser-document {
+  padding: 0 !important;
+}
+
+.markdown-preview-view.mwv-note-browser-document .markdown-preview-sizer,
+.markdown-preview-view.mwv-note-browser-document .markdown-preview-section {
+  width: 100% !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+}
+
+.mwv-note-browser-document .mwv-embed,
+.mwv-note-browser-document .mwv-note-embed,
+.mwv-note-browser-document .mwv-note-surface,
+.mwv-note-browser-document .mwv-bing-results {
+  width: 100%;
+  max-width: none;
+}
+
+/* The native Obsidian view title only mirrors the current URL and cannot be
+   edited, and the native pane menu has no back/forward entry. NoteWeb
+   therefore keeps a compact, editable address row plus its navigation
+   controls on every platform, mobile included. Only the duplicated action row
+   stays hidden, because Obsidian's native view actions already host those
+   commands. */
+.mwv-note-browser-document .mwv-browser-chrome {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "controls"
+    "address";
+  gap: 2px;
+  padding: 4px 6px 5px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: transparent;
+}
+
+.mwv-note-browser-document .mwv-browser-controls {
+  display: inline-flex;
+  grid-area: controls;
+  justify-content: flex-start;
+}
+
+.mwv-note-browser-document .mwv-browser-address {
+  display: grid;
+  grid-area: address;
+}
+
+.mwv-note-browser-document .mwv-browser-actions {
+  display: none !important;
+}
+
+/* Host-side NoteDraw layers are hidden only while the NoteWeb document is
+   showing its raw Web presentation. The marker is class-based so existing
+   inline styles on ordinary notes and plugin-owned elements are preserved. */
+.mwv-note-browser-document .mwv-noteweb-raw-hidden {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* The wand belongs to NoteDraw, so NoteDraw keeps its controller (and its
+   native button) mounted for the live guest. Its drawing layers must stay
+   invisible until the user turns element editing on with that wand. This rule
+   is state-driven on purpose: a layer NoteDraw mounts later is hidden the
+   moment it appears, so no per-mount bookkeeping (and no flicker) is needed.
+   The wand button itself is not in the list — only the drawing surface. */
+.mwv-note-browser-document .mwv-embed.is-web-front:not([data-mwv-noteweb-element-edit="true"]) :is(
+    .notedraw-canvas,
+    .notedraw-static-canvas,
+    .notedraw-embed-layer,
+    .notedraw-underlay-embed-layer,
+    .notedraw-underlay-canvas,
+    .notedraw-toolbar,
+    .notedraw-palette-panel,
+    .notedraw-brush-panel,
+    .notedraw-text-panel,
+    .notedraw-selection-menu,
+    .notedraw-format-toolbar
+  ) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Markdown preview roots can be rebuilt by Obsidian without giving the
+   post-processor another chance to add mwv-note-browser-document. Keep the
+   editable address row reachable from the structural marker as well, so the
+   address input survives a preview rebuild instead of disappearing. */
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "controls"
+    "address";
+  gap: 2px;
+  padding: 4px 6px 5px;
+  background: transparent;
+}
+
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-address,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-address {
+  display: grid;
+  grid-area: address;
+}
+
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-actions,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-actions {
+  display: none !important;
+}
+
+.mwv-note-browser-document .mwv-bing-home,
+.mwv-note-browser-document .mwv-note-embed,
+.mwv-note-browser-document .mwv-utility-embed {
+  margin-top: 0;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.mwv-note-browser-document .mwv-bing-home-empty {
+  padding-top: 0;
+}
+
+.mwv-note-browser-document .mwv-reader-panel {
+  padding-top: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-results {
+  margin-top: 12px;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-serp {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mwv-note-browser-document .mwv-bing-side {
+  display: none;
+}
+
+/* Note mode (reader page / native home) shares the same contract as Web mode:
+   the browser chrome keeps its natural height and the document body takes every
+   remaining pixel, instead of relying on a hard-coded viewport offset. */
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) {
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) > .notedraw-reading-stage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front) > .markdown-preview-sizer,
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .markdown-preview-sizer > .el-div:has(> .mwv-embed.is-note-front),
+.mwv-note-browser-document:has(.mwv-embed.is-note-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer
+  > .el-div:has(> .mwv-embed.is-note-front) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-embed.is-note-front {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-browser-chrome {
+  flex: 0 0 auto;
+}
+
+/* Content below the address row scrolls inside the pane so the note itself
+   never scrolls away from the browser chrome. */
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-reader-panel,
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-bing-note-content,
+.mwv-note-browser-document .mwv-embed.is-note-front > .mwv-note-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Web mode owns the NoteWeb viewport. Remove Obsidian's reading-view tail
+   spacer and let every ancestor down to the Electron webview share the same
+   available height instead of stopping at a fixed vh value. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front) {
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front) > .notedraw-reading-stage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front) > .markdown-preview-sizer,
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  /* NoteDraw may leave a stale inline virtual height behind when the live
+     webview becomes visible. Web mode owns this viewport, so the stale value
+     must never be allowed to expand the Markdown document. */
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  > .markdown-preview-sizer > .el-div:has(> .mwv-embed.is-web-front),
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  > .notedraw-reading-stage > .markdown-preview-sizer
+  > .el-div:has(> .mwv-embed.is-web-front) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-home.is-web-front,
+.mwv-note-browser-document .mwv-note-embed.is-web-front {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Web is a presentation of the live guest, not another rendered Note page.
+   Legacy NoteWeb documents can still contain unwrapped search/reader nodes;
+   remove every host child except the live surface from layout so those nodes
+   can never squeeze the Electron guest to a zero-height viewport. The
+   browser chrome is deliberately exempt: a real page must still let the user
+   type a different URL, so the address row stays mounted above the guest.
+   The extension ("More") panel is exempt as well: it is inserted as a direct
+   child of the embed and must stay visible above the guest, otherwise the
+   More entry appears to do nothing in Web mode.
+   NoteDraw's own UI layers (toolbar, panels, canvases — every element whose
+   class starts with "notedraw-") are exempt too: NoteDraw 4.x mounts its
+   toolbar as a direct child of the embed in Web mode, and this rule used to
+   outrank every raw-edit exception, leaving the wand with a toolbar that was
+   mounted but permanently display:none. */
+.mwv-note-browser-document .mwv-embed.is-web-front > :not(.mwv-live-browser):not(.mwv-browser-chrome):not(.mwv-extension-panel):not(.mwv-more-panel):not([class^="notedraw-"]):not([class*=" notedraw-"]) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-extension-panel,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-more-panel {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* The More panel is absolutely positioned; anchor it to the embed in every
+   mode so it never escapes to an unrelated Obsidian container. */
+.mwv-note-browser-document .mwv-embed:has(> .mwv-extension-panel),
+.mwv-note-browser-document .mwv-embed:has(> .mwv-more-panel) {
+  position: relative;
+}
+
+/* The address row and the raw guest share one column: the chrome keeps its
+   natural height, the live page takes every remaining pixel. min-height is a
+   floor for mobile and for preview rebuilds whose flex chain has not settled
+   yet (it must never collapse the home page to a zero-height blank view), and
+   it is clamped by the viewport so it can never push past the Obsidian pane. */
+.mwv-note-browser-document .mwv-embed.is-web-front {
+  display: flex;
+  flex-direction: column;
+  min-height: min(480px, calc(100dvh - 100px));
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  flex: 0 0 auto;
+  z-index: 1210;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-address,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-url,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-go,
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-browser-chrome .mwv-browser-home {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front > .mwv-live-browser {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: min(440px, calc(100dvh - 140px));
+}
+
+/* Explicit raw-page editing is the only Web-mode exception. Reveal the
+   primary toolbar, but leave secondary panels to NoteDraw's own open-state
+   classes. The guest page remains the visual source until a drawing tool is
+   selected. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-toolbar) {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document .mwv-embed.is-web-front[data-mwv-noteweb-element-selector="true"]
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Keep Electron's webview in the flex sizing chain from its first layout.
+   A block-positioned webview falls back to a 150px guest viewport even when
+   its host rect is taller, which stretches the original page at the top. */
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  box-sizing: border-box;
+  visibility: visible;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+}
+
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-live-frame,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  position: static;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+}
+
+/* The Web presentation is a raw site surface. Host-side accessibility modes
+   must not filter, rotate, or otherwise transform the site's own rendering. */
+.mwv-note-browser-document .mwv-bing-home.is-web-front > .mwv-live-browser > .mwv-real-webview,
+.mwv-note-browser-document .mwv-note-embed.is-web-front > .mwv-live-browser > .mwv-real-webview {
+  filter: none !important;
+  min-width: 0 !important;
+  transform: none !important;
+}
+
+/* NoteDraw keeps its saved canvases mounted while Note/Web share one page.
+   They belong to Note mode only: never paint old strokes, text, or embedded
+   drawing layers over the site's raw Web presentation. */
+.mwv-note-browser-document .mwv-embed.is-web-front >
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas,
+      .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel,
+      .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* NoteDraw may retain its canvas/layers at the preview root instead of under
+   the embed. Web mode is an isolated raw browser surface, so no retained
+   NoteDraw artifact may paint over it, regardless of which host node owns it. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front)
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas,
+      .notedraw-toolbar, .notedraw-palette-panel, .notedraw-brush-panel,
+      .notedraw-text-panel, .notedraw-selection-menu, .notedraw-format-toolbar,
+      .notedraw-file-input) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Raw-page NoteDraw is stateful. Keep every secondary panel hidden until its
+   corresponding NoteDraw state class says it is open, and let the active
+   canvas take pointer ownership only after the guest selector is disabled.
+   These rules are deliberately after the legacy Web isolation rules above so
+   they win without changing the site's own DOM or layout. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-palette-panel, .notedraw-brush-panel, .notedraw-text-panel,
+      .notedraw-selection-menu, .notedraw-format-toolbar) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-palette-panel.is-palette-open.is-notedraw-controls-visible,
+      .notedraw-brush-panel.is-brush-panel-open.is-notedraw-controls-visible,
+      .notedraw-text-panel.is-text-panel-open.is-notedraw-controls-visible) {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-brush-panel.is-brush-panel-open.is-notedraw-controls-visible {
+  display: inline-flex !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  :is(.notedraw-selection-menu.is-visible.is-notedraw-controls-visible,
+      .notedraw-format-toolbar.is-visible.is-notedraw-controls-visible) {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-format-toolbar.is-visible.is-notedraw-controls-visible {
+  display: inline-flex !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"])
+  .notedraw-toolbar {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Guest element selection: the real WebView receives clicks and NoteDraw's
+   canvas is completely passive. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"][data-mwv-noteweb-element-selector="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"][data-mwv-noteweb-element-selector="true"])
+  .mwv-live-browser > :is(.mwv-live-frame, .mwv-real-webview) {
+  pointer-events: auto !important;
+}
+
+/* Drawing/text mode: NoteDraw's canvas is the only pointer target. The page
+   itself is still rendered by the untouched guest WebView underneath it. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  :is(.notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-canvas) {
+  display: block !important;
+  visibility: visible !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  :is(.notedraw-underlay-canvas, .notedraw-static-canvas, .notedraw-embed-layer,
+      .notedraw-underlay-embed-layer) {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  .notedraw-canvas {
+  pointer-events: auto !important;
+  cursor: crosshair;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-element-edit="true"]:not([data-mwv-noteweb-element-selector="true"]))
+  .mwv-live-browser > :is(.mwv-live-frame, .mwv-real-webview) {
+  pointer-events: none !important;
+}
+
+/* Closing the raw NoteDraw wand is a visibility toggle, not a drawing
+   reset. Keep the saved/static artwork (including embedded drawing layers)
+   painted over the untouched guest page while the interactive canvas and all
+   toolbar controls stay passive/hidden. The high-specificity :has selector
+   intentionally wins over the generic raw-isolation marker added by delayed
+   NoteDraw reconciliation. */
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer,
+      .notedraw-underlay-canvas, .notedraw-static-canvas) {
+  display: block !important;
+  visibility: visible !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  :is(.notedraw-underlay-embed-layer, .notedraw-embed-layer) * {
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-document:has(.mwv-embed.is-web-front[data-mwv-noteweb-drawing-visible="true"])
+  .notedraw-canvas {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
+  .mwv-notedraw-anchor {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.workspace-leaf-content:has(.mwv-note-browser-document .mwv-embed.is-web-front)
+  .view-actions > .notedraw-webview-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-note-browser-redundant-title {
+  display: none;
+}
+
+.mwv-note-browser-document .markdown-preview-sizer > .el-h1 {
+  display: none;
+}
+
+.markdown-preview-view:has(.mwv-embed[data-url]):has(h1[data-heading="Mobile Webviewer"])
+  > .markdown-preview-sizer > .mod-header,
+.markdown-preview-view:has(.mwv-embed[data-url]):has(h1[data-heading="Mobile Webviewer"])
+  > .markdown-preview-sizer > .el-h1 {
+  display: none;
+}
+
+.mwv-note-browser-native-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-note-browser-native-nav.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.mwv-note-browser-replaced-edit-action {
+  display: none !important;
+}
+
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-embed-layer,
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-static-canvas,
+.mwv-note-browser-document.mwv-notedraw-legacy-migrated > .notedraw-canvas {
+  display: none !important;
+}
+
+.mwv-note-embed {
+  display: block;
+  position: relative;
+  margin: 12px 0;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  line-height: 1.6;
+}
+
+.mwv-md-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.mwv-md-search input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.mwv-md-button,
+.mwv-md-search button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+}
+
+.mwv-md-results {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mwv-md-result {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  text-align: left;
+  user-select: text;
+}
+
+.mwv-md-result-title {
+  color: #1a5fb4;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.mwv-md-result-title:hover,
+.mwv-md-result-title:focus-visible {
+  color: #174ea6;
+  text-decoration: underline;
+}
+
+.mwv-md-result-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-md-result-snippet {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.mwv-md-content p {
+  margin: 0 0 0.85em;
+}
+
+.mwv-bing-home {
+  display: block;
+  position: relative;
+  margin: 8px 0 12px;
+  padding: 0 0 18px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  overflow: hidden;
+}
+
+.mwv-bing-home-empty {
+  display: block;
+  min-height: calc(100dvh - 120px);
+  padding: 0 10px 28px;
+}
+
+.mwv-bing-home-empty .mwv-browser-chrome {
+  margin: 0 -10px;
+}
+
+.mwv-bing-home-empty .mwv-bing-search {
+  width: min(100%, 760px);
+}
+
+.mwv-bing-home:not(.is-web-front) > .mwv-live-browser {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+  visibility: hidden;
+}
+
+.mwv-bing-home.is-web-front {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.mwv-bing-home.is-web-front > .mwv-bing-note-content {
+  display: none;
+}
+
+.markdown-rendered .mwv-bing-home .mwv-bing-note-content button,
+.markdown-preview-view .mwv-bing-home .mwv-bing-note-content button {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.mwv-bing-logo {
+  margin: 26px 0 18px;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: 32px;
+  font-weight: 720;
+  line-height: 1;
+  text-align: center;
+}
+
+.mwv-bing-serp-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 680px) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 18px 22px 10px;
+}
+
+.mwv-bing-mini-brand {
+  display: grid;
+  grid-template-columns: repeat(2, 11px);
+  grid-template-rows: repeat(2, 11px);
+  gap: 2px;
+  width: 24px;
+  height: 24px;
+}
+
+.mwv-ms-dot {
+  display: block;
+  width: 11px;
+  height: 11px;
+}
+
+.mwv-ms-red {
+  background: #f25022;
+}
+
+.mwv-ms-green {
+  background: #7fba00;
+}
+
+.mwv-ms-blue {
+  background: #00a4ef;
+}
+
+.mwv-ms-yellow {
+  background: #ffb900;
+}
+
+.mwv-bing-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+.mwv-bing-serp-head .mwv-bing-search {
+  max-width: none;
+  margin: 0;
+}
+
+.mwv-bing-input {
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 16px;
+  outline: none;
+}
+
+.mwv-bing-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--interactive-accent);
+  font-size: 18px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.mwv-bing-shortcuts {
+  display: none;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 16px auto 0;
+}
+
+.mwv-bing-shortcuts a {
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.mwv-bing-tabs {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 22px 0 76px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  overflow-x: auto;
+}
+
+.mwv-bing-tab {
+  position: relative;
+  min-width: max-content;
+  padding: 9px 0 11px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* NoteWeb is rendered inside Markdown, where Obsidian can add button chrome.
+   Keep the Bing-style result tabs quiet and text-like instead of boxed. */
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:hover,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:focus,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab:focus-visible,
+.mwv-note-browser-document .mwv-bing-home .mwv-bing-tab.is-active {
+  min-height: 0;
+  margin: 0;
+  padding: 9px 0 11px;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none;
+}
+
+.mwv-bing-tab.is-active {
+  color: var(--text-normal);
+  font-weight: 650;
+}
+
+.mwv-bing-tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+  content: "";
+}
+
+.mwv-bing-results {
+  display: grid;
+  gap: 12px;
+  max-width: 1040px;
+  margin: 18px auto 0;
+  padding: 0 22px;
+}
+
+.mwv-bing-count {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.mwv-bing-serp {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 34px;
+  align-items: start;
+}
+
+.mwv-bing-main {
+  display: grid;
+  gap: 22px;
+}
+
+.mwv-bing-side {
+  display: grid;
+  gap: 10px;
+  position: sticky;
+  top: 8px;
+}
+
+.mwv-bing-side h3 {
+  margin: 0 0 2px;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.mwv-bing-result {
+  display: grid;
+  grid-auto-rows: auto;
+  gap: 5px;
+  align-items: start;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-normal);
+  text-align: left;
+  overflow: hidden;
+  user-select: text;
+}
+
+.mwv-bing-result:hover,
+.mwv-bing-result:focus-visible {
+  background: transparent;
+}
+
+.mwv-bing-result-title {
+  display: inline;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1a5fb4;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+  text-align: left;
+  text-decoration: none;
+  user-select: text;
+  cursor: pointer;
+}
+
+.mwv-bing-result-title:hover,
+.mwv-bing-result-title:focus-visible {
+  color: #174ea6;
+  text-decoration: underline;
+}
+
+.mwv-result-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.mwv-result-source {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.mwv-result-favicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-secondary));
+  color: var(--interactive-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mwv-result-source-text {
+  min-width: 0;
+}
+
+.mwv-result-host {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-bing-result-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.mwv-bing-result-snippet,
+.mwv-bing-status {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  user-select: text;
+}
+
+.mwv-result-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.mwv-result-thumb {
+  width: 112px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--background-secondary);
+}
+
+.mwv-note-browser-document .mwv-result-thumb,
+.mwv-note-browser-document .mwv-page-media img {
+  border: 0;
+  box-shadow: none;
+}
+
+.mwv-result-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mwv-result-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mwv-result-action:hover,
+.mwv-result-action:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mwv-bing-answer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 4px 0 8px;
+}
+
+.mwv-bing-answer-card {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  min-height: 128px;
+  padding: 18px;
+  border: 0;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--background-secondary) 82%, var(--background-primary));
+  color: var(--text-normal);
+  text-align: left;
+  user-select: text;
+}
+
+.mwv-bing-answer-title {
+  display: inline;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-accent);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  user-select: text;
+}
+
+.mwv-bing-answer-snippet {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mwv-related-pill {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  text-align: left;
+}
+
+.mwv-related-icon {
+  color: var(--text-muted);
+}
+
+.mwv-browser-chrome {
+  display: grid;
+  position: sticky;
+  top: 0;
+  z-index: 1205;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "controls actions"
+    "address address";
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.mwv-browser-status {
+  display: grid;
+  position: sticky;
+  top: 47px;
+  z-index: 1204;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.mwv-browser-page-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-browser-status-text {
+  overflow: hidden;
+  max-width: 42vw;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-browser-controls {
+  display: inline-flex;
+  position: relative;
+  z-index: 1205;
+  grid-area: controls;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mwv-browser-nav {
+  display: inline-flex;
+  position: relative;
+  z-index: 1206;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+  /* Touch devices: fire the tap without the double-tap-zoom delay, and without
+     the synthetic-500 ms window in which a rebuild can steal the gesture. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mwv-browser-nav:hover,
+.mwv-browser-nav:focus-visible,
+.mwv-browser-action:hover,
+.mwv-browser-action:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mwv-browser-nav:disabled {
+  color: var(--text-faint);
+  opacity: 0.45;
+}
+
+.mwv-browser-nav.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  color: var(--text-accent);
+}
+
+.mwv-browser-address {
+  display: grid;
+  position: relative;
+  z-index: 1205;
+  grid-area: address;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 34px;
+  margin: 0;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-align: left;
+}
+
+.mwv-browser-home {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mwv-browser-home:hover,
+.mwv-browser-home:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mwv-browser-url {
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  outline: none;
+}
+
+.mwv-browser-address .mwv-browser-url,
+.mwv-browser-address .mwv-browser-url:hover,
+.mwv-browser-address .mwv-browser-url:focus,
+.mwv-browser-address .mwv-browser-url:focus-visible,
+.mwv-note-embed .mwv-browser-address .mwv-browser-url,
+.mwv-root .mwv-browser-address .mwv-browser-url {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.mwv-browser-go {
+  display: inline-flex;
+  position: relative;
+  z-index: 1206;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  padding: 0;
+}
+
+/* More lives at the end of the address row, where a phone browser keeps it.
+   It used to be a wrench pinned after NoteDraw's wand in the leaf header. */
+.mwv-browser-address .mwv-browser-more {
+  display: inline-flex;
+  position: relative;
+  z-index: 1206;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+  pointer-events: auto;
+  cursor: var(--cursor, pointer);
+}
+
+.mwv-browser-address .mwv-browser-more:hover,
+.mwv-browser-address .mwv-browser-more:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mwv-browser-actions {
+  display: inline-flex;
+  position: relative;
+  z-index: 1205;
+  grid-area: actions;
+  align-items: center;
+  gap: 2px;
+}
+
+.mwv-browser-action {
+  display: inline-flex;
+  position: relative;
+  z-index: 1206;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  flex: 0 0 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+.notedraw-shell.is-drawing-active .mwv-header,
+.notedraw-shell.is-drawing-active .mwv-toolbar,
+.notedraw-shell.is-drawing-active .mwv-browser-chrome,
+.notedraw-shell.is-drawing-active .mwv-browser-controls,
+.notedraw-shell.is-drawing-active .mwv-browser-nav,
+.notedraw-shell.is-drawing-active .mwv-browser-address,
+.notedraw-shell.is-drawing-active .mwv-browser-go,
+.notedraw-shell.is-drawing-active .mwv-browser-actions,
+.notedraw-shell.is-drawing-active .mwv-browser-action,
+.notedraw-shell.is-drawing-active .mwv-extension-panel,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-header,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-toolbar,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-chrome,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-controls,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-nav,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-address,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-go,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-actions,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-browser-action,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .notedraw-shell.is-drawing-active .mwv-extension-panel {
+  z-index: 1205;
+}
+
+.mwv-extension-panel {
+  position: absolute;
+  top: 58px;
+  right: 8px;
+  left: 8px;
+  z-index: 1210;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 9px;
+  max-height: min(78vh, 680px);
+  overflow: hidden;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.mwv-more-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+}
+
+.mwv-more-body {
+  display: grid;
+  gap: 9px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.mwv-more-title,
+.mwv-extension-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-more-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.mwv-more-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mwv-more-feedback {
+  min-height: 30px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mwv-more-feedback.is-error {
+  border-color: color-mix(in srgb, #dc2626 45%, var(--background-modifier-border));
+  background: color-mix(in srgb, #dc2626 9%, var(--background-primary));
+  color: #dc2626;
+}
+
+.mwv-note-embed > .mwv-embed-tab-strip,
+.mwv-bing-home > .mwv-embed-tab-strip,
+.mwv-utility-embed > .mwv-embed-tab-strip {
+  position: sticky;
+  top: 0;
+  z-index: 1207;
+  background: var(--background-primary);
+}
+
+.mwv-note-embed > .mwv-browser-chrome,
+.mwv-bing-home > .mwv-browser-chrome,
+.mwv-utility-embed > .mwv-browser-chrome {
+  top: 0;
+  z-index: 1206;
+}
+
+.mwv-note-embed > .mwv-browser-status,
+.mwv-bing-home > .mwv-browser-status,
+.mwv-utility-embed > .mwv-browser-status {
+  top: 82px;
+  z-index: 1205;
+}
+
+.mwv-more-sections {
+  display: grid;
+  gap: 10px;
+}
+
+.mwv-more-section {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0 10px;
+  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
+}
+
+.mwv-more-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.mwv-more-section-title {
+  min-height: 18px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.mwv-more-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mwv-more-action {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 7px;
+  justify-items: start;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 12px;
+  text-align: left;
+}
+
+.mwv-more-action svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+}
+
+.mwv-more-action span {
+  display: -webkit-box;
+  overflow: hidden;
+  max-width: 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mwv-more-action:hover,
+.mwv-more-action:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-extension-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.mwv-extension-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mwv-extension-name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.mwv-extension-state {
+  color: var(--text-accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mwv-extension-desc {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.mwv-bookmarks-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: color-mix(in srgb, var(--background-primary) 90%, var(--background-secondary));
+}
+
+.mwv-bookmark-chip {
+  flex: 0 0 auto;
+  max-width: 180px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+  text-align: left;
+}
+
+.mwv-bookmark-chip span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-console-panel {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.mwv-more-wide-panel {
+  grid-column: 1 / -1;
+  max-height: min(42vh, 340px);
+}
+
+.mwv-console-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mwv-console-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.mwv-console-level {
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mwv-console-row.is-warn .mwv-console-level {
+  color: #b45309;
+}
+
+.mwv-console-row.is-error .mwv-console-level {
+  color: #dc2626;
+}
+
+.mwv-console-message,
+.mwv-console-empty {
+  min-width: 0;
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+
+.mwv-console-url {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.mwv-reading-panel,
+.mwv-history-panel,
+.mwv-downloads-panel,
+.mwv-site-panel,
+.mwv-tools-panel,
+.mwv-assets-panel,
+.mwv-source-panel,
+.mwv-qr-panel,
+.mwv-report-panel,
+.mwv-translate-panel {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.mwv-reading-title,
+.mwv-history-title,
+.mwv-downloads-title,
+.mwv-site-title,
+.mwv-tools-title,
+.mwv-assets-title,
+.mwv-source-title,
+.mwv-qr-title,
+.mwv-report-title,
+.mwv-translate-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mwv-reading-empty,
+.mwv-history-empty,
+.mwv-downloads-empty,
+.mwv-assets-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mwv-reading-item,
+.mwv-history-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.mwv-reading-item:hover,
+.mwv-reading-item:focus-visible,
+.mwv-history-item:hover,
+.mwv-history-item:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-reading-item-title,
+.mwv-history-item-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-reading-item-url,
+.mwv-history-item-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-download-item {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.mwv-download-item-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.mwv-download-item-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-download-item-state {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mwv-download-item.is-completed .mwv-download-item-state {
+  color: #15803d;
+}
+
+.mwv-download-item.is-error .mwv-download-item-state {
+  color: #dc2626;
+}
+
+.mwv-download-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+}
+
+.mwv-download-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--interactive-accent);
+}
+
+.mwv-download-item-meta,
+.mwv-download-item-path,
+.mwv-tools-row,
+.mwv-assets-url,
+.mwv-report-row {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-tools-row {
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.mwv-download-item-path {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.mwv-site-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mwv-site-name {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mwv-site-value {
+  color: var(--text-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mwv-source-code {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mwv-source-copy {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
+.mwv-qr-image {
+  width: min(220px, 72vw);
+  height: min(220px, 72vw);
+  justify-self: center;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  border-radius: 8px;
+  background: white;
+}
+
+.mwv-qr-url {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.mwv-translate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mwv-translate-lang {
+  display: grid;
+  gap: 2px;
+  min-height: 44px;
+  padding: 7px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.mwv-translate-lang.is-active {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+}
+
+.mwv-translate-native {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-translate-label,
+.mwv-translate-suggest-label {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-translate-suggest-native {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mwv-userscript-panel {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.mwv-userscript-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mwv-userscript-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mwv-userscript-item {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.mwv-userscript-name {
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mwv-userscript-match {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-userscript-state {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mwv-userscript-state span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 560px) {
+  .mwv-bing-serp-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 12px 8px;
+  }
+
+  .mwv-bing-serp-head .mwv-bing-search {
+    grid-column: 1 / -1;
+  }
+
+  .mwv-bing-tabs {
+    gap: 18px;
+    padding-left: 12px;
+  }
+
+  .mwv-bing-results {
+    padding: 0 12px;
+  }
+
+  .mwv-bing-serp {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .mwv-bing-side {
+    position: static;
+  }
+
+  .mwv-bing-answer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mwv-result-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mwv-result-thumb {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .mwv-page-media {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mwv-browser-chrome {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "controls actions"
+      "address address";
+    gap: 5px;
+    padding: 8px 8px 7px;
+  }
+
+  .mwv-note-embed > .mwv-browser-chrome,
+  .mwv-bing-home > .mwv-browser-chrome,
+  .mwv-utility-embed > .mwv-browser-chrome {
+    top: 0;
+  }
+
+  .mwv-note-embed > .mwv-browser-status,
+  .mwv-bing-home > .mwv-browser-status,
+  .mwv-utility-embed > .mwv-browser-status {
+    top: 124px;
+  }
+
+  .mwv-browser-controls {
+    grid-area: controls;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .mwv-browser-address {
+    grid-area: address;
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+    gap: 4px;
+    min-width: 0;
+    width: 100%;
+    height: 36px;
+    padding: 0 4px 0 8px;
+  }
+
+  .mwv-browser-lock {
+    max-width: 28px;
+    font-size: 10px;
+  }
+
+  .mwv-browser-url {
+    height: 28px;
+    font-size: 12px;
+    line-height: 28px;
+  }
+
+  .mwv-browser-go {
+    width: 28px;
+    height: 28px;
+  }
+
+  .mwv-browser-actions {
+    grid-area: actions;
+    justify-content: flex-end;
+    width: auto;
+  }
+
+  .mwv-browser-action {
+    width: 36px;
+    flex-basis: 36px;
+    height: 36px;
+  }
+}
+
+.mwv-note-embed {
+  display: block;
+  margin: 8px 0 12px;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  overflow: hidden;
+}
+
+.mwv-note-embed > .mwv-note-source,
+.mwv-note-embed > .mwv-page-title,
+.mwv-note-embed > .mwv-md-content,
+.mwv-note-embed > .mwv-note-actions,
+.mwv-note-embed > .mwv-page-links,
+.mwv-note-embed > p {
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.mwv-page-title {
+  margin-top: 16px;
+  font-size: 24px;
+  line-height: 1.22;
+}
+
+.mwv-page-links {
+  margin-top: 18px;
+  margin-bottom: 16px;
+}
+
+.mwv-page-media {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 16px 16px;
+}
+
+.mwv-page-media img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--background-secondary);
+}
+
+.mwv-reader-loading-text {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.mwv-reader-frame {
+  width: calc(100% - 32px);
+  min-height: 520px;
+  margin: 0 16px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+}
+
+.mwv-live-browser {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-height: 68vh;
+  overflow: hidden;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.mwv-note-embed:not(.is-web-front):not(.is-split-front) .mwv-live-browser {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+  visibility: hidden;
+}
+
+.mwv-note-embed.is-web-front .mwv-note-front-panel,
+.mwv-note-embed.is-web-front .mwv-reader-panel {
+  display: none;
+}
+
+.mwv-note-embed.is-split-front .mwv-live-browser {
+  min-height: 42vh;
+}
+
+.mwv-note-embed.is-split-front .mwv-live-frame,
+.mwv-note-embed.is-split-front .mwv-live-browser .mwv-real-webview {
+  height: 42vh;
+  min-height: 42vh;
+}
+
+.mwv-live-frame,
+.mwv-live-browser .mwv-real-webview {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 68vh;
+  min-height: 0;
+  border: 0;
+  background: var(--background-primary);
+}
+
+/*
+ * Tab keep-alive: a parked WebView stays mounted next to the live one so its
+ * document, history and scroll position survive tab switches. It must be fully
+ * out of layout and paint, but remain in the DOM — removing it would destroy
+ * the guest and reload the page on the next switch.
+ */
+.mwv-parked-frame {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.mwv-reader-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 18px;
+  background: var(--background-primary);
+}
+
+.mwv-reader-panel-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mwv-reader-panel .mwv-page-title,
+.mwv-reader-panel .mwv-note-source,
+.mwv-reader-panel .mwv-md-content,
+.mwv-reader-panel .mwv-page-media {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.mwv-page-links h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.mwv-page-link {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 0;
+  border: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  background: transparent;
+  text-align: left;
+}
+
+.mwv-page-link-title {
+  color: var(--text-accent);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.mwv-page-link-url {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mwv-backend-frame {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (min-width: 760px) {
+  .mwv-tool-button {
+    flex-basis: 52px;
+  }
+}
+
+/* Browser View mobile fill overrides. Keep the live page tall and let chrome float. */
+.workspace-leaf-content[data-type="mobile-webviewer-view"],
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-content {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] {
+  position: relative;
+}
+
+@supports (height: 100dvh) {
+  .workspace-leaf-content[data-type="mobile-webviewer-view"] {
+    height: 100dvh;
+  }
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] > .view-header {
+  display: none;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .view-content {
+  padding: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-root {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  height: 100%;
+  min-height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-header {
+  z-index: 1205;
+  padding: max(3px, env(safe-area-inset-top)) 6px 0;
+  background: color-mix(in srgb, var(--mwv-bg) 96%, transparent);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-address-row {
+  grid-template-columns: 24px minmax(0, 1fr) 34px 34px;
+  min-height: 34px;
+  padding: 2px 3px 2px 8px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-address {
+  height: 34px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-icon-button {
+  width: 34px;
+  height: 34px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-tab-strip {
+  height: 30px;
+  padding-top: 1px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-browser-tab,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-browser-tab-add {
+  height: 29px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap {
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page {
+  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-web-front {
+  grid-template-rows: minmax(0, 1fr) 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-note-front {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-split-front {
+  grid-template-rows: minmax(0, 1fr) minmax(96px, 32vh);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-real-webview,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-live-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-frame,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-real-webview,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-live-frame {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  border-bottom: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-frame:not(.is-hidden),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-real-webview:not(.is-hidden),
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-frame-wrap.is-live-page .mwv-live-frame:not(.is-hidden) {
+  min-height: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home {
+  height: 100%;
+  min-height: 0;
+  padding: 10px 10px 88px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-note-surface {
+  max-width: 100%;
+  padding: 14px 12px 96px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home-quick,
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-results {
+  max-width: none;
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-home.mwv-reader-strip {
+  max-height: 32vh;
+  padding: 8px 10px 78px;
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-toolbar {
+  position: absolute;
+  right: 8px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  left: 8px;
+  z-index: 1205;
+  padding: 4px;
+  background: color-mix(in srgb, var(--mwv-panel) 94%, transparent);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
+.workspace-leaf-content[data-type="mobile-webviewer-view"] .mwv-drawer {
+  bottom: calc(58px + max(8px, env(safe-area-inset-bottom)));
+}
+
+.mwv-notedraw-anchor {
+  position: relative;
+  z-index: 2147483647;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button {
+  pointer-events: auto;
+}
+
+/* NoteDraw's own wand, left exactly as NoteDraw drew it.
+   The host used to force a 32px box here and NoteDraw marks a webview-targeting
+   header button with `.notedraw-webview-button`, whose own rule paints a
+   translucent chip with a drop shadow. Inside a leaf header that reads as an
+   ugly frame around the icon, so the header copy is returned to the plain
+   `.notedraw-header-button` look: no fill, no shadow, round hover. */
+.mwv-notedraw-anchor .notedraw-webview-button,
+.view-actions .notedraw-webview-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  border: 0;
+  border-radius: 999px;
+  pointer-events: auto;
+  cursor: var(--cursor, pointer);
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button:hover,
+.view-actions .notedraw-webview-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button.is-active,
+.view-actions .notedraw-webview-button.is-active {
+  color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.mwv-embed.notedraw-shell > .notedraw-toolbar {
+  z-index: 1300;
+}
+
+/* NoteDraw positions its toolbar from viewport coordinates measured in its
+   own shell. Inside an embed that math can land far outside the window
+   (measured live: position fixed, left 1221px in a 1229px viewport, width
+   285px -> only 8px visible), which reads as "the magic wand does nothing":
+   the click works, the toolbar is simply off-screen. The host owns the
+   visible area here, so pin the toolbar back inside it. */
+.mwv-embed.notedraw-shell > .notedraw-toolbar {
+  left: auto !important;
+  right: 8px !important;
+  max-width: calc(100vw - 16px);
+}
+
+.mwv-embed.notedraw-shell > .notedraw-palette-panel,
+.mwv-embed.notedraw-shell > .notedraw-text-panel {
+  z-index: 1301;
+}
+
+.mwv-embed.notedraw-shell > .notedraw-selection-menu,
+.mwv-embed.notedraw-shell > .notedraw-format-toolbar {
+  z-index: 1302;
+}
+
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-header,
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions {
+  position: relative;
+  z-index: 2147483647;
+}
+
+.mwv-root .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-note-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.mwv-embed .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .mwv-notedraw-source-button:not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .view-actions .mwv-notedraw-webviewer-header-hidden,
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-toolbar .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-actions .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher),
+.workspace-leaf-content.mwv-notedraw-surface-leaf .mwv-note-source .notedraw-webview-button:not(.notedraw-header-button):not(.mwv-notedraw-launcher) {
+  display: none;
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button.mwv-notedraw-top-button:not(.mwv-notedraw-launcher) {
+  display: inline-flex;
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button.mwv-notedraw-web-wand:not(.mwv-notedraw-launcher) {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-globe,
+.mwv-notedraw-web-wand .mwv-web-wand-spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-globe svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8;
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-spark {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+}
+
+.mwv-notedraw-web-wand .mwv-web-wand-spark svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+
+.mwv-notedraw-web-wand.is-active .mwv-web-wand-spark {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* The raw website lives in an Electron guest document, so NoteDraw's host
+   canvas cannot select its text. This small NoteDraw-shaped adapter stays in
+   the owning NoteWeb leaf and delegates element selection to the guest only
+   after the user explicitly opens it with the wand. */
+.workspace-leaf-content .mwv-noteweb-element-toolbar {
+  position: absolute;
+  z-index: 2147483000;
+  top: calc(var(--header-height, 40px) + 5px);
+  right: 8px;
+  left: auto;
+  display: inline-flex !important;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.12);
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button {
+  display: inline-flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button.is-active {
+  color: var(--interactive-accent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+.workspace-leaf-content .mwv-noteweb-element-toolbar button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.workspace-leaf-content .mwv-noteweb-element-hint {
+  padding: 0 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .workspace-leaf-content .mwv-noteweb-element-hint {
+    display: none;
+  }
+}
+
+.mwv-root .mwv-notedraw-activation-proxy,
+.mwv-note-embed .mwv-notedraw-activation-proxy,
+.mwv-embed .mwv-notedraw-activation-proxy {
+  display: inline-flex;
+  visibility: visible;
+  opacity: 0.001;
+  pointer-events: auto;
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  width: 32px;
+  height: 32px;
+  z-index: 2147483647;
+}
+
+/* --- RealWeb tab strip (shared browser tabs inside NoteWeb chrome) --- */
+/* The layout for this strip lives in the compact-chrome block further down.
+   Keeping a second, earlier copy of the same selector here made the row's
+   padding and alignment depend on CSS order, which showed up as a visible jump
+   every time the chrome was rebuilt. Only the scrollbar rule is unique to this
+   block, so that is all that is left. */
+.mwv-browser-chrome .mwv-embed-tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+/* --- Tabs button + panel (replaces the always-on chip row) --- */
+/* One button per surface; the list itself only exists while it is open. The
+   panel hangs off the strip inside the leaf header, so it inherits the header's
+   stacking context instead of being clipped by the note scroller. */
+.mwv-embed-tabstrip {
+  position: relative;
+}
+.mwv-embed-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 52vw;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  flex: 0 1 auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.mwv-embed-tab-toggle.is-active {
+  border-color: var(--interactive-accent);
+  color: var(--text-accent);
+}
+.mwv-embed-tab-toggle-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.mwv-embed-tab-toggle-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.mwv-embed-tab-toggle-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 34vw;
+}
+.mwv-embed-tab-toggle-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.mwv-embed-tab-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--layer-menu, 30);
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  max-width: min(78vw, 320px);
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.26);
+}
+.mwv-embed-tabstrip.is-open > .mwv-embed-tab-panel,
+.mwv-embed-tab-panel.is-open {
+  display: flex;
+}
+.mwv-embed-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 150px;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  flex: 0 0 auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Inside the mobile dropdown the same nodes become full-width list entries. */
+.mwv-embed-tab-panel .mwv-embed-tab {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: none;
+  padding: 5px 8px;
+}
+.mwv-embed-tab.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.mwv-embed-tab .mwv-embed-tab-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+.mwv-embed-tab-panel .mwv-embed-tab .mwv-embed-tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+.mwv-embed-tab .mwv-embed-tab-close {
+  display: inline-flex;
+  opacity: 0.7;
+}
+.mwv-embed-tab .mwv-embed-tab-close:hover {
+  opacity: 1;
+}
+.mwv-embed-tab .mwv-embed-tab-close svg,
+.mwv-embed-tab-new svg {
+  width: 12px;
+  height: 12px;
+}
+.mwv-embed-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Mobile dropdown tail: full-width dashed entry with a label. */
+.mwv-embed-tab-panel .mwv-embed-tab-new {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px dashed var(--background-modifier-border);
+}
+.mwv-embed-tab-new-label {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- NoteWeb (Note + Web fronts): browser tabs share the header row with the native buttons --- */
+.workspace-leaf-content.mwv-note-browser-view .view-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* The tab panel is absolutely positioned inside the strip, so the header must
+     not clip its children any more. */
+  overflow: visible;
+}
+.workspace-leaf-content.mwv-note-browser-view .view-header-title,
+.workspace-leaf-content.mwv-note-browser-view .view-header-title-container,
+.workspace-leaf-content.mwv-note-browser-view .view-header-nav-buttons {
+  display: none;
+}
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip {
+  min-width: 0;
+  margin: 0 2px;
+  padding: 0;
+  align-items: center;
+}
+/* Desktop keeps the classic 0.4.28 chip row: a plain block host whose inline
+   chips flow and wrap, stretching (flex: 1 1 auto) so the native action
+   buttons stay pinned at the right end of the header. The phone's single
+   button keeps its compact fixed size. */
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode {
+  flex: 1 1 auto;
+}
+.workspace-leaf-content.mwv-note-browser-view .view-header .mwv-embed-tabstrip.mwv-embed-tabstrip-panel-mode {
+  flex: 0 0 auto;
+}
+
+/* --- RealWeb immersive: chrome collapses to a single address row --- */
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-chrome {
+  grid-template-areas: "address actions" !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+/* In this presentation the tabs live in the Obsidian header row (NoteWeb
+   replaces the header title with them). This chrome defines only the
+   address/actions areas, so a strip left inside it would reference an undefined
+   grid area and be pushed into an implicit row — which is what pushed the tabs
+   over the address bar. Hide it there rather than misplacing it. */
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-chrome > .mwv-embed-tabstrip {
+  display: none;
+}
+.workspace-leaf-content.mwv-realweb-immersive .mwv-browser-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+/* --- RealWeb editing: fallback toolbar hidden while a live NoteDraw toolbar is up --- */
+.mwv-noteweb-fallback-hidden {
+  display: none !important;
+}
+.workspace-leaf-content.mwv-realweb-immersive .markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.workspace-leaf-content.mwv-realweb-immersive .markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  grid-template-areas: "address actions" !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+
+/* --- Compact RealWeb chrome: tabstrip on top, nav buttons inside the address row --- */
+.mwv-browser-chrome {
+  grid-template-areas:
+    "tabstrip actions"
+    "address address";
+}
+.mwv-browser-chrome .mwv-embed-tabstrip {
+  grid-area: tabstrip;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* The panel is absolutely positioned inside the strip; a scrolling host would
+     clip it, so the phone shape never scrolls. */
+  overflow: visible;
+  padding: 0 0 2px;
+}
+/* Desktop chip row follows 0.4.28 exactly: the strip scrolls horizontally with
+   a hidden scrollbar instead of spilling over the actions area. */
+.mwv-browser-chrome .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.mwv-browser-chrome .mwv-embed-tabstrip.mwv-embed-tabstrip-row-mode::-webkit-scrollbar {
+  display: none;
+}
+.mwv-browser-chrome .mwv-browser-address {
+  display: flex !important;
+  grid-area: address;
+  align-items: center;
+  gap: 3px;
+}
+.mwv-browser-chrome .mwv-browser-address .mwv-browser-nav {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+.mwv-browser-chrome .mwv-browser-address .mwv-browser-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+.markdown-preview-view:has(.mwv-embed[data-url]) .mwv-browser-chrome,
+.markdown-rendered:has(.mwv-embed[data-url]) .mwv-browser-chrome {
+  grid-template-areas:
+    "tabstrip actions"
+    "address address" !important;
+}

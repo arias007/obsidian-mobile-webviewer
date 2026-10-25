@@ -9,3 +9,9 @@ releases/
 # Downloaded page fixtures for scripts/verify-reader-pipeline.mjs (fetch with --fetch)
 scripts/fixtures/
 main.js
+
+# Release-served build: jsDelivr can only serve files that are in the repo.
+!dist/
+!dist/main.js
+!dist/styles.css
+!dist/manifest.json
