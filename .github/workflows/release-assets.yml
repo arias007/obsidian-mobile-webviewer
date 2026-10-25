@@ -1,15 +1,17 @@
-/**
- * Attach the three release files to an existing tag.
- *
- * `uploads.github.com` is unreachable from where this plugin is normally
- * released (TLS reset at the SNI layer), so the upload cannot happen from the
- * build machine. A runner inside GitHub has no such problem: this workflow
- * rebuilds the tag and uploads `main.js`, `manifest.json` and `styles.css` to
- * the release with the same name.
- *
- * `--verify-tag` is deliberate: the tag must already exist, so a run can never
- * publish a release for code that was not pushed.
- */
+#
+# Attach the three release files to an existing tag.
+# 
+# `uploads.github.com` is unreachable from where this plugin is normally
+# released (TLS reset at the SNI layer), so the upload cannot happen from the
+# build machine. A runner inside GitHub has no such problem: this workflow
+# rebuilds the tag and uploads `main.js`, `manifest.json` and `styles.css` to
+# the release with the same name.
+# 
+# `--verify-tag` is deliberate: the tag must already exist, so a run can never
+# publish a release for code that was not pushed.
+
+name: release-assets
+
 on:
   workflow_dispatch:
     inputs:
