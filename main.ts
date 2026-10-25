@@ -7225,7 +7225,7 @@ interface BrowserWebNotePatch {
 
 interface WebNotePanelElement extends HTMLElement {
   _mwvFinishDoodle?: () => void;
-  _mwvFlushWebNote?: () => void | Promise<void>;
+  _mwvFlushWebNote?: () => void | Promise<WebNoteEntry | void>;
   _mwvFlushTimer?: number;
 }
 
@@ -11478,7 +11478,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       };
       const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
       leaf?.addClass("mwv-notedraw-surface-leaf");
-      const anchor = this.ensureNoteDrawStableAnchor(surface);
       const controller = this.findWebviewNoteDrawController(surface, true);
       const previewController = this.findNoteDrawPreviewController(surface, true);
       // NoteWeb reader surfaces are backed by NoteDraw's webview controller
@@ -11494,63 +11493,43 @@ export default class MobileWebviewerPlugin extends Plugin {
       this.hideNoteDrawHeaderButtonsForWebviewerLeaf(surface);
       const buttons = Array.from(surface.querySelectorAll<HTMLElement>(NOTEDRAW_BUTTON_SELECTOR)).filter((button) =>
         !button.hasClass("mwv-notedraw-launcher") &&
-        !button.hasClass("notedraw-header-button") &&
         this.noteDrawButtonBelongsToSurface(button, surface)
       );
       for (const button of buttons) {
-        const controller = (button as NoteDrawButtonElement)._noteDrawController;
-        if (controller?.surfaceType === "webview" && this.isMobileWebviewerSurface(controller.previewEl ?? surface)) {
-          if (!this.isVisibleNoteDrawSurface(controller.previewEl ?? surface)) {
-            button.removeClass("mwv-notedraw-top-button");
-            hideSourceButton(button);
-            continue;
-          }
-          if (button.parentElement !== anchor) anchor.appendChild(button);
-          button.addClass("mwv-notedraw-top-button");
+        // NoteDraw's own wand mounts itself in `view-actions` (as a
+        // `.notedraw-webview-button.view-action`). The host never moves it out,
+        // never hides it and never restyles it — doing exactly that is what made
+        // the icon jump between two positions and collect a framed chip.
+        if (button.closest(".view-actions")) {
+          button.removeClass("mwv-notedraw-top-button");
           button.removeClass("mwv-notedraw-source-button");
+          button.removeClass("mwv-notedraw-webviewer-header-hidden");
           button.removeAttribute("aria-hidden");
-          button.tabIndex = 0;
-        } else if (button.closest(".mwv-notedraw-anchor")) {
-          button.addClass("mwv-notedraw-top-button");
-          button.removeClass("mwv-notedraw-source-button");
-          button.removeAttribute("aria-hidden");
-          button.tabIndex = 0;
-        } else {
-          hideSourceButton(button);
+          if (button.getAttribute("tabindex") === "-1") button.removeAttribute("tabindex");
+          continue;
         }
+        // Inline copies NoteDraw also mounts inside the surface are duplicates
+        // of that one wand, so they stay hidden.
+        if (button.hasClass("notedraw-header-button")) continue;
+        button.removeClass("mwv-notedraw-top-button");
+        hideSourceButton(button);
       }
-      leaf?.querySelectorAll<HTMLElement>(".view-actions .notedraw-webview-button:not(.notedraw-header-button)").forEach((button) => {
-        if (!button.closest(".mwv-notedraw-anchor")) hideSourceButton(button);
-      });
     }
   }
 
+  /**
+   * NoteDraw owns exactly one wand per leaf and the host no longer relocates it,
+   * so there is nothing here to suppress. Only host markers from older builds
+   * are cleared — hiding NoteDraw's button is what made the icon flicker.
+   */
   hideNoteDrawHeaderButtonsForWebviewerLeaf(surface: HTMLElement): void {
     const leaf = surface.closest<HTMLElement>(".workspace-leaf-content");
     if (!leaf) return;
-    const hasWebviewerSurface = Array.from(leaf.querySelectorAll<HTMLElement>(MWV_DEDUPE_ROOT_SELECTOR))
-      .some((candidate) => candidate.isConnected && this.isMobileWebviewerSurface(candidate));
-    if (!hasWebviewerSurface) return;
-
-    // The wand is NoteDraw's own button — never hide it while it is the only
-    // wand in the leaf. Suppress NoteDraw's duplicate header button only when
-    // the anchor already hosts the native webview wand; when the anchor is
-    // empty (e.g. NoteWeb reader mode) let NoteDraw show its own button.
-    const anchor = leaf.querySelector<HTMLElement>(".mwv-notedraw-anchor");
-    const nativeWandMounted = Boolean(anchor?.querySelector(":scope > .notedraw-webview-button"));
     leaf.querySelectorAll<NoteDrawButtonElement>(".view-actions .notedraw-header-button").forEach((button) => {
-      if (button.closest(".mwv-notedraw-anchor")) return;
-      if (!nativeWandMounted) {
-        button.removeClass("mwv-notedraw-webviewer-header-hidden");
-        button.removeClass("mwv-notedraw-source-button");
-        button.removeAttribute("aria-hidden");
-        button.tabIndex = 0;
-        return;
-      }
-      button.addClass("mwv-notedraw-webviewer-header-hidden");
-      button.addClass("mwv-notedraw-source-button");
-      button.setAttribute("aria-hidden", "true");
-      button.tabIndex = -1;
+      button.removeClass("mwv-notedraw-webviewer-header-hidden");
+      button.removeClass("mwv-notedraw-source-button");
+      button.removeAttribute("aria-hidden");
+      if (button.getAttribute("tabindex") === "-1") button.removeAttribute("tabindex");
     });
   }
 
@@ -11709,25 +11688,29 @@ export default class MobileWebviewerPlugin extends Plugin {
     return anchor;
   }
 
+  /**
+   * Keep NoteDraw's own wand exactly where NoteDraw put it.
+   *
+   * This used to relocate the native button into a host-owned anchor in the leaf
+   * header. That anchor forced a 32px box on a button NoteDraw had already
+   * styled, and the relocation raced NoteDraw's own `installHeaderButton` pass,
+   * so the same icon was re-parented back and forth — visible as "the wand icon
+   * keeps changing and has an ugly frame around it". The host now only makes
+   * sure a live button exists; it never moves, resizes or re-icons it.
+   */
   retainNoteDrawWebviewButton(controller: NoteDrawControllerLike, surface: HTMLElement): NoteDrawButtonElement | null {
     const previewEl = controller.previewEl ?? surface;
     const button = controller.button as NoteDrawButtonElement | undefined;
     if (!previewEl?.isConnected || !button?.isConnected) return null;
     if (!this.isNoteWebOwnedElement(previewEl) || !this.isNoteWebOwnedElement(button)) return null;
     if (!this.isMobileWebviewerSurface(previewEl) || !this.isNoteBrowserWebMode(previewEl)) return null;
-    const anchor = this.ensureNoteDrawStableAnchor(previewEl);
-    if (button.parentElement !== anchor) {
-      // Native wand stays ahead of the relocated More button.
-      const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
-      if (moreButton) anchor.insertBefore(button, moreButton);
-      else anchor.appendChild(button);
-    }
-    button.addClass("mwv-notedraw-top-button");
+    // Undo anything a previous build did to it: the marker classes are gone and
+    // the button goes back to being NoteDraw's untouched header action.
+    button.removeClass("mwv-notedraw-top-button");
     button.removeClass("mwv-notedraw-source-button");
     button.removeClass("mwv-notedraw-webviewer-header-hidden");
     button.removeAttribute("aria-hidden");
-    button.tabIndex = 0;
-    // NoteDraw owns the icon and label — no restyling, no icon cloning.
+    if (button.getAttribute("tabindex") === "-1") button.removeAttribute("tabindex");
     this.bindNoteDrawWebviewButton(button, controller);
     return button;
   }
@@ -11739,69 +11722,44 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   /**
    * The wand belongs to NoteDraw — this sync only *recognizes* NoteDraw's own
-   * button, never fabricates one. Without the NoteDraw plugin there is no
-   * element editor to open, so nothing is rendered at all.
+   * button, never fabricates, relocates or restyles one. Without the NoteDraw
+   * plugin there is no element editor to open, so nothing is rendered at all.
    *
-   * A host-fabricated fallback wand used to exist for the RealWeb guest, on
-   * the assumption that NoteDraw never mounts a button for a live page. That
+   * A host-fabricated fallback wand used to exist for the RealWeb guest, on the
+   * assumption that NoteDraw never mounts a button for a live page. That
    * assumption was wrong: NoteDraw does mount its own button for the guest, so
    * the fallback only ever produced a second wand sitting next to the native
-   * one — and because each sync pass created or removed it while the native
-   * button was adopted in and out of the anchor, the two visibly fought over
-   * the toolbar position (duplicate wand + constant flicker).
+   * one, and because each sync pass created or removed it while the native
+   * button was adopted in and out of the anchor, the two visibly fought over the
+   * toolbar position (duplicate wand + constant flicker).
    */
   ensureNoteWebWandProxy(surface: HTMLElement, allowNoteMode = false): NoteDrawButtonElement | null {
     if (!surface.isConnected || !this.isNoteDrawSurfaceElement(surface) || (!allowNoteMode && !this.isNoteBrowserWebMode(surface))) return null;
-    // The wand is NoteDraw's entry point — without the NoteDraw plugin there
-    // is nothing to open, so never render (or keep) the button.
     if (!this.getNoteDrawPlugin()) {
       this.removeNoteWebWandProxy(surface);
       return null;
     }
-    const anchor = this.ensureNoteDrawStableAnchor(surface);
-    // NoteDraw's own wand always wins. NoteDraw mounts it itself and this sync
-    // only recognizes it — never restyled, never relabeled, never cloned.
-    const nativeInAnchor = anchor.querySelector<NoteDrawButtonElement>(
-      ":scope > .notedraw-webview-button:not([data-mwv-browser-more='true'])"
-    );
-    if (nativeInAnchor) {
-      anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
-      return nativeInAnchor;
-    }
-    // Adopt a native button NoteDraw mounted directly in the view-actions
-    // host (outside the anchor) by moving it into the stable anchor.
-    const adopted = this.findNoteDrawWebviewSourceButton(surface);
-    if (adopted?.isConnected) {
-      const staleFallback = anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']");
-      if (staleFallback) staleFallback.remove();
-      if (adopted.parentElement !== anchor) {
-        const moreButton = anchor.querySelector<HTMLElement>(":scope > button[data-mwv-browser-more='true']");
-        if (moreButton) anchor.insertBefore(adopted, moreButton);
-        else anchor.appendChild(adopted);
-        adopted.addClass("mwv-notedraw-top-button");
-        adopted.removeClass("mwv-notedraw-source-button");
-        adopted.removeClass("mwv-notedraw-webviewer-header-hidden");
-        adopted.removeAttribute("aria-hidden");
-        adopted.tabIndex = 0;
-        const adoptedController = adopted._noteDrawController;
-        if (adoptedController) this.bindNoteDrawWebviewButton(adopted, adoptedController);
-      }
-      return adopted;
-    }
-    // Nothing native yet. Leave the toolbar empty and let NoteDraw's own mount
-    // pass deliver the wand (queueNoteWebWandAdopt keeps asking for it). Any
-    // legacy fabricated button is cleaned up so it can never linger as a
-    // second wand.
-    anchor.querySelector<HTMLElement>("[data-mwv-noteweb-wand='true']")?.remove();
-    return null;
+    // Legacy host-made wands are removed; NoteDraw's own button is left alone
+    // wherever it mounted itself.
+    this.removeNoteWebWandProxy(surface);
+    const native = surface.querySelector<NoteDrawButtonElement>(":scope > .notedraw-webview-button") ??
+      this.findNoteDrawWebviewSourceButton(surface);
+    if (!native) return null;
+    // Only clear host markers left by older builds — never touch its styling.
+    native.removeClass("mwv-notedraw-top-button");
+    native.removeClass("mwv-notedraw-source-button");
+    native.removeClass("mwv-notedraw-webviewer-header-hidden");
+    native.removeAttribute("aria-hidden");
+    if (native.getAttribute("tabindex") === "-1") native.removeAttribute("tabindex");
+    return native;
   }
 
   /**
    * NoteDraw mounts its wand asynchronously during its own layout passes. Web
-   * mode has no other sync pass of its own, so ask NoteDraw to mount and retry
-   * adoption a few times. Nothing is fabricated while waiting, so these
-   * retries can never produce a second wand or a visible flicker — they only
-   * pick up the native button once NoteDraw has mounted it.
+   * mode has no other sync pass of its own, so ask NoteDraw to mount and look
+   * again a few times. Nothing is fabricated and nothing is moved while waiting,
+   * so these retries can never produce a second wand or a visible flicker —
+   * they only notice the native button once NoteDraw has mounted it.
    */
   queueNoteWebWandAdopt(embed: HTMLElement): void {
     if (!embed.isConnected || !this.isNoteDrawSurfaceElement(embed)) return;
@@ -14007,10 +13965,6 @@ export default class MobileWebviewerPlugin extends Plugin {
       };
       momentumFrame = win?.requestAnimationFrame(step) ?? 0;
     };
-    const drawingMode = (tool?: string): boolean => {
-      const clean = (tool ?? "").toLowerCase();
-      return clean === "draw" || clean === "pen" || clean === "watercolor" || clean === "laser";
-    };
     /**
      * The note surface whose NoteDraw canvas is actually swallowing touches.
      * `notedraw-shell` alone is not enough: NoteDraw keeps the class on a
@@ -14071,12 +14025,11 @@ export default class MobileWebviewerPlugin extends Plugin {
         reset();
         return;
       }
-      const controller = this.findWebviewNoteDrawController(host, true);
-      if (controller && drawingMode(controller.toolMode)) {
-        // A second finger is ink in a drawing tool, not a pan.
-        reset();
-        return;
-      }
+      // Two fingers are a pan in EVERY tool, including the pen: a page you
+      // cannot scroll while drawing was the complaint that started this, and a
+      // second finger never means "draw a second line" to a person holding a
+      // phone. The stroke the first finger had begun is cancelled below, so no
+      // stray mark is left behind.
       const container = this.findScrollableAncestor(target) ?? this.findScrollableAncestor(host);
       if (!container) {
         reset();
@@ -14317,36 +14270,33 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
   }
 
+  /**
+   * Re-point the wand's binding at the live controller — and nothing else.
+   *
+   * This used to re-parent NoteDraw's button into the host anchor on every sync
+   * pass. NoteDraw then saw its button "missing" from `view-actions`, installed
+   * a fresh one, the host hid *that* one (see
+   * hideNoteDrawHeaderButtonsForWebviewerLeaf), and the two kept trading places:
+   * the icon visibly changed and gained a framed chip. The wand belongs to
+   * NoteDraw — the host only ever rebinds it.
+   */
   ensureNoteDrawControllerButtonAnchored(controller?: NoteDrawControllerLike | null): void {
     const surface = controller?.previewEl;
     const button = controller?.button;
     if (!surface?.isConnected || !button?.isConnected) return;
     if (!this.isMobileWebviewerSurface(surface)) return;
     if (!controller) return;
+    // Clear markers written by older builds; they hide the button or pin it in
+    // the host anchor.
+    button.removeClass("mwv-notedraw-top-button");
+    button.removeClass("mwv-notedraw-source-button");
+    button.removeClass("mwv-notedraw-webviewer-header-hidden");
+    button.removeAttribute("aria-hidden");
+    if (button.getAttribute("tabindex") === "-1") button.removeAttribute("tabindex");
     if (!this.isNoteDrawControllerMounted(controller)) {
-      button.removeClass("mwv-notedraw-top-button");
-      button.addClass("mwv-notedraw-source-button");
-      button.setAttribute("aria-hidden", "true");
-      button.tabIndex = -1;
       this.repairStaleNoteDrawController(surface);
       return;
     }
-    if (!this.isVisibleNoteDrawSurface(surface)) {
-      button.removeClass("mwv-notedraw-top-button");
-      button.addClass("mwv-notedraw-source-button");
-      button.setAttribute("aria-hidden", "true");
-      button.tabIndex = -1;
-      return;
-    }
-    const anchor = this.ensureNoteDrawStableAnchor(surface);
-    if (button.parentElement !== anchor) {
-      anchor.appendChild(button);
-    }
-    button.addClass("mwv-notedraw-top-button");
-    button.removeClass("mwv-notedraw-source-button");
-    button.removeAttribute("aria-hidden");
-    button.tabIndex = 0;
-    // NoteDraw owns the icon and label — no restyling, no icon cloning.
     this.bindNoteDrawWebviewButton(button, controller);
   }
 
@@ -17583,7 +17533,9 @@ export default class MobileWebviewerPlugin extends Plugin {
         window.clearTimeout(statePanel._mwvFlushTimer);
         delete statePanel._mwvFlushTimer;
       }
-      await save();
+      // Returns the entry it just wrote: `存 MD` exports exactly what the panel
+      // is showing, not a second read of plugin settings that can disagree.
+      return await save();
     };
     const point = (event: PointerEvent): [number, number] => {
       const rect = doodleLayer.getBoundingClientRect();
@@ -17889,6 +17841,9 @@ export default class MobileWebviewerPlugin extends Plugin {
     // start page, and it is the one control that behaves identically on desktop
     // (guest src) and on mobile (frame load).
     makeNavButton("home", this.tr("home"), false, "home");
+    // Reload sits with the other navigation controls: reaching it through More
+    // to refresh a stuck page was two taps and a scroll.
+    makeNavButton("rotate-cw", this.tr("reload"), false, "reload");
     const save = actions.createEl("button", {
       cls: "mwv-browser-action",
       attr: { type: "button", title: this.tr("saveMd"), "aria-label": this.tr("saveMd") }
@@ -17997,6 +17952,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         if (action === "back") this.runBrowserAction("back", this.navigateEmbedBack(embed));
         else if (action === "forward") this.runBrowserAction("forward", this.navigateEmbedForward(embed));
         else if (action === "home") this.runBrowserAction("home", this.openUrlInEmbed(embed, this.settings.homeUrl));
+        else if (action === "reload") this.runBrowserAction("reload", this.refreshEmbed(embed));
         return;
       }
       if (target.closest(".mwv-browser-action")) {
@@ -18156,19 +18112,38 @@ export default class MobileWebviewerPlugin extends Plugin {
 
   async exportEmbedWebNote(embed: HTMLElement): Promise<void> {
     const panel = embed.querySelector<WebNotePanelElement>(".mwv-reader-panel");
-    if (!panel) {
+    const url = panel?.dataset.url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
+    // The flush hands back the note it just wrote, so the export uses exactly
+    // what is on screen (edits, doodles and all) instead of re-reading settings.
+    const flushed = panel ? await panel._mwvFlushWebNote?.() : undefined;
+    let note = (flushed && typeof flushed === "object" ? flushed : undefined) ?? this.findWebNoteByUrl(url);
+    if (!note && panel) {
+      // Autosave off, or the note was never hydrated: build it from the panel
+      // instead of refusing with "Nothing to export" on a page full of text.
+      note = this.createWebNoteFromPage({
+        title: panel.querySelector<HTMLElement>(".mwv-page-title")?.textContent?.trim() || hostName(url),
+        url,
+        byline: hostName(url),
+        excerpt: "",
+        content: "",
+        images: [],
+        links: []
+      });
+      const editor = panel.querySelector<HTMLElement>(".mwv-webnote-editor");
+      if (editor) {
+        note.noteHtml = editor.innerHTML;
+        note.noteText = htmlToMarkdownFromElement(editor);
+      }
+      const doodle = panel.querySelector<SVGSVGElement>(".mwv-doodle-layer");
+      if (doodle) note.doodleSvg = doodle.innerHTML;
+      note = await this.saveWebNote(note);
+    }
+    if (!note) {
       new Notice(this.tr("readerNoteNotReady"));
       return;
     }
-    await panel._mwvFlushWebNote?.();
-    const url = panel.dataset.url || embed.dataset.url || this.settings.noteBrowserUrl || this.settings.homeUrl;
-    const note = this.settings.webNotes.find((entry) => entry.id === webNoteId(url) || entry.url === url);
-    if (!note) {
-      new Notice(this.tr("noWebNoteToExport"));
-      return;
-    }
     const exported = await this.exportWebNoteMarkdown(note);
-    panel.querySelector<HTMLElement>(".mwv-webnote-status")?.setText("");
+    panel?.querySelector<HTMLElement>(".mwv-webnote-status")?.setText("");
     new Notice(this.tr("savedTo", { path: exported.markdownPath }));
   }
 
@@ -18343,7 +18318,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       await this.downloadCurrentPageMhtml(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
-    addAction(saveActions, "file-down", this.tr("offlinePage"), async () => {
+    addAction(saveActions, "file-down", this.tr("saveMd"), async () => {
+      // The chrome row's save control is hidden in the note presentation, so
+      // this is the entry people actually reach for.
+      await this.exportEmbedWebNote(embed);
+    }, true);
+    addAction(saveActions, "download-cloud", this.tr("offlinePage"), async () => {
       await this.saveOfflinePage(url, title || hostName(url));
       await this.newEmbedBrowserTab(embed, utilityPageUrl("downloads"));
     }, true);
@@ -19205,17 +19185,36 @@ export default class MobileWebviewerPlugin extends Plugin {
     return saved;
   }
 
+  /**
+   * The stored note for a page, matched by page identity rather than by raw URL.
+   * A trailing slash or an `#anchor` used to make the lookup miss, and `存 MD`
+   * then answered "nothing to export" for a page that was plainly on screen.
+   */
+  findWebNoteByUrl(url: string): WebNoteEntry | undefined {
+    const identity = this.noteDrawWebviewIdentity(url);
+    return this.settings.webNotes.find((entry) => entry.id === webNoteId(url) ||
+      entry.url === url ||
+      (identity !== "" && this.noteDrawWebviewIdentity(entry.url) === identity));
+  }
+
   async exportWebNoteMarkdown(entry: WebNoteEntry): Promise<WebNoteEntry> {
     const folder = normalizePath(this.settings.webNoteFolder || DEFAULT_WEB_NOTE_FOLDER);
     await this.ensureVaultFolder(folder);
     const fileName = appendFileExtension(sanitizeFileName(entry.title || hostName(entry.url), "web-note"), "md");
-    const path = entry.markdownPath || await this.uniqueVaultPath(folder, fileName);
+    const preferred = entry.markdownPath && /\.md$/i.test(entry.markdownPath) ? entry.markdownPath : "";
+    const path = preferred || await this.uniqueVaultPath(folder, fileName);
+    const data = webNoteMarkdown(entry);
+    // Written through the vault API, not `adapter.write`: the adapter puts the
+    // bytes on disk but tells Obsidian nothing, so on Android the new file never
+    // showed up in the file explorer and `存 MD` looked like it did nothing.
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) await this.app.vault.modify(existing, data);
+    else await this.app.vault.create(path, data);
     const saved = await this.saveWebNote({
       ...entry,
       markdownPath: path,
       updatedAt: Date.now()
     });
-    await this.app.vault.adapter.write(path, webNoteMarkdown(saved));
     await this.addConsole("info", `Web note exported to Markdown: ${path}`, saved.url);
     return saved;
   }
@@ -19322,8 +19321,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     let current = "";
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
-      if (!(await this.app.vault.adapter.exists(current))) {
-        await this.app.vault.adapter.mkdir(current);
+      if (this.app.vault.getAbstractFileByPath(current)) continue;
+      // `vault.createFolder` registers the folder with Obsidian's index.
+      // Creating it through the adapter alone leaves the folder on disk but
+      // unknown to the app, and `vault.create` inside it then fails.
+      try {
+        await this.app.vault.createFolder(current);
+      } catch {
+        // Already on disk from an earlier run — the index picks it up below.
       }
     }
   }

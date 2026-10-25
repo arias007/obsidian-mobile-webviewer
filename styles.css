@@ -4002,16 +4002,36 @@
   pointer-events: auto;
 }
 
-.mwv-notedraw-anchor .mwv-notedraw-web-wand,
-.mwv-notedraw-anchor .notedraw-webview-button {
+/* NoteDraw's own wand, left exactly as NoteDraw drew it.
+   The host used to force a 32px box here and NoteDraw marks a webview-targeting
+   header button with `.notedraw-webview-button`, whose own rule paints a
+   translucent chip with a drop shadow. Inside a leaf header that reads as an
+   ugly frame around the icon, so the header copy is returned to the plain
+   `.notedraw-header-button` look: no fill, no shadow, round hover. */
+.mwv-notedraw-anchor .notedraw-webview-button,
+.view-actions .notedraw-webview-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--size-4-4, 32px);
-  height: var(--size-4-4, 32px);
   padding: 0;
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  border: 0;
+  border-radius: 999px;
   pointer-events: auto;
   cursor: var(--cursor, pointer);
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button:hover,
+.view-actions .notedraw-webview-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mwv-notedraw-anchor .notedraw-webview-button.is-active,
+.view-actions .notedraw-webview-button.is-active {
+  color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
 }
 
 .mwv-embed.notedraw-shell > .notedraw-toolbar {

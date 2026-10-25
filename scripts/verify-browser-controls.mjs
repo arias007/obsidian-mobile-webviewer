@@ -1224,6 +1224,19 @@ check("the More menu sits at the end of the address row, not beside the wand", (
   return "More lives in the address row and opens the panel";
 });
 
+check("reload sits beside home in the address row and reopens the page", () => {
+  const { embed, ctx, win } = createSurfaceWorld();
+  const row = embed.querySelector(":scope > .mwv-browser-chrome .mwv-browser-address");
+  const order = Array.from(row.querySelectorAll(".mwv-browser-nav")).map((b) => b.dataset.mwvBrowserNav);
+  assert(order.includes("home") && order.includes("reload"), `nav row is ${JSON.stringify(order)}`);
+  assert(order.indexOf("reload") === order.indexOf("home") + 1, `reload is not next to home: ${JSON.stringify(order)}`);
+  let reloads = 0;
+  ctx.refreshEmbed = async () => { reloads += 1; };
+  click(win, row.querySelector('[data-mwv-browser-nav="reload"]'));
+  assert(reloads === 1, `reload ran ${reloads} times`);
+  return `nav order ${order.join(" / ")}; reload reopens the page`;
+});
+
 check("a wrench left in the leaf header by an older build is swept away", () => {
   const { embed, ctx, doc } = createSurfaceWorld();
   const host = doc.createElement("div");

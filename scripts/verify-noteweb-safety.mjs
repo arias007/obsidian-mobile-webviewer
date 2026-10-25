@@ -383,13 +383,26 @@ check("two fingers scroll the note", scroller.scrollTop === 230);
 check("the pan is claimed before the drawing canvas sees it", defaultPrevented === true);
 fire("touchend", []);
 
-// A second finger is never scrubbed out of a drawing gesture.
+// The pen draws with one finger; two fingers still pan, and the half-drawn
+// stroke is cancelled so the page moves without leaving a mark behind.
 toolMode = "draw";
+const drawCancelled = [];
+const drawTarget = window.document.createElement("div");
+embed.appendChild(drawTarget);
+drawTarget.addEventListener("pointercancel", (event) => drawCancelled.push(event.pointerId));
+for (const handler of listeners.get("pointerdown") ?? []) {
+  handler({ pointerType: "touch", pointerId: 11, target: drawTarget });
+}
 scroller.scrollTop = 200;
 fire("touchstart", [200, 300]);
 fire("touchmove", [150, 250]);
-check("drawing mode keeps the two-finger gesture for ink", scroller.scrollTop === 200);
-fire("touchend", []);
+check("drawing mode pans with two fingers too", scroller.scrollTop === 250);
+check("the pen stroke is cancelled when the pan takes over", drawCancelled.includes(11));
+for (const handler of listeners.get("touchend") ?? []) {
+  const event = new window.Event("touchend", { bubbles: true });
+  Object.defineProperty(event, "touches", { value: [] });
+  handler(event);
+}
 
 // A surface without the wand (canvas ignores pointers) scrolls natively: the
 // bridge must stay out of the way so the browser's own momentum keeps working.
@@ -554,6 +567,122 @@ for (const [label, needle] of [
 check("edited export never falls back to flattened text", !editedExport.includes("<p>") && editedExport.includes("## 一、章"));
 void edited;
 void rendered;
+
+/* ------------------------------------------------------------------ *
+ * 4. 存 MD actually lands in the vault
+ * ------------------------------------------------------------------ */
+class FakeTFile { constructor(path) { this.path = path; } }
+const vaultFiles = new Map();
+const vaultCalls = { create: 0, modify: 0, createFolder: 0 };
+const folders = new Set();
+const fakeVault = {
+  getAbstractFileByPath: (path) => {
+    if (vaultFiles.has(path)) return new FakeTFile(path);
+    if (folders.has(path)) return { path, kind: "folder" };
+    return null;
+  },
+  create: async (path, data) => {
+    vaultCalls.create += 1;
+    vaultFiles.set(path, data);
+    return new FakeTFile(path);
+  },
+  modify: async (file, data) => {
+    vaultCalls.modify += 1;
+    vaultFiles.set(file.path, data);
+    return file;
+  },
+  createFolder: async (path) => {
+    vaultCalls.createFolder += 1;
+    folders.add(path);
+    return { path };
+  }
+};
+
+const exportMethods = ["exportWebNoteMarkdown", "ensureVaultFolder", "findWebNoteByUrl", "noteDrawWebviewIdentity", "exportEmbedWebNote"];
+const exportEntries = exportMethods.map((name) => {
+  const extracted = extractMethod(source, name);
+  return `  ${name}: ${extracted.isAsync ? "async " : ""}function${extracted.paramsAndBody}`;
+});
+const exportTs = `const __E = {\n${exportEntries.join(",\n")}\n};\n__E;\n`;
+const exportJs = esbuild.transformSync(exportTs, { loader: "ts", format: "cjs", target: "es2020" }).code;
+const exportTable = new Function("webNoteId", "hostName", "sanitizeFileName", "appendFileExtension", "normalizePath", "TFile", "webNoteMarkdown", "htmlToMarkdownFromElement", "WebNoteEntry", "Notice",
+  `${exportJs}\nreturn __E;`)(
+  (url) => `webnote-${url}`,
+  helpers.hostName,
+  (name) => name.replace(/[\\/:*?"<>|]/g, "-"),
+  (name, ext) => `${name}.${ext}`,
+  (p) => p.replace(/^\/+|\/+$/g, ""),
+  FakeTFile,
+  exportFn,
+  (el) => el.innerHTML,
+  undefined,
+  function Notice() {}
+);
+
+const exportCtx = Object.assign({}, exportTable, {
+  settings: { webNoteFolder: "Mobile Webviewer Notes", webNotes: [] },
+  app: { vault: fakeVault },
+  addConsole: async () => {},
+  saveWebNote: async (entry) => {
+    exportCtx.settings.webNotes = [entry, ...exportCtx.settings.webNotes.filter((e) => e.id !== entry.id)];
+    return entry;
+  },
+  uniqueVaultPath: async (folder, fileName) => `${folder}/${fileName}`,
+  tr: (key) => key,
+  Notice: function Notice() {},
+  createWebNoteFromPage: (page) => ({
+    id: `note-${page.url}`, url: page.url, title: page.title, sourceTitle: page.title,
+    noteHtml: "", noteText: "", noteMarkdown: "", doodleSvg: "", pageHtml: "", pageText: "",
+    pageEdits: [], markdownPath: "", updatedAt: 0, createdAt: 0
+  }),
+  htmlToMarkdownFromElement: (el) => el.innerHTML
+});
+for (const name of exportMethods) exportCtx[name] = exportTable[name].bind(exportCtx);
+
+// A note is found by page identity, not by the exact URL string.
+exportCtx.settings.webNotes = [{
+  id: "n1", url: "https://example.com/post/", title: "示例", sourceTitle: "示例",
+  noteHtml: "", noteText: "原文", noteMarkdown: "## 原文", doodleSvg: "", pageHtml: "", pageText: "",
+  pageEdits: [], markdownPath: "", updatedAt: 0, createdAt: 0
+}];
+check(
+  "a saved note is found again through a hash or trailing-slash URL",
+  Boolean(exportCtx.findWebNoteByUrl("https://example.com/post#top")) &&
+    Boolean(exportCtx.findWebNoteByUrl("https://example.com/post"))
+);
+check("an unrelated page still resolves to no note", exportCtx.findWebNoteByUrl("https://example.com/other") === undefined);
+
+// The export must go through the vault API so Obsidian indexes the file.
+const target = exportCtx.settings.webNotes[0];
+const exported = await exportCtx.exportWebNoteMarkdown(target);
+check("存 MD creates the file through the vault API", vaultCalls.create === 1 && vaultFiles.has(exported.markdownPath));
+check("the exported file holds the note's Markdown", (vaultFiles.get(exported.markdownPath) ?? "").includes("## 原文"));
+check("the note remembers where it was written", exported.markdownPath === "Mobile Webviewer Notes/示例.md");
+
+await exportCtx.exportWebNoteMarkdown(exported);
+check("saving the same note again modifies instead of duplicating", vaultCalls.modify === 1 && vaultCalls.create === 1);
+
+// No stored note at all: 存 MD must still write what is on screen.
+const embedEl = window.document.createElement("div");
+embedEl.className = "mwv-embed";
+embedEl.dataset.url = "https://fresh.example/page";
+const panel = window.document.createElement("div");
+panel.className = "mwv-reader-panel";
+panel.dataset.url = "https://fresh.example/page";
+const titleEl = window.document.createElement("h2");
+titleEl.className = "mwv-page-title";
+titleEl.textContent = "Fresh Page";
+const editorEl = window.document.createElement("div");
+editorEl.className = "mwv-webnote-editor";
+editorEl.innerHTML = "<h2>正文</h2><p>内容</p>";
+panel.appendChild(titleEl);
+panel.appendChild(editorEl);
+embedEl.appendChild(panel);
+window.document.body.appendChild(embedEl);
+await exportCtx.exportEmbedWebNote(embedEl);
+const fresh = [...vaultFiles.keys()].find((path) => path.includes("Fresh Page"));
+check("存 MD writes a note even when nothing was autosaved yet", Boolean(fresh));
+check("the note written from the panel keeps the page text", (vaultFiles.get(fresh) ?? "").includes("正文"));
 
 /* ------------------------------------------------------------------ */
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
