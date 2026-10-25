@@ -27,6 +27,7 @@ import {
   READER_MIN_CONTENT_CHARS,
   articleFromLivePayload,
   extractArticleFromHtml,
+  htmlToMarkdown,
   isUsableReaderMarkdown,
   looksLikeBlockedPage,
   looksLikeReaderFailure,
@@ -608,6 +609,13 @@ interface WebNoteEntry {
   sourceTitle: string;
   noteHtml: string;
   noteText: string;
+  /**
+   * The Markdown this note was rendered from, kept verbatim. `存 MD` must write
+   * what the page actually says, not a flat re-derivation of the rendered DOM,
+   * so an untouched note exports this string as-is; it goes empty once the user
+   * edits the note, and the export then converts the edited DOM.
+   */
+  noteMarkdown?: string;
   doodleSvg: string;
   pageHtml: string;
   pageText: string;
@@ -7229,6 +7237,9 @@ interface MobileWebviewerEmbedElement extends HTMLElement {
 
 interface NoteDrawControllerLike {
   active?: boolean;
+  /** True once NoteDraw has read this surface's stored drawings. Until then
+   * `drawingData` is an empty draft, not "this page has no ink". */
+  drawingsLoaded?: boolean;
   buttonLongPressed?: boolean;
   suppressNextButtonClick?: boolean;
   previewEl?: HTMLElement;
@@ -7334,6 +7345,7 @@ interface NoteDrawPluginLike {
   api?: {
     readDrawings?: (file?: NoteDrawFileLike) => Promise<NoteDrawDrawingDataLike>;
     writeDrawings?: (file?: NoteDrawFileLike, data?: unknown) => Promise<NoteDrawDrawingDataLike>;
+    refresh?: (file?: NoteDrawFileLike) => Promise<unknown>;
   };
 }
 
@@ -8982,7 +8994,17 @@ function htmlToMarkdownFromElement(root: HTMLElement): string {
 
 function webNoteMarkdown(entry: WebNoteEntry): string {
   const title = entry.title || entry.sourceTitle || hostName(entry.url);
-  const body = entry.noteText || htmlToText(entry.noteHtml);
+  // `存 MD` writes the note as it reads on screen. The Markdown the page was
+  // converted from is kept verbatim, so an untouched note exports exactly that
+  // string; an edited note is converted from the edited DOM with the same
+  // Turndown pipeline (headings, GFM tables, task lists, fenced code, links and
+  // images all survive). The old path flattened everything through innerText,
+  // which is why a saved file never matched the page.
+  const body =
+    (entry.noteMarkdown ?? "").trim() ||
+    (entry.noteHtml ? htmlToMarkdown(entry.noteHtml, entry.url) : "").trim() ||
+    (entry.noteText ?? "").trim() ||
+    htmlToText(entry.noteHtml || "");
   const pageEdit = entry.pageText
     ? `\n\n## Page edits\n\n${escapeMarkdownText(entry.pageText)}`
     : "";
@@ -9116,6 +9138,9 @@ class MobileWebviewerView extends ItemView {
   activeDoodlePointerId?: number;
   activeDoodleSvg?: SVGSVGElement;
   currentDrawer: "bookmarks" | "history" | "reading" | "downloads" | "console" = "bookmarks";
+  // Rendering a note body as Markdown is async; a fast navigation must not let
+  // a slow, stale render repaint the pane that superseded it.
+  private noteMarkdownRenderSeq = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: MobileWebviewerPlugin) {
     super(leaf);
@@ -10416,23 +10441,45 @@ class MobileWebviewerView extends ItemView {
       appendSafeHtml(content, note.noteHtml);
       return;
     }
-    const blocks = page.content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-    if (!blocks.length && page.excerpt) {
-      content.createEl("p", { text: page.excerpt });
-      return;
-    }
-    for (const block of blocks.slice(0, 100)) {
-      if (/^#{1,3}\s+/.test(block)) {
-        const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
-        content.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
-      } else {
-        content.createEl("p", { text: block });
+    const markdown = (note?.noteMarkdown ?? "").trim() || (page.content ?? "").trim() || (page.excerpt ?? "").trim();
+    if (!markdown) return;
+    // Render the real Markdown, not a flattened paragraph dump: this pane is the
+    // same document `存 MD` writes, so it has to show headings, tables, task
+    // lists and fenced code the way the file will read.
+    const renderPlainFallback = () => {
+      content.empty();
+      const blocks = markdown.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+      for (const block of blocks.slice(0, 100)) {
+        if (/^#{1,3}\s+/.test(block)) {
+          const level = Math.min(3, block.match(/^#+/)?.[0].length ?? 2);
+          content.createEl(`h${level}` as keyof HTMLElementTagNameMap, { text: block.replace(/^#{1,3}\s+/, "") });
+        } else {
+          content.createEl("p", { text: block });
+        }
       }
-    }
+    };
+    content.addClass("markdown-rendered");
+    content.empty();
+    const renderToken = ++this.noteMarkdownRenderSeq;
+    void MarkdownRenderer.renderMarkdown(markdown, content, "", this)
+      .then(() => {
+        if (renderToken !== this.noteMarkdownRenderSeq || !content.isConnected) return;
+        for (const anchor of Array.from(content.querySelectorAll<HTMLAnchorElement>("a[target]"))) {
+          anchor.removeAttribute("target");
+        }
+      })
+      .catch((error) => {
+        console.error("[mobile-webviewer] note markdown render failed", error);
+        if (renderToken !== this.noteMarkdownRenderSeq || !content.isConnected) return;
+        renderPlainFallback();
+      });
   }
 
   bindWebNoteEditor(content: HTMLElement, status: HTMLElement): void {
     const markDirty = () => {
+      // Once the user types, the DOM copy is the truth and the pristine
+      // Markdown must stop shadowing it in the export.
+      content.dataset.mwvNoteEdited = "true";
       status.setText("");
       this.queueWebNoteSave(status);
     };
@@ -10488,11 +10535,16 @@ class MobileWebviewerView extends ItemView {
       images: [],
       links: []
     });
+    const edited = editor.dataset.mwvNoteEdited === "true";
     const updated: WebNoteEntry = {
       ...base,
       title: this.currentTitle || base.title,
-      noteHtml: editor.innerHTML,
+      // An unedited note keeps no HTML snapshot: its Markdown is the authority,
+      // and a snapshot taken too early is what made later renders (and 存 MD
+      // exports) drift away from the page.
+      noteHtml: edited ? editor.innerHTML : base.noteHtml ?? "",
       noteText: htmlToMarkdownFromElement(editor),
+      noteMarkdown: edited ? "" : base.noteMarkdown,
       doodleSvg: doodle?.innerHTML ?? "",
       updatedAt: Date.now()
     };
@@ -10978,6 +11030,8 @@ export default class MobileWebviewerPlugin extends Plugin {
   embedSurfaceSeq = 0;
   noteDrawDedupeTimers = new WeakMap<HTMLElement, number>();
   noteDrawDrawingSaveTimers = new WeakMap<NoteDrawControllerLike, number>();
+  noteDrawDrawingReloadAt = new WeakMap<NoteDrawControllerLike, number>();
+  noteDrawInkMigrationQueued = new WeakSet<HTMLElement>();
   noteDrawControllerRepairs = new WeakSet<HTMLElement>();
   noteDrawControllerRestoreTokens = new WeakMap<HTMLElement, number>();
   noteDrawControllerRestoreSeq = 0;
@@ -11114,6 +11168,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     }, { capture: true });
     this.installNoteDrawRawSurfaceGuard();
     this.installNoteDrawDedupeObserver();
+    this.installNoteDrawTwoFingerScroll();
     this.scheduleNoteDrawRebindAfterReload();
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.installNoteDrawRawSurfaceGuard();
@@ -12564,6 +12619,8 @@ export default class MobileWebviewerPlugin extends Plugin {
   activateNoteDrawWebviewController(controller: NoteDrawControllerLike, surface: HTMLElement): boolean {
     const previewEl = controller.previewEl ?? surface;
     if (!previewEl?.isConnected || !this.isMobileWebviewerSurface(previewEl) || !this.noteDrawControllerBelongsToRoot(controller, surface)) return false;
+    const inkUrl = controller.previewEl?.dataset.url || surface.dataset.url || this.settings.homeUrl;
+    if (inkUrl) this.queueNoteDrawWebviewInkMigration(controller.previewEl ?? surface, inkUrl);
 
     const alreadyActive = this.isNoteDrawControllerActive(controller);
     if (alreadyActive && this.isNoteDrawWebviewToolbarVisible(controller)) {
@@ -13397,48 +13454,176 @@ export default class MobileWebviewerPlugin extends Plugin {
     return Boolean(left && right && normalize(left) === normalize(right));
   }
 
-  noteDrawWebviewFileForUrl(value?: string): NoteDrawFileLike | null {
-    let identity = "";
+  /**
+   * The identity a page's ink belongs to.
+   *
+   * Storage used to key off the raw URL string, hash included, so scrolling to
+   * an `#anchor` — or the same page arriving with and without a trailing slash
+   * — produced a different drawing file and the strokes appeared to vanish.
+   * Identity now drops the fragment, normalizes the host's case and ignores a
+   * trailing slash, which is exactly what "the same page" means to a reader.
+   */
+  noteDrawWebviewIdentity(value?: string): string {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
     try {
-      identity = new URL(value || "").toString();
+      const url = new URL(raw);
+      url.hash = "";
+      const pathname = url.pathname.replace(/\/+$/, "");
+      return `${url.protocol}//${url.hostname.toLowerCase()}${url.port ? `:${url.port}` : ""}${pathname}${url.search}`;
     } catch {
-      identity = String(value || "").trim();
+      return raw.replace(/#.*$/, "").replace(/\/+$/, "");
     }
-    if (!identity) return null;
+  }
+
+  noteDrawWebviewLabel(identity: string): string {
     let label = "webview";
     try {
       label = new URL(identity).hostname.replace(/^www\./, "") || label;
     } catch {
-      // Keep the generic label for non-URL identities.
+      label = identity.split("/")[0] || label;
     }
-    label = label
+    return label
       .replace(/\\/g, "/")
       .split("/")
       .pop()!
       .replace(/[^a-zA-Z0-9._-]+/g, "_")
       .replace(/^_+|_+$/g, "")
       .slice(0, 80) || "webview";
+  }
+
+  noteDrawWebviewFileForIdentity(identity: string): NoteDrawFileLike | null {
+    if (!identity) return null;
     let hash = 2166136261;
     for (let index = 0; index < identity.length; index += 1) {
       hash ^= identity.charCodeAt(index);
       hash = Math.imul(hash, 16777619);
     }
     const suffix = (hash >>> 0).toString(16).padStart(8, "0");
-    const path = `webviews/${label}__${suffix}.md`;
+    const path = `webviews/${this.noteDrawWebviewLabel(identity)}__${suffix}.md`;
     return { path, name: path.split("/").pop() || "webview.md", extension: "md" };
+  }
+
+  noteDrawWebviewFileForUrl(value?: string): NoteDrawFileLike | null {
+    return this.noteDrawWebviewFileForIdentity(this.noteDrawWebviewIdentity(value));
+  }
+
+  /** Where this page's ink lived before the identity was normalized. */
+  noteDrawLegacyWebviewFileForUrl(value?: string): NoteDrawFileLike | null {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    let identity = raw;
+    try {
+      identity = new URL(raw).toString();
+    } catch {
+      identity = raw;
+    }
+    return this.noteDrawWebviewFileForIdentity(identity);
+  }
+
+  /**
+   * Carry ink written under the old raw-URL identity onto the normalized one,
+   * once per surface. Without this the fix would itself look like the bug: a
+   * page that had strokes yesterday would open blank today.
+   */
+  queueNoteDrawWebviewInkMigration(surface: HTMLElement, url: string): void {
+    if (!surface?.isConnected || !url) return;
+    if (this.noteDrawInkMigrationQueued.has(surface)) return;
+    const canonical = this.noteDrawWebviewFileForUrl(url);
+    const legacy = this.noteDrawLegacyWebviewFileForUrl(url);
+    if (!canonical?.path || !legacy?.path || canonical.path === legacy.path) return;
+    const plugin = this.getNoteDrawPlugin();
+    const api = plugin?.api;
+    const readDrawings = api?.readDrawings;
+    const writeDrawings = api?.writeDrawings;
+    const refresh = api?.refresh;
+    if (typeof readDrawings !== "function" || typeof writeDrawings !== "function") return;
+    this.noteDrawInkMigrationQueued.add(surface);
+    void (async () => {
+      try {
+        const existing = await readDrawings(canonical).catch(() => null);
+        if (existing && !this.noteDrawDrawingIsEmpty(existing)) return;
+        const stale = await readDrawings(legacy).catch(() => null);
+        if (!stale || this.noteDrawDrawingIsEmpty(stale)) return;
+        const migrated: NoteDrawDrawingDataLike = {
+          ...(JSON.parse(JSON.stringify(stale)) as NoteDrawDrawingDataLike),
+          sourcePath: canonical.path,
+          updatedAt: new Date().toISOString()
+        };
+        await writeDrawings(canonical, migrated);
+        console.info(`[mobile-webviewer] migrated NoteDraw ink ${legacy.path} -> ${canonical.path}`);
+        await refresh?.(canonical).catch(() => undefined);
+      } catch (error) {
+        console.warn("[mobile-webviewer] NoteDraw ink migration skipped", error);
+      }
+    })();
+  }
+
+  /**
+   * Ink used to vanish here. A freshly mounted NoteDraw surface holds an empty
+   * draft (`strokes: []`) until it has read the stored drawings, and a sync pass
+   * asked for an autosave inside that window: the empty draft was written over
+   * the real file and every stroke on the page was gone. Two rules fix it —
+   * nothing is written before NoteDraw reports the surface loaded, and an empty
+   * draft never replaces drawings that are already on disk.
+   */
+  noteDrawDrawingIsEmpty(data?: NoteDrawDrawingDataLike | null): boolean {
+    const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
+    const blocks = (data as { markdownBlocks?: unknown } | null | undefined)?.markdownBlocks;
+    return count(data?.strokes) === 0 && count(blocks) === 0 && count(data?.webEdits) === 0;
+  }
+
+  /**
+   * The payload that is safe to persist for this surface, or null when writing
+   * would destroy ink. Everything that saves drawings — the debounced autosave,
+   * the immediate flush, NoteDraw's own scheduler — goes through here, because
+   * each of those paths used to be able to write an empty draft.
+   */
+  async noteDrawDrawingPayload(controller?: NoteDrawControllerLike | null): Promise<NoteDrawDrawingDataLike | null> {
+    if (!controller?.file || !this.isNoteDrawSurfaceElement(controller.previewEl)) return null;
+    // `false` means NoteDraw is mid-load; a build that does not expose the flag
+    // at all falls through to the read-back check below instead of going silent.
+    if (controller.drawingsLoaded === false) return null;
+    const data = (controller as NoteDrawControllerLike & { drawingData?: NoteDrawDrawingDataLike }).drawingData;
+    if (!data) return null;
+    if (!this.noteDrawDrawingIsEmpty(data)) return data;
+    const plugin = this.getNoteDrawPlugin();
+    if (typeof plugin?.api?.readDrawings !== "function") return data;
+    const stored = await plugin.api.readDrawings(controller.file).catch(() => null);
+    if (!stored || this.noteDrawDrawingIsEmpty(stored)) return data;
+    console.warn("[mobile-webviewer] NoteDraw autosave skipped: an empty draft would erase stored ink");
+    // Put the stored ink back on screen, at most once every ten seconds so a
+    // surface that can never adopt this file cannot spin on refresh.
+    const now = Date.now();
+    if (now - (this.noteDrawDrawingReloadAt.get(controller) ?? 0) > 10_000) {
+      this.noteDrawDrawingReloadAt.set(controller, now);
+      try {
+        await plugin.api.refresh?.(controller.file);
+      } catch (error) {
+        console.warn("[mobile-webviewer] NoteDraw drawing refresh skipped", error);
+      }
+    }
+    return null;
+  }
+
+  async writeNoteDrawDrawingSafely(controller?: NoteDrawControllerLike | null): Promise<void> {
+    const data = await this.noteDrawDrawingPayload(controller);
+    if (!data || !controller?.file) return;
+    const plugin = this.getNoteDrawPlugin();
+    if (typeof plugin?.writeDrawings !== "function") return;
+    await plugin.writeDrawings(controller.file, data);
   }
 
   queueNoteDrawDrawingSave(controller?: NoteDrawControllerLike | null): void {
     if (!controller?.file || !this.isNoteDrawSurfaceElement(controller.previewEl)) return;
+    if (controller.drawingsLoaded === false) return;
     const data = (controller as NoteDrawControllerLike & { drawingData?: unknown }).drawingData;
     if (!data) return;
     const existing = this.noteDrawDrawingSaveTimers.get(controller);
     if (existing) window.clearTimeout(existing);
     const timer = window.setTimeout(() => {
       this.noteDrawDrawingSaveTimers.delete(controller);
-      const plugin = this.getNoteDrawPlugin();
-      if (typeof plugin?.writeDrawings !== "function" || !controller.file) return;
-      void plugin.writeDrawings(controller.file, data).catch((error) => {
+      void this.writeNoteDrawDrawingSafely(controller).catch((error) => {
         console.warn("[mobile-webviewer] NoteDraw drawing autosave skipped", error);
       });
     }, 900);
@@ -13751,25 +13936,218 @@ export default class MobileWebviewerPlugin extends Plugin {
     return plugin && typeof plugin === "object" ? plugin : null;
   }
 
+  /** The nearest ancestor that actually scrolls, starting at (and including) `start`. */
+  findScrollableAncestor(start?: Element | null): HTMLElement | null {
+    let node: Element | null = start ?? null;
+    while (node && node !== appDocument().body) {
+      if (node instanceof HTMLElement) {
+        const style = window.getComputedStyle(node);
+        const scrollable = /(auto|scroll|overlay)/.test(style.overflowY) || node.hasClass("cm-scroller");
+        if (scrollable && node.scrollHeight > node.clientHeight + 2) return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /**
+   * Two-finger pan over an active NoteDraw surface.
+   *
+   * NoteDraw paints on a canvas with `touch-action: none` and lifts its
+   * `pointer-events` the moment the wand turns on, so the page underneath cannot
+   * be scrolled at all — on a phone that left select mode with no way to move
+   * through an article. Two fingers are never a drawing gesture here, so the
+   * surface takes them and pans the surrounding scroller instead: touchmove is
+   * claimed in the capture phase (which also cancels whatever the canvas had
+   * begun), the page scrolls by the finger delta, and the release coasts with a
+   * short decay so it feels like a page scroll, not a jog.
+   *
+   * Drawing modes are left alone — a second finger there means ink, not a pan.
+   */
+  installNoteDrawTwoFingerScroll(): void {
+    const doc = appDocument();
+    const win = doc.defaultView;
+    let scroller: HTMLElement | null = null;
+    let surface: HTMLElement | null = null;
+    let mutedCanvases: HTMLElement[] = [];
+    let lastY = 0;
+    let velocity = 0;
+    let momentumFrame = 0;
+    // Pointer ids NoteDraw is currently tracking, so a scroll takeover can tell
+    // it "this gesture was cancelled" instead of letting a stray stroke land.
+    const livePointers = new Map<number, EventTarget | null>();
+    const cancelMomentum = () => {
+      if (momentumFrame) {
+        win?.cancelAnimationFrame(momentumFrame);
+        momentumFrame = 0;
+      }
+    };
+    const restoreCanvases = () => {
+      for (const canvas of mutedCanvases) canvas.style.removeProperty("pointer-events");
+      mutedCanvases = [];
+    };
+    const reset = () => {
+      restoreCanvases();
+      scroller = null;
+      surface = null;
+      lastY = 0;
+      velocity = 0;
+    };
+    const coast = (target: HTMLElement, initial: number) => {
+      let speed = initial;
+      if (Math.abs(speed) < 1.5) return;
+      const step = () => {
+        speed *= 0.94;
+        if (Math.abs(speed) < 0.35 || !target.isConnected) {
+          momentumFrame = 0;
+          return;
+        }
+        target.scrollTop += speed;
+        momentumFrame = win?.requestAnimationFrame(step) ?? 0;
+      };
+      momentumFrame = win?.requestAnimationFrame(step) ?? 0;
+    };
+    const drawingMode = (tool?: string): boolean => {
+      const clean = (tool ?? "").toLowerCase();
+      return clean === "draw" || clean === "pen" || clean === "watercolor" || clean === "laser";
+    };
+    /**
+     * The note surface whose NoteDraw canvas is actually swallowing touches.
+     * `notedraw-shell` alone is not enough: NoteDraw keeps the class on a
+     * reading page while its canvas is `pointer-events: none`, and then the page
+     * scrolls natively — panning it here too would double the movement.
+     */
+    const activeCanvasSurface = (target: Element | null): HTMLElement | null => {
+      const found = target?.closest<HTMLElement>(".mwv-embed, .mwv-note-embed, .mwv-bing-home, .mwv-home, .notedraw-shell");
+      if (!found?.isConnected) return null;
+      const canvas = found.querySelector<HTMLElement>(".notedraw-canvas");
+      if (!canvas) return null;
+      const pointerEvents = win?.getComputedStyle(canvas).pointerEvents ?? "none";
+      return pointerEvents === "none" ? null : found;
+    };
+    const cancelNoteDrawGesture = () => {
+      for (const [pointerId, target] of livePointers) {
+        if (!(target instanceof Element) || !target.isConnected) continue;
+        try {
+          const cancel = new PointerEvent("pointercancel", {
+            pointerId,
+            bubbles: true,
+            cancelable: false,
+            pointerType: "touch"
+          });
+          target.dispatchEvent(cancel);
+        } catch {
+          const fallback = new Event("pointercancel", { bubbles: true });
+          Object.defineProperty(fallback, "pointerId", { value: pointerId });
+          target.dispatchEvent(fallback);
+        }
+      }
+      livePointers.clear();
+    };
+    const muteCanvases = (host: HTMLElement) => {
+      for (const canvas of Array.from(host.querySelectorAll<HTMLElement>(".notedraw-canvas, .notedraw-static-canvas"))) {
+        // Rendering is unaffected; only the gesture is taken away, so a second
+        // finger cannot paint while the page is being panned.
+        canvas.style.setProperty("pointer-events", "none", "important");
+        mutedCanvases.push(canvas);
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      livePointers.set(event.pointerId, event.target);
+    };
+    const forgetPointer = (event: PointerEvent) => {
+      if (event.pointerType === "touch") livePointers.delete(event.pointerId);
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      cancelMomentum();
+      if (event.touches.length !== 2) {
+        if (event.touches.length > 2) reset();
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      const host = activeCanvasSurface(target);
+      if (!host) {
+        reset();
+        return;
+      }
+      const controller = this.findWebviewNoteDrawController(host, true);
+      if (controller && drawingMode(controller.toolMode)) {
+        // A second finger is ink in a drawing tool, not a pan.
+        reset();
+        return;
+      }
+      const container = this.findScrollableAncestor(target) ?? this.findScrollableAncestor(host);
+      if (!container) {
+        reset();
+        return;
+      }
+      // Whatever the first finger started (a selection drag, an element move)
+      // has to be abandoned before the page moves under it.
+      cancelNoteDrawGesture();
+      muteCanvases(host);
+      surface = host;
+      scroller = container;
+      lastY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+      velocity = 0;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (!scroller || event.touches.length < 2) return;
+      // Claimed before the canvas sees it: without this the pen keeps the
+      // gesture and the page never moves.
+      event.preventDefault();
+      event.stopPropagation();
+      const y = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+      const delta = lastY - y;
+      lastY = y;
+      if (!delta) return;
+      scroller.scrollTop += delta;
+      velocity = delta;
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      if (!scroller) return;
+      if (event.touches.length >= 2) return;
+      const container = scroller;
+      const speed = velocity;
+      reset();
+      coast(container, speed);
+    };
+    this.registerDomEvent(doc, "pointerdown", onPointerDown, { capture: true });
+    this.registerDomEvent(doc, "pointerup", forgetPointer, { capture: true });
+    this.registerDomEvent(doc, "pointercancel", forgetPointer, { capture: true });
+    this.registerDomEvent(doc, "touchstart", onTouchStart, { capture: true, passive: true });
+    this.registerDomEvent(doc, "touchmove", onTouchMove, { capture: true, passive: false });
+    this.registerDomEvent(doc, "touchend", onTouchEnd, { capture: true, passive: true });
+    this.registerDomEvent(doc, "touchcancel", onTouchEnd, { capture: true, passive: true });
+    this.register(() => reset());
+  }
+
   flushNoteDrawDrawingNow(controller?: NoteDrawControllerLike | null): Promise<void> {
     if (!controller?.file || !this.isNoteDrawSurfaceElement(controller.previewEl)) return Promise.resolve();
-    const data = (controller as NoteDrawControllerLike & { drawingData?: unknown }).drawingData;
-    if (!data) return Promise.resolve();
     const pendingTimer = this.noteDrawDrawingSaveTimers.get(controller);
     if (pendingTimer) {
       window.clearTimeout(pendingTimer);
       this.noteDrawDrawingSaveTimers.delete(controller);
     }
-    const plugin = this.getNoteDrawPlugin();
-    try {
-      plugin?.scheduleDrawingSave?.(controller.file, data);
-    } catch (error) {
-      console.warn("[mobile-webviewer] NoteDraw scheduled drawing save skipped", error);
-    }
-    if (typeof plugin?.writeDrawings !== "function") return Promise.resolve();
-    return plugin.writeDrawings(controller.file, data).catch((error) => {
-      console.warn("[mobile-webviewer] NoteDraw drawing flush skipped", error);
-    });
+    // A surface that never finished loading has no ink of its own to flush —
+    // writing its empty draft is exactly what erased a page's drawings. Both
+    // NoteDraw's scheduler and the direct write have to see the same verified
+    // payload, so the check happens before either of them runs.
+    return this.noteDrawDrawingPayload(controller)
+      .then(async (data) => {
+        if (!data || !controller.file) return;
+        const plugin = this.getNoteDrawPlugin();
+        try {
+          plugin?.scheduleDrawingSave?.(controller.file, data);
+        } catch (error) {
+          console.warn("[mobile-webviewer] NoteDraw scheduled drawing save skipped", error);
+        }
+        if (typeof plugin?.writeDrawings !== "function") return;
+        await plugin.writeDrawings(controller.file, data);
+      })
+      .catch((error) => {
+        console.warn("[mobile-webviewer] NoteDraw drawing flush skipped", error);
+      });
   }
 
   isNoteBrowserLeaf(leaf?: WorkspaceLeaf | null): boolean {
@@ -17084,6 +17462,10 @@ export default class MobileWebviewerPlugin extends Plugin {
       cls: "mwv-md-content mwv-webnote-editor",
       attr: { contenteditable: "true", spellcheck: "true" }
     });
+    // The Markdown this panel is showing, untouched by any save, so an
+    // unedited note can be written back byte for byte by `存 MD`.
+    let pristineMarkdown = (note?.noteMarkdown ?? "").trim();
+    let noteEdited = false;
     // The stored noteHtml is only trusted when it is not a saved failure: a
     // failed extraction used to be persisted as a note and then re-served
     // forever, which read exactly like "NoteWeb still cannot convert pages".
@@ -17106,6 +17488,7 @@ export default class MobileWebviewerPlugin extends Plugin {
         // reading stays inside the plugin.
         content.addClass("markdown-rendered");
         content.empty();
+        pristineMarkdown = markdown;
         const renderToken = ++this.readerMarkdownRenderSeq;
         void MarkdownRenderer.renderMarkdown(markdown, content, "", this)
           .then(() => {
@@ -17145,8 +17528,12 @@ export default class MobileWebviewerPlugin extends Plugin {
       const base = currentNote ?? this.createWebNoteFromPage(page);
       const saved = await this.saveWebNote({
         ...base,
-        noteHtml: content.innerHTML,
+        // An untouched note keeps its Markdown authority: the HTML snapshot is
+        // only needed once the user changed something, and storing it early is
+        // what made later renders (and exports) drift from the page.
+        noteHtml: noteEdited || cachedNoteUsable ? content.innerHTML : base.noteHtml ?? "",
         noteText: htmlToMarkdownFromElement(content),
+        noteMarkdown: noteEdited ? "" : pristineMarkdown,
         doodleSvg: doodleLayer.innerHTML,
         updatedAt: Date.now()
       });
@@ -17160,10 +17547,14 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (statePanel._mwvFlushTimer) window.clearTimeout(statePanel._mwvFlushTimer);
       statePanel._mwvFlushTimer = window.setTimeout(() => void save(), 450);
     };
-    content.addEventListener("input", queue, true);
-    content.addEventListener("keyup", queue, true);
-    content.addEventListener("compositionend", queue, true);
-    content.addEventListener("paste", () => window.setTimeout(queue, 0), true);
+    const queueEdit = () => {
+      noteEdited = true;
+      queue();
+    };
+    content.addEventListener("input", queueEdit, true);
+    content.addEventListener("keyup", queueEdit, true);
+    content.addEventListener("compositionend", queueEdit, true);
+    content.addEventListener("paste", () => window.setTimeout(queueEdit, 0), true);
     content.addEventListener("blur", () => void save());
     const finishDoodle = (event?: PointerEvent, shouldQueue = true) => {
       if (!activePath) return;
@@ -17504,9 +17895,12 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
     setIcon(save, "file-down");
     // Handled by the chrome's delegated listener (bindEmbedChrome).
-    // The More button lives beside the NoteDraw wand in the leaf header
-    // (view-actions) instead of the chrome row, with its own icon.
-    this.ensureNoteBrowserMoreButton(embed, url, title);
+    // The More entry lives in the address row now. It used to be a wrench in
+    // the leaf header, immediately after NoteDraw's wand, where it read as part
+    // of NoteDraw's own toolbar — the wand is the plugin's entry point and a
+    // second tool icon glued to it is just clutter. Every mobile browser keeps
+    // this menu at the end of the address row instead.
+    this.removeNoteDrawAnchorWrench(embed);
 
     const address = chrome.createEl("form", {
       cls: "mwv-browser-address",
@@ -17532,6 +17926,18 @@ export default class MobileWebviewerPlugin extends Plugin {
       attr: { type: "submit", title: this.tr("go"), "aria-label": this.tr("go") }
     });
     setIcon(go, "arrow-right");
+    const moreButton = address.createEl("button", {
+      cls: "mwv-browser-more",
+      attr: {
+        type: "button",
+        title: this.tr("more"),
+        "aria-label": this.tr("more"),
+        "data-mwv-browser-more": "true"
+      }
+    });
+    setIcon(moreButton, "more-horizontal");
+    moreButton.dataset.mwvUrl = url;
+    moreButton.dataset.mwvTitle = title;
     // The submit is handled by the chrome's delegated listener
     // (bindEmbedChrome) so a reloaded plugin can claim the row.
     // Back / forward / reload join the address row's left side, removing the
@@ -17597,6 +18003,14 @@ export default class MobileWebviewerPlugin extends Plugin {
         event.preventDefault();
         event.stopPropagation();
         this.runBrowserAction("save", this.exportEmbedWebNote(embed));
+        return;
+      }
+      if (target.closest("[data-mwv-browser-more='true']")) {
+        event.preventDefault();
+        event.stopPropagation();
+        const liveUrl = embed.dataset.url || this.settings.homeUrl;
+        const liveTitle = this.getEmbedSurfaceTitle(embed) || hostName(liveUrl);
+        this.toggleMorePanel(embed, chrome, liveUrl, liveTitle);
       }
     });
     chrome.querySelector<HTMLElement>(".mwv-browser-address")?.addEventListener("submit", (event) => {
@@ -17624,60 +18038,18 @@ export default class MobileWebviewerPlugin extends Plugin {
     });
   }
 
-  // The More entry used to be a chrome-row action; it now lives in the leaf
-  // header next to the NoteDraw wand (view-actions anchor) with its own icon.
-  // Chrome rebuilds upsert the same button instead of stacking duplicates.
-  ensureNoteBrowserMoreButton(embed: HTMLElement, url: string, title: string): HTMLButtonElement | null {
-    if (!embed.isConnected) return null;
-    const anchor = this.ensureNoteDrawStableAnchor(embed);
-    if (!anchor?.isConnected) return null;
-    type MoreButton = HTMLButtonElement & { _mwvMoreEmbedSurface?: HTMLElement };
-    let button = anchor.querySelector<HTMLButtonElement>(":scope > button[data-mwv-browser-more='true']");
-    if (!button) {
-      button = anchor.createEl("button", {
-        cls: "mwv-browser-more clickable-icon",
-        attr: {
-          type: "button",
-          "data-mwv-browser-more": "true",
-          "aria-label": this.tr("more"),
-          title: this.tr("more")
-        }
-      });
-      setIcon(button, "wrench");
-    }
-    // Re-claimed on every call: the button lives in Obsidian's leaf header and
-    // survives a plugin reload, so the handler must belong to the live
-    // instance. A stale listener bows out through the owner check below.
-    const ownedMore = button as MoreButton & { _mwvMoreOwner?: unknown };
-    if (ownedMore._mwvMoreOwner !== this) {
-      ownedMore._mwvMoreOwner = this;
-      button.addEventListener("click", (event) => {
-        if (ownedMore._mwvMoreOwner !== this) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const moreButton = event.currentTarget as MoreButton | null;
-        if (!moreButton?.isConnected) return;
-        const owner = moreButton._mwvMoreEmbedSurface;
-        const current = owner?.isConnected
-          ? owner
-          : this.findWorkspaceLeafForElement(moreButton)?.view?.containerEl?.querySelector<HTMLElement>(".mwv-embed[data-url]");
-        if (!current) return;
-        const liveUrl = moreButton.dataset.mwvUrl || current.dataset.url || this.settings.homeUrl;
-        const liveTitle = moreButton.dataset.mwvTitle || this.getEmbedSurfaceTitle(current) || hostName(liveUrl);
-        let moreChrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-        if (!moreChrome) {
-          this.renderBrowserChrome(current, liveUrl, liveTitle);
-          moreChrome = current.querySelector<HTMLElement>(":scope > .mwv-browser-chrome");
-        }
-        if (moreChrome) this.toggleMorePanel(current, moreChrome, liveUrl, liveTitle);
-      });
-    }
-    (button as MoreButton)._mwvMoreEmbedSurface = embed;
-    button.dataset.mwvUrl = url;
-    button.dataset.mwvTitle = title;
-    // Keep the button right after the wand inside the stable anchor.
-    if (button.parentElement !== anchor || anchor.lastElementChild !== button) anchor.appendChild(button);
-    return button;
+  /**
+   * The wrench that used to sit right after NoteDraw's wand in the leaf header.
+   * It read as part of NoteDraw's toolbar, so it is gone; More lives in the
+   * browser address row instead. The leaf header outlives a plugin reload, so
+   * a button left behind by an older build has to be swept away rather than
+   * merely "not created again".
+   */
+  removeNoteDrawAnchorWrench(surface: HTMLElement): void {
+    const host = this.noteDrawStableAnchorHost(surface);
+    host
+      .querySelectorAll<HTMLElement>(":scope > .mwv-notedraw-anchor > .mwv-browser-more, :scope > .mwv-notedraw-anchor > button[data-mwv-browser-more='true']")
+      .forEach((button) => button.remove());
   }
 
   watchEmbedChrome(embed: HTMLElement): void {
@@ -18739,6 +19111,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       sourceTitle: page.title || hostName(page.url),
       noteHtml: "",
       noteText: page.content || page.excerpt || "",
+      noteMarkdown: (page.content || page.excerpt || "").trim(),
       doodleSvg: "",
       pageHtml: "",
       pageText: "",
@@ -18769,6 +19142,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       if (pageUsable && !existing.noteHtml && (storedIsFailure || storedMuchThinner)) {
         existing.noteHtml = "";
         existing.noteText = page.content;
+        existing.noteMarkdown = (page.content ?? "").trim();
         existing.title = page.title || existing.title;
         existing.sourceTitle = page.title || existing.sourceTitle;
         return await this.saveWebNote(existing);

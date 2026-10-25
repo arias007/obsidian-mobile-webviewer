@@ -2851,6 +2851,32 @@
   padding: 0;
 }
 
+/* More lives at the end of the address row, where a phone browser keeps it.
+   It used to be a wrench pinned after NoteDraw's wand in the leaf header. */
+.mwv-browser-address .mwv-browser-more {
+  display: inline-flex;
+  position: relative;
+  z-index: 1206;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+  pointer-events: auto;
+  cursor: var(--cursor, pointer);
+}
+
+.mwv-browser-address .mwv-browser-more:hover,
+.mwv-browser-address .mwv-browser-more:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
 .mwv-browser-actions {
   display: inline-flex;
   position: relative;
@@ -3986,21 +4012,6 @@
   padding: 0;
   pointer-events: auto;
   cursor: var(--cursor, pointer);
-}
-
-.mwv-notedraw-anchor .mwv-browser-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-4-4, 32px);
-  height: var(--size-4-4, 32px);
-  margin-left: 2px;
-  padding: 0;
-  pointer-events: auto;
-  cursor: var(--cursor, pointer);
-  background: transparent;
-  border: none;
-  box-shadow: none;
 }
 
 .mwv-embed.notedraw-shell > .notedraw-toolbar {

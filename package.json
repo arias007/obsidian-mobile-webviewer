@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mobile-webviewer",
-  "version": "0.4.44",
+  "version": "0.4.45",
   "description": "A lightweight mobile-first web viewer.",
   "main": "main.js",
   "scripts": {
@@ -10,8 +10,9 @@
     "verify:read-mode": "node scripts/verify-read-mode.mjs",
     "verify:reader": "node scripts/verify-reader-pipeline.mjs",
     "verify:proxy": "node scripts/verify-proxy-rewrite.mjs",
+    "verify:noteweb-safety": "node scripts/verify-noteweb-safety.mjs",
     "build:reader-live": "node scripts/build-reader-live.mjs",
-    "build": "npm run build:reader-live && npm run verify:cancip && npm run verify:note-browser && npm run verify:browser-controls && npm run verify:read-mode && npm run verify:reader && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production && npm run verify:proxy",
+    "build": "npm run build:reader-live && npm run verify:cancip && npm run verify:note-browser && npm run verify:browser-controls && npm run verify:read-mode && npm run verify:reader && npm run verify:noteweb-safety && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production && npm run verify:proxy",
     "dev": "node esbuild.config.mjs"
   },
   "keywords": [

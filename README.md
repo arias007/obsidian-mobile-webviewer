@@ -100,7 +100,15 @@ Then reload Obsidian and enable **Mobile Webviewer** in Community plugins.
   browser page loaded in the background.
 - Switch between Note, Web, and Split modes.
 - Auto-save edited text and doodles into plugin data, then export to Markdown
-  under `Mobile Webviewer Notes` with `存 MD`.
+  under `Mobile Webviewer Notes` with `存 MD`. The export is the note as it
+  reads: an untouched page writes its converted Markdown byte for byte, and an
+  edited note is re-converted from the edited text - headings, GFM tables, task
+  lists, fenced code with language tags, links and image alt text all survive
+  instead of collapsing into one flat paragraph.
+- Pan a note with two fingers while the NoteDraw wand is on. The drawing canvas
+  owns every touch in select mode, which used to leave a long page unscrollable;
+  two fingers now scroll it (with momentum) and drawing modes still get the
+  gesture for ink.
 - Keep Note Browser and Browser View on the same URL-backed web-note data, so
   edited text and doodles follow the page when switching modes.
 - Load multi-page Bing results with a More results control instead of stopping

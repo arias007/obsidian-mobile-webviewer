@@ -110,6 +110,8 @@ const METHODS = [
   "ensureEmbedChrome",
   "pinEmbedChrome",
   "renderBrowserChrome",
+  "removeNoteDrawAnchorWrench",
+  "noteDrawStableAnchorHost",
   "renderTabStrip",
   "isEmbedPainted",
   "armEmbedRenderWatchdog",
@@ -339,7 +341,7 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
 
   const notices = [];
   const navigations = [];
-  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0 };
+  const calls = { openUrlInEmbed: [], renderBrowserChrome: 0, switchTab: [], closeTab: [], newTab: [], renderTabStripHost: 0, createTab: 0, saved: 0, more: 0 };
 
   const leaf = { id: "leaf-1" };
   const binding = { navButtons: [] };
@@ -418,7 +420,9 @@ function createWorld({ withWebview = true, newTabStrip = false } = {}) {
     navigateEmbedForward: () => { navigations.push("forward"); },
     openUrlInEmbed: (el, url) => { calls.openUrlInEmbed.push(url); },
     exportEmbedWebNote: () => {},
-    ensureNoteBrowserMoreButton: () => null,
+    removeNoteDrawAnchorWrench: table.removeNoteDrawAnchorWrench,
+    noteDrawStableAnchorHost: table.noteDrawStableAnchorHost,
+    toggleMorePanel: () => { calls.more += 1; },
     renderBookmarksBar: () => {},
     watchEmbedChrome: () => {},
     syncNoteBrowserNativeIdentity: () => {},
@@ -1204,6 +1208,38 @@ check("tab keep-alive: parked-surface events are recorded onto their own tab", (
   assert(calls.tabPatches[0][0] === "t2" && calls.tabPatches[0][1].url === "https://next.example/page", "the navigation patch hit the wrong tab");
   assert(calls.tabPatches[1][0] === "t2" && calls.tabPatches[1][1].title === "Next Page", "the title patch hit the wrong tab");
   return "background navigation/title land on the owning tab record; about:blank ignored";
+});
+
+check("the More menu sits at the end of the address row, not beside the wand", () => {
+  const { embed, ctx, win } = createSurfaceWorld();
+  let opened = 0;
+  ctx.toggleMorePanel = () => { opened += 1; };
+  const more = embed.querySelector(":scope > .mwv-browser-chrome .mwv-browser-address .mwv-browser-more");
+  assert(more, "the address row has no More button");
+  const row = more.closest(".mwv-browser-address");
+  assert(row && row.lastElementChild === more, "the More button is not the last control in the address row");
+  assert(!embed.querySelector(".mwv-browser-more[class*='notedraw']"), "a More button is still anchored to the NoteDraw toolbar");
+  click(win, more);
+  assert(opened === 1, `clicking More opened the panel ${opened} times`);
+  return "More lives in the address row and opens the panel";
+});
+
+check("a wrench left in the leaf header by an older build is swept away", () => {
+  const { embed, ctx, doc } = createSurfaceWorld();
+  const host = doc.createElement("div");
+  host.className = "view-actions";
+  const anchor = doc.createElement("div");
+  anchor.className = "mwv-notedraw-anchor";
+  const wrench = doc.createElement("button");
+  wrench.className = "mwv-browser-more clickable-icon";
+  wrench.setAttribute("data-mwv-browser-more", "true");
+  anchor.appendChild(wrench);
+  host.appendChild(anchor);
+  doc.body.appendChild(host);
+  ctx.noteDrawStableAnchorHost = () => host;
+  ctx.removeNoteDrawAnchorWrench(embed);
+  assert(!host.querySelector("[data-mwv-browser-more]"), "the legacy wrench survived in the leaf header");
+  return "legacy wrench removed from the NoteDraw anchor";
 });
 
 /* ------------------------------------------------------------------ *

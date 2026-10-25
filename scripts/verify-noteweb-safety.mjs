@@ -1,0 +1,566 @@
+/**
+ * Behavioural checks for the two phone-only fixes in 0.4.45:
+ *
+ *  1. NoteDraw autosave must never write an empty draft over stored ink.
+ *     Every failure reproduced here happened on a real page: a re-render mounts
+ *     a fresh NoteDraw controller (empty draft), a sync pass asks for a save,
+ *     and the strokes file was overwritten with `strokes: []`.
+ *
+ *  2. Two fingers on an active NoteDraw surface must pan the note. The canvas
+ *     is `touch-action: none` with `pointer-events: auto`, so before this the
+ *     page could not be scrolled at all while the wand was on.
+ *
+ * The real method bodies are extracted from main.ts, compiled with esbuild and
+ * run against jsdom — not asserted against the source text.
+ *
+ * Run: node scripts/verify-noteweb-safety.mjs
+ */
+import fs from "node:fs";
+import { JSDOM } from "jsdom";
+import * as esbuild from "esbuild";
+
+const source = fs.readFileSync(process.env.MWV_SOURCE || "main.ts", "utf8");
+
+/* ------------------------------------------------------------------ *
+ * Method extraction (same walker as verify-browser-controls.mjs)
+ * ------------------------------------------------------------------ */
+function findBodyEnd(src, braceStart) {
+  let depth = 0;
+  let i = braceStart;
+  let mode = "code";
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && n === "/") { mode = "line"; i += 2; continue; }
+      if (c === "/" && n === "*") { mode = "block"; i += 2; continue; }
+      if (c === "'") { mode = "sq"; i++; continue; }
+      if (c === '"') { mode = "dq"; i++; continue; }
+      if (c === "`") { mode = "tpl"; i++; continue; }
+      if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) return i; }
+      i++;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") mode = "code"; i++; continue; }
+    if (mode === "block") { if (c === "*" && n === "/") { mode = "code"; i += 2; continue; } i++; continue; }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      if (c === "\\") { i += 2; continue; }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    if (mode === "tpl") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "`") mode = "code";
+      i++;
+      continue;
+    }
+  }
+  throw new Error("unterminated method body");
+}
+
+function extractMethod(src, name) {
+  const re = new RegExp(`^  (?:private |public |protected )?(async )?${name}\\s*\\(`, "m");
+  const m = re.exec(src);
+  if (!m) throw new Error(`method not found: ${name}`);
+  const parenStart = src.indexOf("(", m.index);
+  const end = findBodyEnd(src, src.indexOf("{", parenStart));
+  return { isAsync: Boolean(m[1]), paramsAndBody: src.slice(parenStart, end + 1) };
+}
+
+function extractTopLevelFunction(src, name) {
+  const re = new RegExp(`^function ${name}\\s*\\(`, "m");
+  const m = re.exec(src);
+  if (!m) throw new Error(`top-level function not found: ${name}`);
+  const end = findBodyEnd(src, src.indexOf("{", src.indexOf("(", m.index)));
+  return src.slice(m.index, end + 1);
+}
+
+/* ------------------------------------------------------------------ *
+ * Harness
+ * ------------------------------------------------------------------ */
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
+const { window } = dom;
+global.window = window;
+global.document = window.document;
+global.Node = window.Node;
+global.DOMParser = window.DOMParser;
+global.NodeFilter = window.NodeFilter;
+// jsdom ships no PointerEvent; the production fallback path then has to be the
+// one under test, so `Event` must be jsdom's class (Node has its own).
+global.Event = window.Event;
+global.CustomEvent = window.CustomEvent;
+global.HTMLElement = window.HTMLElement;
+global.Element = window.Element;
+global.MutationObserver = window.MutationObserver;
+
+// Obsidian adds these helpers to HTMLElement.prototype.
+window.HTMLElement.prototype.hasClass = function (cls) { return this.classList.contains(cls); };
+window.HTMLElement.prototype.addClass = function (cls) { this.classList.add(cls); };
+window.HTMLElement.prototype.removeClass = function (cls) { this.classList.remove(cls); };
+window.HTMLElement.prototype.toggleClass = function (cls, on) { this.classList.toggle(cls, on); };
+
+const METHODS = [
+  "noteDrawDrawingIsEmpty",
+  "noteDrawDrawingPayload",
+  "writeNoteDrawDrawingSafely",
+  "flushNoteDrawDrawingNow",
+  "queueNoteDrawDrawingSave",
+  "installNoteDrawTwoFingerScroll",
+  "findScrollableAncestor"
+];
+
+const entries = METHODS.map((name) => {
+  const extracted = extractMethod(source, name);
+  return `  ${name}: ${extracted.isAsync ? "async " : ""}function ${extracted.paramsAndBody}`;
+});
+const ts = `const __M = {\n${entries.join(",\n")}\n};\n__M;\n`;
+const js = esbuild.transformSync(ts, { loader: "ts", format: "cjs", target: "es2020" }).code;
+const table = new Function("appDocument", `${js}\nreturn __M;`)(() => window.document);
+
+/* ------------------------------------------------------------------ *
+ * 1. Drawing safety
+ * ------------------------------------------------------------------ */
+const strokes = [{ id: "s1" }, { id: "s2" }];
+let store = { strokes: [], webEdits: [], markdownBlocks: [] };
+let writes = 0;
+const refreshes = [];
+let toolMode = "select";
+
+const ctx = {
+  noteDrawDrawingReloadAt: new WeakMap(),
+  noteDrawDrawingSaveTimers: new WeakMap(),
+  isNoteDrawSurfaceElement: () => true,
+  getNoteDrawPlugin: () => ({
+    writeDrawings: async () => { writes += 1; },
+    api: {
+      readDrawings: async () => JSON.parse(JSON.stringify(store)),
+      refresh: async (file) => { refreshes.push(file?.path ?? "?"); }
+    }
+  }),
+  ...table
+};
+// The extracted methods call each other through `this`.
+for (const name of METHODS) ctx[name] = table[name].bind(ctx);
+
+const surface = window.document.createElement("div");
+surface.className = "mwv-embed";
+window.document.body.appendChild(surface);
+
+function controller(overrides = {}) {
+  return {
+    file: { path: "webviews/example.com__1234abcd.md", name: "example.com__1234abcd.md", extension: "md" },
+    previewEl: surface,
+    drawingsLoaded: true,
+    toolMode,
+    drawingData: { strokes: [], webEdits: [], markdownBlocks: [] },
+    ...overrides
+  };
+}
+
+const checks = [];
+const check = (name, ok) => checks.push([name, ok]);
+
+// -- emptiness predicate
+check(
+  "an empty draft is recognised as empty",
+  ctx.noteDrawDrawingIsEmpty({ strokes: [], webEdits: [], markdownBlocks: [] }) === true
+);
+check(
+  "any stroke, web edit or markdown block makes a draft non-empty",
+  ctx.noteDrawDrawingIsEmpty({ strokes: [{}] }) === false &&
+    ctx.noteDrawDrawingIsEmpty({ webEdits: [{}] }) === false &&
+    ctx.noteDrawDrawingIsEmpty({ markdownBlocks: [{}] }) === false
+);
+
+// -- a surface that has not loaded must not write at all
+store = { strokes, webEdits: [], markdownBlocks: [] };
+writes = 0;
+await ctx.writeNoteDrawDrawingSafely(controller({ drawingsLoaded: false }));
+check("a not-yet-loaded surface writes nothing", writes === 0);
+
+// -- loaded but emptied-out in memory while the file still has ink
+store = { strokes, webEdits: [], markdownBlocks: [] };
+writes = 0;
+refreshes.length = 0;
+await ctx.writeNoteDrawDrawingSafely(controller({ drawingsLoaded: true }));
+check("an empty draft never overwrites stored ink", writes === 0);
+check("the stored ink is re-applied instead", refreshes.length === 1);
+
+// -- refreshed twice in a row must not hammer NoteDraw (same controller)
+const throttled = controller({ drawingsLoaded: true });
+refreshes.length = 0;
+await ctx.writeNoteDrawDrawingSafely(throttled);
+await ctx.writeNoteDrawDrawingSafely(throttled);
+check("the refresh is throttled per surface", refreshes.length === 1);
+
+// -- a genuinely empty page may be written (user erased everything)
+store = { strokes: [], webEdits: [], markdownBlocks: [] };
+writes = 0;
+await ctx.writeNoteDrawDrawingSafely(controller({ drawingsLoaded: true }));
+check("an empty page still saves its emptiness", writes === 1);
+
+// -- real ink is written straight through
+store = { strokes: [], webEdits: [], markdownBlocks: [] };
+writes = 0;
+const ink = { strokes: [{ id: "a" }], webEdits: [], markdownBlocks: [] };
+await ctx.writeNoteDrawDrawingSafely(controller({ drawingData: ink }));
+check("real ink is written through", writes === 1);
+
+// -- the immediate flush must not hand an empty draft to NoteDraw's scheduler
+store = { strokes, webEdits: [], markdownBlocks: [] };
+writes = 0;
+let scheduled = 0;
+ctx.getNoteDrawPlugin = () => ({
+  writeDrawings: async () => { writes += 1; },
+  scheduleDrawingSave: () => { scheduled += 1; },
+  api: {
+    readDrawings: async () => JSON.parse(JSON.stringify(store)),
+    refresh: async () => {}
+  }
+});
+await ctx.flushNoteDrawDrawingNow(controller({ drawingsLoaded: false }));
+check("flush writes nothing for an unloaded surface", writes === 0 && scheduled === 0);
+await ctx.flushNoteDrawDrawingNow(controller({ drawingsLoaded: true }));
+check("flush writes nothing when the draft is empty but ink is stored", writes === 0 && scheduled === 0);
+await ctx.flushNoteDrawDrawingNow(controller({ drawingsLoaded: true, drawingData: { strokes: [{ id: "x" }], webEdits: [], markdownBlocks: [] } }));
+check("flush saves real ink to both paths", writes === 1 && scheduled === 1);
+ctx.getNoteDrawPlugin = () => ({
+  writeDrawings: async () => { writes += 1; },
+  api: {
+    readDrawings: async () => JSON.parse(JSON.stringify(store)),
+    refresh: async (file) => { refreshes.push(file?.path ?? "?"); }
+  }
+});
+
+// -- the queued autosave refuses before NoteDraw reports the surface loaded
+store = { strokes, webEdits: [], markdownBlocks: [] };
+writes = 0;
+ctx.queueNoteDrawDrawingSave(controller({ drawingsLoaded: false }));
+await new Promise((resolve) => setTimeout(resolve, 1000));
+check("the debounced autosave also refuses an unloaded surface", writes === 0);
+
+// -- page identity: the same page must always mean the same ink file
+const idMethods = ["noteDrawWebviewIdentity", "noteDrawWebviewLabel", "noteDrawWebviewFileForIdentity", "noteDrawWebviewFileForUrl", "noteDrawLegacyWebviewFileForUrl"];
+const idEntries = idMethods.map((name) => {
+  const extracted = extractMethod(source, name);
+  return `  ${name}: ${extracted.isAsync ? "async " : ""}function${extracted.paramsAndBody}`;
+});
+const idTs = `const __ID = {\n${idEntries.join(",\n")}\n};\n__ID;\n`;
+const idJs = esbuild.transformSync(idTs, { loader: "ts", format: "cjs", target: "es2020" }).code;
+const idTable = new Function(`${idJs}\nreturn __ID;`)();
+const idCtx = Object.assign({}, idTable);
+for (const name of idMethods) idCtx[name] = idTable[name].bind(idCtx);
+
+const a = idCtx.noteDrawWebviewFileForUrl("https://Example.com/post/");
+const b = idCtx.noteDrawWebviewFileForUrl("https://example.com/post#section-3");
+const c = idCtx.noteDrawWebviewFileForUrl("https://example.com/post");
+const d = idCtx.noteDrawWebviewFileForUrl("https://example.com/other");
+check("a page keeps one ink file across hash and trailing-slash changes", a.path === b.path && b.path === c.path);
+check("a different page still gets its own ink file", a.path !== d.path);
+check(
+  "the old raw-URL identity is still addressable for migration",
+  idCtx.noteDrawLegacyWebviewFileForUrl("https://example.com/post#x").path !== idCtx.noteDrawWebviewFileForUrl("https://example.com/post#x").path
+);
+
+// -- migration moves yesterday's ink onto today's identity
+let inkStore = {};
+const migrated = [];
+const migrateCtx = Object.assign({}, idCtx, {
+  noteDrawInkMigrationQueued: new WeakSet(),
+  noteDrawDrawingIsEmpty: ctx.noteDrawDrawingIsEmpty.bind(ctx),
+  settings: { homeUrl: "https://example.com/" },
+  getNoteDrawPlugin: () => ({
+    api: {
+      readDrawings: async (file) => JSON.parse(JSON.stringify(inkStore[file.path] ?? { strokes: [], webEdits: [], markdownBlocks: [] })),
+      writeDrawings: async (file, data) => { inkStore[file.path] = JSON.parse(JSON.stringify(data)); migrated.push(file.path); },
+      refresh: async () => {}
+    }
+  })
+});
+const qMethods = ["queueNoteDrawWebviewInkMigration", "noteDrawWebviewIdentity", "noteDrawWebviewLabel", "noteDrawWebviewFileForIdentity", "noteDrawWebviewFileForUrl", "noteDrawLegacyWebviewFileForUrl"];
+const qEntries = qMethods.map((name) => {
+  const extracted = extractMethod(source, name);
+  return `  ${name}: ${extracted.isAsync ? "async " : ""}function${extracted.paramsAndBody}`;
+});
+const qTs = `const __Q = {\n${qEntries.join(",\n")}\n};\n__Q;\n`;
+const qJs = esbuild.transformSync(qTs, { loader: "ts", format: "cjs", target: "es2020" }).code;
+const qTable = new Function(`${qJs}\nreturn __Q;`)();
+for (const name of qMethods) migrateCtx[name] = qTable[name].bind(migrateCtx);
+
+const legacyPath = migrateCtx.noteDrawLegacyWebviewFileForUrl("https://example.com/post#x").path;
+const canonicalPath = migrateCtx.noteDrawWebviewFileForUrl("https://example.com/post").path;
+inkStore[legacyPath] = { strokes: [{ id: "old" }], webEdits: [], markdownBlocks: [] };
+const migSurface = window.document.createElement("div");
+window.document.body.appendChild(migSurface);
+migrateCtx.queueNoteDrawWebviewInkMigration(migSurface, "https://example.com/post#x");
+await new Promise((resolve) => setTimeout(resolve, 30));
+check("ink stored under the old identity is carried over", migrated.includes(canonicalPath) && (inkStore[canonicalPath]?.strokes?.length ?? 0) === 1);
+check("the migrated ink points at the new file", inkStore[canonicalPath]?.sourcePath === canonicalPath);
+
+// A second pass must not fight over a file that already has ink.
+migrated.length = 0;
+inkStore[legacyPath] = { strokes: [], webEdits: [], markdownBlocks: [] };
+const migSurface2 = window.document.createElement("div");
+window.document.body.appendChild(migSurface2);
+migrateCtx.queueNoteDrawWebviewInkMigration(migSurface2, "https://example.com/post");
+await new Promise((resolve) => setTimeout(resolve, 30));
+check("a page whose ink is already on the new identity is left alone", migrated.length === 0);
+
+/* ------------------------------------------------------------------ *
+ * 2. Two-finger pan
+ * ------------------------------------------------------------------ */
+// A note body that scrolls, an active NoteDraw shell, and its canvas.
+const scroller = window.document.createElement("div");
+scroller.className = "markdown-preview-view";
+scroller.style.overflowY = "auto";
+Object.defineProperty(scroller, "scrollHeight", { value: 2000, configurable: true });
+Object.defineProperty(scroller, "clientHeight", { value: 600, configurable: true });
+scroller.scrollTop = 0;
+const embed = window.document.createElement("div");
+embed.className = "mwv-embed is-drawing-active notedraw-shell";
+const canvas = window.document.createElement("canvas");
+canvas.className = "notedraw-canvas";
+// The bridge keys off the canvas actually swallowing touches, so the fixture has
+// to declare that: `pointer-events: none` means the page still scrolls natively.
+canvas.style.pointerEvents = "auto";
+embed.appendChild(canvas);
+scroller.appendChild(embed);
+window.document.body.appendChild(scroller);
+
+const listeners = new Map();
+const scrollCtx = {
+  register: () => {},
+  registerDomEvent: (target, type, handler) => {
+    const list = listeners.get(type) ?? [];
+    list.push(handler);
+    listeners.set(type, list);
+  },
+  findWebviewNoteDrawController: () => ({ toolMode }),
+  ...table,
+  findScrollableAncestor: table.findScrollableAncestor.bind({
+    registerDomEvent: () => {},
+    ...table
+  })
+};
+for (const name of ["installNoteDrawTwoFingerScroll", "findScrollableAncestor"]) {
+  scrollCtx[name] = table[name].bind(scrollCtx);
+}
+scrollCtx.installNoteDrawTwoFingerScroll();
+
+function touch(type, ys, target = canvas) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "touches", {
+    value: ys.map((clientY) => ({ clientY, clientX: 10 }))
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+function fire(type, ys, target = canvas) {
+  for (const handler of listeners.get(type) ?? []) handler(touch(type, ys, target));
+}
+
+// Single finger does nothing (it is a drawing/select gesture).
+toolMode = "select";
+scroller.scrollTop = 0;
+fire("touchstart", [100]);
+fire("touchmove", [60]);
+check("one finger never pans the page", scroller.scrollTop === 0);
+
+// Two fingers pan, and the gesture is claimed from the canvas.
+toolMode = "select";
+scroller.scrollTop = 200;
+fire("touchstart", [200, 300]);
+const moveEvent = touch("touchmove", [170, 270]);
+let defaultPrevented = false;
+for (const handler of listeners.get("touchmove") ?? []) {
+  defaultPrevented = false;
+  handler(Object.assign(moveEvent, { preventDefault: () => { defaultPrevented = true; } }));
+}
+check("two fingers scroll the note", scroller.scrollTop === 230);
+check("the pan is claimed before the drawing canvas sees it", defaultPrevented === true);
+fire("touchend", []);
+
+// A second finger is never scrubbed out of a drawing gesture.
+toolMode = "draw";
+scroller.scrollTop = 200;
+fire("touchstart", [200, 300]);
+fire("touchmove", [150, 250]);
+check("drawing mode keeps the two-finger gesture for ink", scroller.scrollTop === 200);
+fire("touchend", []);
+
+// A surface without the wand (canvas ignores pointers) scrolls natively: the
+// bridge must stay out of the way so the browser's own momentum keeps working.
+toolMode = "select";
+canvas.style.pointerEvents = "none";
+scroller.scrollTop = 200;
+fire("touchstart", [200, 300]);
+fire("touchmove", [150, 250]);
+check("an inactive surface keeps native scrolling", scroller.scrollTop === 200);
+
+// Taking over the gesture must cancel the stroke NoteDraw had begun and mute
+// the canvas, otherwise the pan leaves a stray mark behind.
+canvas.style.pointerEvents = "auto";
+toolMode = "select";
+const cancelled = [];
+const pointerTarget = window.document.createElement("div");
+embed.appendChild(pointerTarget);
+pointerTarget.addEventListener("pointercancel", (event) => cancelled.push(event.pointerId));
+for (const handler of listeners.get("pointerdown") ?? []) {
+  handler({ pointerType: "touch", pointerId: 7, target: pointerTarget });
+}
+scroller.scrollTop = 200;
+fire("touchstart", [200, 300]);
+fire("touchmove", [180, 280]);
+check("a pan cancels the drawing gesture already in flight", cancelled.includes(7));
+check("the canvas is muted while panning", canvas.style.pointerEvents === "none");
+// touchend still reports the fingers that remain: none.
+for (const handler of listeners.get("touchend") ?? []) {
+  const event = new window.Event("touchend", { bubbles: true });
+  Object.defineProperty(event, "touches", { value: [] });
+  handler(event);
+}
+check("the canvas is restored when the pan ends", canvas.style.pointerEvents === "");
+
+/* ------------------------------------------------------------------ *
+ * 3. Markdown export keeps the page's shape  (存 MD 原样)
+ * ------------------------------------------------------------------ */
+const build = await esbuild.build({
+  entryPoints: ["src/reader.ts"],
+  bundle: true,
+  format: "cjs",
+  platform: "browser",
+  target: "es2019",
+  write: false,
+  logLevel: "warning"
+});
+const readerModule = new Function("module", "exports", "require", build.outputFiles[0].text);
+const readerExports = { exports: {} };
+readerModule(readerExports, readerExports.exports, () => ({}));
+const { htmlToMarkdown } = readerExports.exports;
+
+const helpers = {
+  hostName: (url) => {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return String(url); }
+  },
+  escapeMarkdownText: (value) => value.replace(/\r/g, "").replace(/\u00a0/g, " ").trim(),
+  htmlToText: (value) => value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(),
+  htmlToMarkdown
+};
+const exportSource = esbuild.transformSync(
+  [extractTopLevelFunction(source, "webNoteMarkdown")].join("\n"),
+  { loader: "ts", format: "cjs", target: "es2020" }
+).code;
+const exportFn = new Function(
+  "hostName", "escapeMarkdownText", "htmlToText", "htmlToMarkdown",
+  `${exportSource}\nreturn webNoteMarkdown;`
+)(helpers.hostName, helpers.escapeMarkdownText, helpers.htmlToText, htmlToMarkdown);
+
+const ORIGINAL = [
+  "## 一、章",
+  "",
+  "普通段落，含 **加粗** 与 [链接](https://example.com/a)。",
+  "",
+  "| 命令 | 作用 |",
+  "| --- | --- |",
+  "| `ls` | 列目录 |",
+  "",
+  "- [ ] 待办",
+  "",
+  "```sh",
+  "ls -lh",
+  "```",
+  "",
+  "![图](https://example.com/a.png)"
+].join("\n");
+
+const untouched = exportFn({
+  id: "n1",
+  url: "https://example.com/post",
+  title: "示例",
+  sourceTitle: "示例",
+  noteHtml: "<h2>旧快照</h2>",
+  noteText: "旧快照",
+  noteMarkdown: ORIGINAL,
+  doodleSvg: "",
+  pageHtml: "",
+  pageText: "",
+  pageEdits: [],
+  markdownPath: "",
+  updatedAt: Date.parse("2026-10-26T00:00:00Z"),
+  createdAt: 0
+});
+check("an untouched note exports its Markdown verbatim", untouched.includes(ORIGINAL));
+
+// The edited path converts the DOM; the page shape has to survive.
+const rendered = htmlToMarkdown(
+  `<h2>一、章</h2><p>普通段落，含 <strong>加粗</strong> 与 <a href="https://example.com/a">链接</a>。</p>` +
+    `<table><thead><tr><th>命令</th><th>作用</th></tr></thead><tbody><tr><td><code>ls</code></td><td>列目录</td></tr></tbody></table>` +
+    `<ul><li><input type="checkbox"> 待办</li></ul>` +
+    `<pre><code class="language-sh">ls -lh</code></pre>` +
+    `<p><img src="https://example.com/a.png" alt="图"></p>`,
+  "https://example.com/post"
+);
+const edited = exportFn({
+  id: "n2",
+  url: "https://example.com/post",
+  title: "示例",
+  sourceTitle: "示例",
+  noteHtml: "",
+  noteText: "",
+  noteMarkdown: "",
+  doodleSvg: "",
+  pageHtml: "",
+  pageText: "",
+  pageEdits: [],
+  markdownPath: "",
+  updatedAt: Date.parse("2026-10-26T00:00:00Z"),
+  createdAt: 0
+});
+// Feed the converted HTML through noteHtml to exercise the edited path.
+const editedExport = exportFn({
+  id: "n3",
+  url: "https://example.com/post",
+  title: "示例",
+  sourceTitle: "示例",
+  noteHtml: `<h2>一、章</h2><p>普通段落，含 <strong>加粗</strong> 与 <a href="https://example.com/a">链接</a>。</p>` +
+    `<table><thead><tr><th>命令</th><th>作用</th></tr></thead><tbody><tr><td><code>ls</code></td><td>列目录</td></tr></tbody></table>` +
+    `<ul><li><input type="checkbox"> 待办</li></ul>` +
+    `<pre><code class="language-sh">ls -lh</code></pre>` +
+    `<p><img src="https://example.com/a.png" alt="图"></p>`,
+  noteText: "",
+  noteMarkdown: "",
+  doodleSvg: "",
+  pageHtml: "",
+  pageText: "",
+  pageEdits: [],
+  markdownPath: "",
+  updatedAt: Date.parse("2026-10-26T00:00:00Z"),
+  createdAt: 0
+});
+for (const [label, needle] of [
+  ["headings", "## 一、章"],
+  ["bold", "**加粗**"],
+  ["links", "[链接](https://example.com/a)"],
+  ["GFM tables", "| 命令 | 作用 |"],
+  ["task lists", "- [ ] 待办"],
+  ["fenced code", "```sh"],
+  ["images", "![图](https://example.com/a.png)"]
+]) {
+  check(`an edited note keeps ${label} when saved`, editedExport.includes(needle));
+}
+check("edited export never falls back to flattened text", !editedExport.includes("<p>") && editedExport.includes("## 一、章"));
+void edited;
+void rendered;
+
+/* ------------------------------------------------------------------ */
+const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"} ${name}`);
+if (failed.length) {
+  console.error(`NoteWeb safety verification failed: ${failed.join(", ")}`);
+  process.exitCode = 1;
+} else {
+  console.log(`NoteWeb safety verification passed (${checks.length}/${checks.length}).`);
+}

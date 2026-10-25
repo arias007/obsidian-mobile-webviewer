@@ -397,6 +397,11 @@ function turndown(): TurndownService {
 function collapseMarkdown(markdown: string): string {
   return markdown
     .replace(/\u00a0/g, " ")
+    // The GFM task-list rule prepends its marker to whatever the <li> held, and
+    // Obsidian's rendered checklist already starts with a space — so a done
+    // item came back as "- [ ]  待办" (two spaces). One space is what every
+    // editor writes, and it keeps the saved note identical to the page.
+    .replace(/^(\s*[-*+] \[[ xX]\])\s+/gm, "$1 ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/^\s+/, "")
