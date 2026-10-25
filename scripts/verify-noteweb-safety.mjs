@@ -600,6 +600,8 @@ const fakeVault = {
 
 const exportMethods = ["exportWebNoteMarkdown", "ensureVaultFolder", "findWebNoteByUrl", "noteDrawWebviewIdentity", "exportEmbedWebNote",
   "readWebNoteInk", "writeWebNoteInk", "rebaseLegacyNoteDrawStroke",
+  "normalizeInkText", "inkTextMatches", "webPageTextBlocks", "markdownLineBlocks", "markdownLineKind",
+  "alignWebBlocksToMarkdown", "anchorInkToMarkdownLines",
   "noteDrawDrawingIsEmpty", "noteDrawWebviewFileForUrl", "noteDrawWebviewFileForIdentity", "noteDrawWebviewLabel",
   "noteDrawWebviewIdentity", "getNoteDrawPlugin"];
 const exportEntries = exportMethods.map((name) => {
@@ -891,6 +893,120 @@ const dupLeaves = [];
 }
 for (const leaf of dupLeaves) leaf.remove();
 
+/* ------------------------------------------------------------------ *
+ * 6. Carried ink follows the text, not the page's pixel rows
+ * ------------------------------------------------------------------ */
+const writtenMarkdown = [
+  "---",
+  "source: https://inked.example/article/",
+  "saved: 2026-10-26T00:00:00.000Z",
+  "type: mobile-webviewer-note",
+  "---",
+  "",
+  "# 带画的页面",
+  "",
+  "https://inked.example/article/",
+  "",
+  "## 一、摩尔斯电码是什么",
+  "",
+  "摩尔斯电码是一种时通时断的信号代码，通过不同的排列顺序表达字母和数字。",
+  "",
+  "- 点 短信号",
+  "- 划 长信号",
+  "",
+  "## 二、常见对照表",
+  "",
+  "| 字符 | 编码 |",
+  "| --- | --- |",
+  "| A | .- |",
+  "",
+  "结尾一段用来测试对齐不会被漏掉的块拖偏。"
+].join("\n");
+const writtenLines = writtenMarkdown.split("\n");
+
+const mdBlocks = exportCtx.markdownLineBlocks(writtenMarkdown);
+check("the Markdown parser skips frontmatter and keeps real line numbers",
+  mdBlocks[0].start === 6 && writtenLines[6] === "# 带画的页面");
+check("a heading is its own block", mdBlocks[0].end === 6);
+check("list items and paragraphs are separate blocks",
+  mdBlocks.some((block) => block.text.includes("点 短信号")) &&
+  mdBlocks.some((block) => block.text.includes("摩尔斯电码是一种时通时断")));
+check("a table stays one block", mdBlocks.some((block) => block.start === 19 && block.end === 21));
+check("the last paragraph ends the file",
+  mdBlocks[mdBlocks.length - 1].text.includes("结尾一段"));
+
+// The page surface: same words, different layout — a nav bar the converter
+// dropped, a bigger title, different spacing. Only the fractions differ.
+const pageBlocks = [
+  { top: 0.002, height: 0.010, text: "首页 分类 标签 关于" },
+  { top: 0.060, height: 0.030, text: "带画的页面" },
+  { top: 0.120, height: 0.014, text: "一、摩尔斯电码是什么" },
+  { top: 0.150, height: 0.050, text: "摩尔斯电码是一种时通时断的信号代码，通过不同的排列顺序表达字母和数字。" },
+  { top: 0.230, height: 0.012, text: "点 短信号" },
+  { top: 0.250, height: 0.012, text: "划 长信号" },
+  { top: 0.300, height: 0.014, text: "二、常见对照表" },
+  { top: 0.330, height: 0.030, text: "A .-" },
+  { top: 0.420, height: 0.020, text: "结尾一段用来测试对齐不会被漏掉的块拖偏。" }
+];
+const mdIndexOf = (needle) => mdBlocks.findIndex((block) => block.text.includes(needle));
+const alignment = exportCtx.alignWebBlocksToMarkdown(pageBlocks, mdBlocks);
+check("a page block with no Markdown counterpart is skipped, not shifted",
+  !alignment.has(0) && alignment.get(1) === mdIndexOf("带画的页面"));
+check("body text aligns to its own Markdown block",
+  alignment.get(3) === mdIndexOf("摩尔斯电码是一种时通时断"));
+check("list items align to their own lines",
+  alignment.get(4) === mdIndexOf("点 短信号") && alignment.get(5) === mdIndexOf("划 长信号"));
+check("a dropped block never drags the following matches forward",
+  alignment.get(8) === mdIndexOf("结尾一段"));
+
+const inkFor = (y) => ({
+  elementId: `el-${y}`,
+  layout: {
+    v: "1",
+    id: `el-${y}`,
+    basis: "note-element-frame-v1",
+    primary: "topLeft",
+    corners: {
+      topLeft: { x: 0.2, y, path: pageFile.path, line: null, lineConfidence: null },
+      topRight: { x: 0.5, y, path: pageFile.path, line: null, lineConfidence: null },
+      bottomRight: { x: 0.5, y: y + 0.006, path: pageFile.path, line: null, lineConfidence: null },
+      bottomLeft: { x: 0.2, y: y + 0.006, path: pageFile.path, line: null, lineConfidence: null }
+    },
+    box: { x: 0.2, y, width: 0.3, height: 0.006 },
+    sourceFrame: { surfaceWidth: 349, contentLeft: 0, contentWidth: 349, viewportHeight: 638, documentHeight: 1000 }
+  },
+  points: [{
+    x: 0.2, y,
+    anchor: { v: 1, basis: "note-content-v1", x: 0.2, y, path: pageFile.path, line: null, lineConfidence: null }
+  }]
+});
+const pageInk = {
+  version: 2,
+  sourcePath: pageFile.path,
+  strokes: [inkFor(0.170), inkFor(0.320), inkFor(0.750)],
+  markdownBlocks: [],
+  elementGroups: [],
+  webEdits: []
+};
+const anchoredCount = exportCtx.anchorInkToMarkdownLines(pageInk, writtenMarkdown, pageBlocks);
+const [inParagraph, inTable, orphan] = pageInk.strokes;
+const paragraphBlock = mdBlocks[mdIndexOf("摩尔斯电码是一种时通时断")];
+check("ink drawn beside a paragraph is pinned to that paragraph's lines",
+  inParagraph.layout.corners.topLeft.line >= paragraphBlock.start &&
+  inParagraph.layout.corners.topLeft.line <= paragraphBlock.end + 1);
+check("the position inside the block is preserved, not snapped to its top",
+  inParagraph.layout.corners.topLeft.line > paragraphBlock.start + 0.3);
+check("every corner and every point carries the anchor",
+  ["topLeft", "topRight", "bottomRight", "bottomLeft"].every((name) =>
+    inParagraph.layout.corners[name].line === inParagraph.layout.corners.topLeft.line &&
+    inParagraph.layout.corners[name].lineConfidence === 0.95) &&
+  inParagraph.points[0].anchor.line === inParagraph.layout.corners.topLeft.line);
+const tableBlock = mdBlocks[mdIndexOf("| 字符 | 编码 |")];
+check("ink beside the table lands on the table's lines",
+  inTable.layout.corners.topLeft.line >= tableBlock.start &&
+  inTable.layout.corners.topLeft.line <= tableBlock.end + 1);
+check("ink nowhere near any text keeps its pixel fallback", orphan.layout.corners.topLeft.line === null);
+check("only the strokes that matched are reported as anchored", anchoredCount === 2);
 
 /* ------------------------------------------------------------------ */
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);

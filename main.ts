@@ -7299,6 +7299,18 @@ interface NoteDrawDrawingDataLike {
   [key: string]: unknown;
 }
 
+interface InkTextBlock {
+  top: number;
+  height: number;
+  text: string;
+}
+
+interface InkMarkdownBlock {
+  start: number;
+  end: number;
+  text: string;
+}
+
 interface NoteDrawButtonElement extends HTMLElement {
   _noteDrawController?: NoteDrawControllerLike;
   _mwvNoteDrawBoundController?: NoteDrawControllerLike;
@@ -19279,12 +19291,304 @@ export default class MobileWebviewerPlugin extends Plugin {
   }
 
   /**
+   * Text as it can be compared across formats: Markdown markers and punctuation
+   * away, case folded, whitespace collapsed. The page DOM and the Markdown file
+   * describe the same words, only the decoration differs.
+   */
+  normalizeInkText(value: string | null | undefined): string {
+    return String(value ?? "")
+      .toLowerCase()
+      .replace(/[\s\u00a0]+/g, "")
+      .replace(/[#>\u002a_\u0060~|\-–—+]/g, "")
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/[()[\]{}\u0022\u0027“”‘’·、，。；：！？,.;:!?]/g, "")
+      .trim();
+  }
+
+  /**
+   * Whether two blocks carry the same words. Page blocks and Markdown blocks
+   * are cut at different places (a `<li>` may become two paragraphs, a caption
+   * may join its figure), so equality alone is too strict — a shared prefix
+   * covering most of the shorter text is the same sentence.
+   */
+  inkTextMatches(left: string, right: string): boolean {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    const short = left.length <= right.length ? left : right;
+    const long = left.length <= right.length ? right : left;
+    if (short.length >= 14 && long.includes(short)) return true;
+    const shared = Math.min(left.length, right.length, 60);
+    if (shared < 12) return false;
+    let prefix = 0;
+    while (prefix < shared && left[prefix] === right[prefix]) prefix += 1;
+    return prefix >= Math.max(12, Math.min(short.length, 60) * 0.72);
+  }
+
+  /**
+   * Where each visible text block sits on the page surface, as document
+   * fractions — the same space NoteDraw stores its ink in, so an ink's own
+   * fractions can be compared to these directly.
+   */
+  webPageTextBlocks(embed?: HTMLElement, documentHeightHint = 0): InkTextBlock[] {
+    if (!embed?.isConnected) return [];
+    const root = embed.querySelector<HTMLElement>(".mwv-note-content") ??
+      embed.querySelector<HTMLElement>(".mwv-reader-panel .mwv-note-body") ??
+      embed.querySelector<HTMLElement>(".mwv-reader-panel") ??
+      embed.querySelector<HTMLElement>(".mwv-note-browser-document");
+    if (!root) return [];
+    let scroller: HTMLElement = root;
+    for (let node: HTMLElement | null = root; node; node = node.parentElement) {
+      if (node.clientHeight > 0 && node.scrollHeight > node.clientHeight + 8) {
+        scroller = node;
+        break;
+      }
+    }
+    const frameRect = scroller.getBoundingClientRect();
+    // Ink was captured against one document height; a later render may measure
+    // a slightly different one (font scale, zoom). Prefer the ink's own number
+    // so both sides are divided by the same denominator.
+    const measured = Math.max(scroller.scrollHeight, scroller.clientHeight, root.offsetHeight, 1);
+    const denominator = documentHeightHint > 0 && documentHeightHint / measured >= 0.75 && documentHeightHint / measured <= 1.34
+      ? documentHeightHint
+      : measured;
+    const selector = "h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th,figcaption,dt,dd";
+    const blocks: InkTextBlock[] = [];
+    for (const node of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+      // Only the innermost block counts: an `<li>` that wraps a `<p>` would
+      // otherwise claim the same words twice and shift the alignment.
+      if (node.querySelector(selector)) continue;
+      if (node.closest(".mwv-doodle-layer, .notedraw-canvas, .mwv-notedraw-anchor")) continue;
+      const text = node.innerText || node.textContent || "";
+      // Blocks are kept even when they carry almost no comparable text (a
+      // morse-code table cell is literally ".-"): the alignment interpolates
+      // those between their matched neighbours instead of dropping the region.
+      if (!text.trim()) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.height <= 0.5) continue;
+      blocks.push({
+        top: Math.min(1, Math.max(0, (rect.top - frameRect.top + scroller.scrollTop) / denominator)),
+        height: Math.max(1, rect.height) / denominator,
+        text
+      });
+    }
+    return blocks;
+  }
+
+  /**
+   * The blocks of the Markdown file that is about to be written, with their
+   * 0-based source line ranges — exactly what NoteDraw's line anchors address.
+   * Frontmatter is skipped so a block's line is its real line in the file.
+   */
+  markdownLineBlocks(markdown: string): InkMarkdownBlock[] {
+    const lines = String(markdown ?? "").split("\n");
+    const blocks: InkMarkdownBlock[] = [];
+    let index = 0;
+    if (lines[0]?.trim() === "---") {
+      index = 1;
+      while (index < lines.length && lines[index].trim() !== "---") index += 1;
+      index += 1;
+    }
+    let fence: { start: number; body: string[] } | null = null;
+    let current: { start: number; body: string[]; kind: string } | null = null;
+    const flush = () => {
+      if (!current) return;
+      const text = current.body.join(" ");
+      if (this.normalizeInkText(text).length >= 2) {
+        blocks.push({ start: current.start, end: current.start + current.body.length - 1, text });
+      }
+      current = null;
+    };
+    for (; index < lines.length; index += 1) {
+      const line = lines[index];
+      const trimmed = line.trim();
+      if (fence) {
+        fence.body.push(trimmed);
+        if (/^\u0060{3}|^~~~/.test(trimmed)) {
+          blocks.push({ start: fence.start, end: index, text: fence.body.join(" ") });
+          fence = null;
+        }
+        continue;
+      }
+      if (/^\u0060{3}|^~~~/.test(trimmed)) {
+        flush();
+        fence = { start: index, body: [trimmed] };
+        continue;
+      }
+      if (!trimmed) {
+        flush();
+        continue;
+      }
+      const kind = this.markdownLineKind(trimmed);
+      if (kind === "heading") {
+        // A heading is its own block: its own line, never merged with the
+        // paragraph beneath it.
+        flush();
+        blocks.push({ start: index, end: index, text: trimmed });
+        continue;
+      }
+      if (!current || current.kind !== kind) {
+        flush();
+        current = { start: index, body: [], kind };
+      }
+      current.body.push(trimmed);
+      // One list item per block, matching how the page DOM hands out `<li>`s.
+      if (kind === "list") flush();
+    }
+    flush();
+    if (fence) blocks.push({ start: fence.start, end: lines.length - 1, text: fence.body.join(" ") });
+    return blocks;
+  }
+
+  /** What kind of Markdown block a line starts, for grouping purposes. */
+  markdownLineKind(trimmed: string): string {
+    if (/^#{1,6}\s+/.test(trimmed)) return "heading";
+    if (/^([-*+]|\d+[.)])\s+/.test(trimmed)) return "list";
+    if (trimmed.startsWith("|")) return "table";
+    if (/^>/.test(trimmed)) return "quote";
+    return "para";
+  }
+
+  /**
+   * Match page blocks to Markdown blocks in reading order.
+   *
+   * Both lists are already in document order, so this only has to walk them
+   * forward: a page block that has no counterpart (a nav bar, a caption the
+   * converter dropped, an ad) is skipped *without* dragging the pointer along,
+   * which is what keeps one missing block from shifting every stroke below it.
+   */
+  alignWebBlocksToMarkdown(pageBlocks: InkTextBlock[], markdownBlocks: InkMarkdownBlock[]): Map<number, number> {
+    const map = new Map<number, number>();
+    if (!pageBlocks.length || !markdownBlocks.length) return map;
+    const normalized = markdownBlocks.map((block) => this.normalizeInkText(block.text));
+    let cursor = 0;
+    for (let pageIndex = 0; pageIndex < pageBlocks.length; pageIndex += 1) {
+      const target = this.normalizeInkText(pageBlocks[pageIndex].text);
+      if (target.length < 2) continue;
+      let found = -1;
+      const limit = Math.min(markdownBlocks.length, cursor + 80);
+      for (let probe = cursor; probe < limit; probe += 1) {
+        if (this.inkTextMatches(target, normalized[probe])) { found = probe; break; }
+      }
+      if (found < 0) {
+        // Repeated text (headers, "阅读更多", a quote echoed twice) is allowed to
+        // match slightly behind the cursor, but never to jump the queue.
+        const back = Math.max(0, cursor - 4);
+        for (let probe = back; probe < limit; probe += 1) {
+          if (this.inkTextMatches(target, normalized[probe])) { found = probe; break; }
+        }
+      }
+      if (found < 0) continue;
+      map.set(pageIndex, found);
+      cursor = Math.max(cursor, found + 1);
+    }
+    // Second pass: blocks the converter dropped, merged or turned into symbols
+    // (an image, a caption, a `.-` table cell) have no text to match on. They
+    // still sit between two matched blocks, so place them proportionally there
+    // rather than letting their ink fall back to a meaningless pixel row.
+    const matched = Array.from(map.keys()).sort((a, b) => a - b);
+    if (matched.length >= 2) {
+      for (let left = 0; left < matched.length - 1; left += 1) {
+        const fromPage = matched[left];
+        const toPage = matched[left + 1];
+        if (toPage - fromPage <= 1) continue;
+        const fromMarkdown = map.get(fromPage) as number;
+        const toMarkdown = map.get(toPage) as number;
+        if (toMarkdown <= fromMarkdown) continue;
+        for (let pageIndex = fromPage + 1; pageIndex < toPage; pageIndex += 1) {
+          if (map.has(pageIndex)) continue;
+          const ratio = (pageIndex - fromPage) / (toPage - fromPage);
+          const guess = fromMarkdown + Math.round(ratio * (toMarkdown - fromMarkdown));
+          map.set(pageIndex, Math.min(toMarkdown, Math.max(fromMarkdown, guess)));
+        }
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Re-anchor carried ink to the text it belongs to.
+   *
+   * A web page and the note converted from it do not lay text out at the same
+   * pixel rows: the note has a title and frontmatter above the body, different
+   * margins, no browser chrome, and it reflows when the width changes. Keeping
+   * only the page's pixel row is why a stroke drawn beside one paragraph would
+   * land in the middle of unrelated text — visually "detached" from the page.
+   *
+   * So each stroke is pinned to the Markdown *line* of the block it was drawn
+   * beside, with the fractional position inside that block preserved. NoteDraw
+   * then projects that line through its own rendered anchors, which is the same
+   * mechanism that keeps ink on a paragraph when a note is re-laid out.
+   */
+  anchorInkToMarkdownLines(data: NoteDrawDrawingDataLike, markdown: string, pageBlocks: InkTextBlock[]): number {
+    const strokes = Array.isArray(data?.strokes) ? data.strokes : [];
+    if (!strokes.length || !pageBlocks.length) return 0;
+    const markdownBlocks = this.markdownLineBlocks(markdown);
+    if (!markdownBlocks.length) return 0;
+    const alignment = this.alignWebBlocksToMarkdown(pageBlocks, markdownBlocks);
+    if (!alignment.size) return 0;
+    let anchored = 0;
+    for (const item of strokes) {
+      if (!item || typeof item !== "object") continue;
+      const stroke = item as Record<string, unknown>;
+      const layout = stroke.layout as Record<string, unknown> | undefined;
+      const corners = layout?.corners as Record<string, Record<string, unknown>> | undefined;
+      if (!corners?.topLeft) continue;
+      const ys = Object.values(corners)
+        .map((corner) => Number(corner?.y))
+        .filter((value) => Number.isFinite(value));
+      if (!ys.length) continue;
+      const inkTop = Math.min(...ys);
+      const inkBottom = Math.max(...ys);
+      const inkCenter = (inkTop + inkBottom) / 2;
+      // Prefer the block the ink actually sits in; a block it merely touches is
+      // only used when nothing contains it.
+      let pageIndex = -1;
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < pageBlocks.length; index += 1) {
+        const block = pageBlocks[index];
+        const inside = inkCenter >= block.top && inkCenter <= block.top + block.height;
+        const distance = inside
+          ? 0
+          : Math.min(Math.abs(inkCenter - block.top), Math.abs(inkCenter - (block.top + block.height)));
+        if (distance > (inside ? 0.0001 : 0.18)) continue;
+        const score = distance + block.height * 0.001;
+        if (score < bestScore) { bestScore = score; pageIndex = index; }
+      }
+      if (pageIndex < 0) continue;
+      const markdownIndex = alignment.get(pageIndex);
+      if (markdownIndex === undefined) continue;
+      const pageBlock = pageBlocks[pageIndex];
+      const markdownBlock = markdownBlocks[markdownIndex];
+      const ratio = Math.min(0.999, Math.max(0, (inkCenter - pageBlock.top) / Math.max(pageBlock.height, 1e-6)));
+      const line = markdownBlock.start + ratio * Math.max(1, markdownBlock.end - markdownBlock.start + 1);
+      for (const corner of Object.values(corners)) {
+        if (!corner || typeof corner !== "object") continue;
+        corner.line = line;
+        // NoteDraw only trusts a line anchor at 0.75 or above; this one comes
+        // from matched text in the same document, so it is as good as it gets.
+        corner.lineConfidence = 0.95;
+      }
+      if (Array.isArray(stroke.points)) {
+        for (const point of stroke.points) {
+          if (!point || typeof point !== "object") continue;
+          const anchor = (point as Record<string, unknown>).anchor as Record<string, unknown> | undefined;
+          if (!anchor || typeof anchor !== "object") continue;
+          anchor.line = line;
+          anchor.lineConfidence = 0.95;
+        }
+      }
+      anchored += 1;
+    }
+    return anchored;
+  }
+
+  /**
    * Put that ink on the saved note. Every anchor has to be re-pointed at the
    * note's path first: NoteDraw ignores records that still claim another file,
    * so an unre-based copy would look like it arrived and then render as
    * nothing. The readback is the proof — same stroke count, no foreign anchors.
    */
-  async writeWebNoteInk(data: NoteDrawDrawingDataLike, markdownPath: string): Promise<number> {
+  async writeWebNoteInk(data: NoteDrawDrawingDataLike, markdownPath: string, markdown?: string, embed?: HTMLElement): Promise<number> {
     const api = this.getNoteDrawPlugin()?.api;
     if (!markdownPath || typeof api?.readDrawings !== "function" || typeof api.writeDrawings !== "function") return 0;
     const counts = this.noteDrawDataCounts(data);
@@ -19302,6 +19606,23 @@ export default class MobileWebviewerPlugin extends Plugin {
     carried.sourcePath = markdownPath;
     carried.updatedAt = new Date().toISOString();
     carried.strokes = (carried.strokes ?? []).map((item) => this.rebaseLegacyNoteDrawStroke(item, markdownPath));
+    // Pin the ink to the text it was drawn beside before it is written, so the
+    // note renders it where the page showed it instead of at a pixel row that
+    // means something else in a different layout.
+    if (typeof markdown === "string" && markdown) {
+      try {
+        const first = carried.strokes?.[0] as Record<string, unknown> | undefined;
+        const frame = (first?.layout as Record<string, unknown> | undefined)?.sourceFrame as Record<string, unknown> | undefined;
+        const hint = Number(frame?.documentHeight) || 0;
+        const pageBlocks = this.webPageTextBlocks(embed, hint);
+        const anchored = this.anchorInkToMarkdownLines(carried, markdown, pageBlocks);
+        if (anchored > 0) {
+          console.info(`[mobile-webviewer] anchored ${anchored}/${carried.strokes.length} strokes to Markdown lines`);
+        }
+      } catch (error) {
+        console.warn("[mobile-webviewer] NoteDraw ink line anchoring skipped", error);
+      }
+    }
     await api.writeDrawings(target, carried);
     const verified = await api.readDrawings(target).catch(() => null);
     const verifiedCounts = this.noteDrawDataCounts(verified);
@@ -19333,7 +19654,7 @@ export default class MobileWebviewerPlugin extends Plugin {
     else await this.app.vault.create(path, data);
     let carried = 0;
     if (ink) {
-      carried = await this.writeWebNoteInk(ink, path).catch((error) => {
+      carried = await this.writeWebNoteInk(ink, path, data, embed).catch((error) => {
         console.warn("[mobile-webviewer] NoteDraw ink transfer skipped", error);
         return 0;
       });
