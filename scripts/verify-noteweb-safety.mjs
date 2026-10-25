@@ -601,7 +601,8 @@ const fakeVault = {
 const exportMethods = ["exportWebNoteMarkdown", "ensureVaultFolder", "findWebNoteByUrl", "noteDrawWebviewIdentity", "exportEmbedWebNote",
   "readWebNoteInk", "writeWebNoteInk", "rebaseLegacyNoteDrawStroke",
   "normalizeInkText", "inkTextMatches", "webPageTextBlocks", "markdownLineBlocks", "markdownLineKind",
-  "alignWebBlocksToMarkdown", "anchorInkToMarkdownLines",
+  "alignWebBlocksToMarkdown", "anchorInkToMarkdownLines", "applyInkLineAnchors",
+  "markdownRenderMetrics", "inkLineToFraction",
   "noteDrawDrawingIsEmpty", "noteDrawWebviewFileForUrl", "noteDrawWebviewFileForIdentity", "noteDrawWebviewLabel",
   "noteDrawWebviewIdentity", "getNoteDrawPlugin"];
 const exportEntries = exportMethods.map((name) => {
@@ -998,9 +999,11 @@ check("the position inside the block is preserved, not snapped to its top",
   inParagraph.layout.corners.topLeft.line > paragraphBlock.start + 0.3);
 check("every corner and every point carries the anchor",
   ["topLeft", "topRight", "bottomRight", "bottomLeft"].every((name) =>
-    inParagraph.layout.corners[name].line === inParagraph.layout.corners.topLeft.line &&
+    Number.isFinite(inParagraph.layout.corners[name].line) &&
     inParagraph.layout.corners[name].lineConfidence === 0.95) &&
-  inParagraph.points[0].anchor.line === inParagraph.layout.corners.topLeft.line);
+  Number.isFinite(inParagraph.points[0].anchor.line));
+check("a stroke keeps its height: the bottom edge is not dragged onto the top line",
+  inParagraph.layout.corners.bottomRight.line >= inParagraph.layout.corners.topLeft.line);
 const tableBlock = mdBlocks[mdIndexOf("| 字符 | 编码 |")];
 check("ink beside the table lands on the table's lines",
   inTable.layout.corners.topLeft.line >= tableBlock.start &&
@@ -1068,6 +1071,61 @@ check("each shared row gets its own line slice, not the whole range",
   mapped.every((line) => Number.isFinite(line)) &&
   mapped.every((line, index) => index === 0 || line > mapped[index - 1]) &&
   mapped[0] >= tableStart && mapped[mapped.length - 1] <= tableEnd + 1);
+
+/* ------------------------------------------------------------------ *
+ * 7. The fraction has to describe the note, not the web page
+ * ------------------------------------------------------------------ */
+const noteWithFrontmatter = [
+  "---",
+  "source: https://a.example/x",
+  "saved: 2026-10-26T00:00:00.000Z",
+  "type: mobile-webviewer-note",
+  "---",
+  "",
+  "# 标题",
+  "",
+  "https://a.example/x",
+  "",
+  "正文第一段，用来占位。",
+  ""
+].join("\n");
+const plainMetrics = exportCtx.markdownRenderMetrics(noteWithFrontmatter, 0);
+const imageMetrics = exportCtx.markdownRenderMetrics(noteWithFrontmatter, 30);
+check("the property panel counts toward the note's height",
+  plainMetrics.weights.slice(0, 4).reduce((sum, w) => sum + w, 0) >= 4);
+const withImage = ["---", "a: b", "---", "", "# 标题", "", "![图](https://a.example/x.png)", "", "正文第一段，用来占位。"].join("\n");
+const withImageSmall = exportCtx.markdownRenderMetrics(withImage, 4);
+const withImageTall = exportCtx.markdownRenderMetrics(withImage, 40);
+check("an image line scales with the image's real height",
+  withImageTall.weights[6] === 40 && withImageSmall.weights[6] === 4);
+const bodyFraction = exportCtx.inkLineToFraction(8, withImageSmall);
+const bodyFractionWithImages = exportCtx.inkLineToFraction(8, withImageTall);
+check("the same line sits lower once a taller image is above it",
+  bodyFractionWithImages > bodyFraction && bodyFractionWithImages < 1);
+check("a line never maps outside the document",
+  exportCtx.inkLineToFraction(-5, plainMetrics) === 0 &&
+  exportCtx.inkLineToFraction(999, plainMetrics) === 1);
+
+// The end-to-end promise: a stroke drawn beside the note's own body text ends up
+// at a fraction that points at that same text in the note.
+const shifted = {
+  version: 2,
+  sourcePath: pageFile.path,
+  strokes: [inkFor(0.170)],
+  markdownBlocks: [],
+  elementGroups: [],
+  webEdits: []
+};
+exportCtx.anchorInkToMarkdownLines(shifted, writtenMarkdown, pageBlocks, 9);
+const shiftedCorner = shifted.strokes[0].layout.corners.topLeft;
+const mdMetrics = exportCtx.markdownRenderMetrics(writtenMarkdown, 9);
+const landedLine = Math.floor(shiftedCorner.line);
+const lineStart = mdMetrics.starts[landedLine] / mdMetrics.total;
+const lineEnd = (mdMetrics.starts[landedLine] + mdMetrics.weights[landedLine]) / mdMetrics.total;
+check("the rewritten fraction falls inside the line it was anchored to",
+  shiftedCorner.y >= lineStart - 1e-9 && shiftedCorner.y <= lineEnd + 1e-9);
+check("the property panel is compensated: body ink sits below the top of the note",
+  shiftedCorner.y > exportCtx.inkLineToFraction(0, mdMetrics) + 0.05);
 
 check("the line map never runs backwards",
   Array.from(reversed.entries()).every((entry, index, list) =>

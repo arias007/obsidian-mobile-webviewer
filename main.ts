@@ -7305,6 +7305,20 @@ interface InkTextBlock {
   text: string;
 }
 
+interface InkVAnchor {
+  y: number;
+  char: number;
+}
+
+/** How tall each Markdown line is expected to render, in text-line units. */
+interface InkRenderMetrics {
+  starts: number[];
+  weights: number[];
+  total: number;
+  totalPx: number;
+  imageCount: number;
+}
+
 interface InkMarkdownBlock {
   start: number;
   end: number;
@@ -19301,6 +19315,8 @@ export default class MobileWebviewerPlugin extends Plugin {
       .replace(/[\s\u00a0]+/g, "")
       .replace(/[#>\u002a_\u0060~|\-–—+]/g, "")
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      // The file escapes brackets the page renders plain (`\[...\]`).
+      .replace(/\\/g, "")
       .replace(/[()[\]{}\u0022\u0027“”‘’·、，。；：！？,.;:!?]/g, "")
       .trim();
   }
@@ -19528,6 +19544,107 @@ export default class MobileWebviewerPlugin extends Plugin {
     return blocks;
   }
 
+  /**
+   * How tall the finished note will actually be, line by line.
+   *
+   * Ink is stored as a fraction of the document, and NoteDraw only consults the
+   * text anchor when the note's own words change or the lane reflows — every
+   * ordinary paint projects `corner.y` onto the current document height. That
+   * fraction therefore has to describe the *note*, not the page: the note opens
+   * with a property panel, a title and a URL, and its images take the room they
+   * need. Carrying the page's fraction over unchanged is what pushed the ink
+   * above the text it was drawn beside.
+   */
+  markdownRenderMetrics(markdown: string, imageWeight = 9): InkRenderMetrics {
+    const lines = String(markdown ?? "").split("\n");
+    const weights: number[] = [];
+    let inFront = lines[0]?.trim() === "---";
+    let inFence = false;
+    let imageCount = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      const trimmed = lines[index].trim();
+      if (inFront) {
+        // The property panel renders one compact row per entry.
+        weights.push(1.05);
+        if (index > 0 && trimmed === "---") inFront = false;
+        continue;
+      }
+      if (/^\u0060{3}|^~~~/.test(trimmed)) { inFence = !inFence; weights.push(1); continue; }
+      if (inFence) { weights.push(1); continue; }
+      if (!trimmed) { weights.push(0.55); continue; }
+      if (/^!\[[^\]]*\]\(/.test(trimmed)) {
+        weights.push(Math.max(2, imageWeight));
+        imageCount += 1;
+        continue;
+      }
+      const heading = /^(#{1,6})\s+/.exec(trimmed);
+      if (heading) {
+        weights.push([2.7, 2.2, 1.9, 1.7, 1.6, 1.5][Math.min(5, heading[1].length - 1)]);
+        continue;
+      }
+      const bullet = /^([-*+]|\d+[.)])\s+/.test(trimmed);
+      // About 34 characters fit on one visual line of a phone-width note.
+      const visualLines = Math.max(1, Math.ceil((trimmed.length + (bullet ? 2 : 0)) / 34));
+      weights.push(visualLines + (bullet ? 0.2 : 0));
+    }
+    const starts: number[] = [];
+    let running = 0;
+    for (const weight of weights) {
+      starts.push(running);
+      running += weight;
+    }
+    return { starts, weights, total: Math.max(1, running), totalPx: Math.max(1, running) * 26, imageCount };
+  }
+
+  /** Where a line sits in the finished note, as a document fraction. */
+  inkLineToFraction(line: number, metrics: InkRenderMetrics): number {
+    if (!metrics.weights.length) return 0;
+    const index = Math.max(0, Math.min(metrics.weights.length - 1, Math.floor(line)));
+    const fraction = Math.max(0, Math.min(1, line - index));
+    const offset = metrics.starts[index] + fraction * metrics.weights[index];
+    return Math.max(0, Math.min(1, offset / Math.max(1e-6, metrics.total)));
+  }
+
+  /**
+   * How much of the page's height its images take, and how many there are.
+   *
+   * The page knows the real height of every image it has already laid out; the
+   * note can only be guessed at. Reading the page is what keeps the guess from
+   * being a constant — two tall screenshots and one small icon are not the same
+   * thing, and getting this wrong shifts every stroke below them.
+   */
+  pageImageProfile(embed?: HTMLElement): { ratio: number; count: number } {
+    if (!embed?.isConnected) return { ratio: 0, count: 0 };
+    const root = embed.querySelector<HTMLElement>(".mwv-note-content") ??
+      embed.querySelector<HTMLElement>(".mwv-reader-panel .mwv-note-body") ??
+      embed.querySelector<HTMLElement>(".mwv-reader-panel") ??
+      embed.querySelector<HTMLElement>(".mwv-note-browser-document");
+    if (!root) return { ratio: 0, count: 0 };
+    let scroller: HTMLElement = root;
+    for (let node: HTMLElement | null = root; node; node = node.parentElement) {
+      if (node.clientHeight > 0 && node.scrollHeight > node.clientHeight + 8) {
+        scroller = node;
+        break;
+      }
+    }
+    const total = Math.max(scroller.scrollHeight, scroller.clientHeight, root.offsetHeight, 1);
+    const seen = new Set<Element>();
+    let height = 0;
+    let count = 0;
+    for (const node of Array.from(root.querySelectorAll<HTMLElement>("img, figure, video"))) {
+      if (node.closest(".mwv-doodle-layer, .notedraw-canvas, .notedraw-toolbar")) continue;
+      // A figure wrapping an image would otherwise count the same pixels twice.
+      const holder = node.closest("figure") ?? node;
+      if (seen.has(holder)) continue;
+      seen.add(holder);
+      const rect = node.getBoundingClientRect();
+      if (rect.height <= 2) continue;
+      height += rect.height;
+      count += 1;
+    }
+    return { ratio: Math.min(0.8, height / total), count };
+  }
+
   /** What kind of Markdown block a line starts, for grouping purposes. */
   markdownLineKind(trimmed: string): string {
     if (/^#{1,6}\s+/.test(trimmed)) return "heading";
@@ -19611,11 +19728,13 @@ export default class MobileWebviewerPlugin extends Plugin {
    * then projects that line through its own rendered anchors, which is the same
    * mechanism that keeps ink on a paragraph when a note is re-laid out.
    */
-  anchorInkToMarkdownLines(data: NoteDrawDrawingDataLike, markdown: string, pageBlocks: InkTextBlock[]): number {
+  anchorInkToMarkdownLines(data: NoteDrawDrawingDataLike, markdown: string, pageBlocks: InkTextBlock[], imageWeight = 9): number {
     const strokes = Array.isArray(data?.strokes) ? data.strokes : [];
     if (!strokes.length || !pageBlocks.length) return 0;
     const markdownBlocks = this.markdownLineBlocks(markdown);
     if (!markdownBlocks.length) return 0;
+    // The note's own geometry: where each line will really sit once rendered.
+    const metrics = this.markdownRenderMetrics(markdown, imageWeight);
     const alignment = this.alignWebBlocksToMarkdown(pageBlocks, markdownBlocks);
     if (!alignment.size) return 0;
     const markdownLines = markdown.split("\n");
@@ -19634,6 +19753,65 @@ export default class MobileWebviewerPlugin extends Plugin {
     const totalChars = cumulative[cumulative.length - 1];
     if (!totalChars) return 0;
 
+    // Anchor each page block to where its own words start in the file.
+    //
+    // A block-to-block alignment is only as good as its cursor: one short,
+    // repeated line inside a long table can make every later block match too
+    // early, and a single mis-step then pulls all the ink above its text — the
+    // "everything drifted up" report. Searching the file for each block's own
+    // opening words is independent per block, so one bad match cannot cascade.
+    const fullNormalized = lineChars.join("");
+    const hits: InkVAnchor[] = [];
+    let searchFrom = 0;
+    for (const block of pageBlocks) {
+      const target = this.normalizeInkText(block.text);
+      if (target.length < 5) continue;
+      // Almost no look-back: repeated table rows are separate lines of the
+      // file, so a block that matches again should advance, not re-bind.
+      const from = Math.max(0, searchFrom - Math.floor(totalChars * 0.01));
+      // Every occurrence, then the earliest one at or after the previous block.
+      // Searching once from a moving cursor is what made this drift: the cursor
+      // was advanced by the block's whole length, so when the page block carries
+      // more text than the file keeps (a caption, a CMS note), the cursor ran
+      // past the next block and every later block fell back to interpolation —
+      // which lands above its text, cumulatively.
+      let found = -1;
+      for (const length of [24, 16, 11, 7, 5]) {
+        if (target.length < length) continue;
+        const needle = target.slice(0, length);
+        const positions: number[] = [];
+        let cursor = fullNormalized.indexOf(needle, from);
+        while (cursor >= 0 && positions.length < 40) {
+          positions.push(cursor);
+          cursor = fullNormalized.indexOf(needle, cursor + 1);
+        }
+        if (!positions.length) continue;
+        const ahead = positions.find((position) => position >= searchFrom);
+        found = ahead === undefined ? positions[positions.length - 1] : ahead;
+        break;
+      }
+      if (found < 0) continue;
+      // Both ends of the block, so its own text is spread over its own height
+      // instead of the whole slice being pinned to its first word.
+      // Spread the block over the text it actually carries. A table row is a
+      // dozen characters while a whole abbreviations table is thousands; capping
+      // this is what squeezed the page's table into the first two lines.
+      const spread = target.length;
+      hits.push({ y: block.top, char: found });
+      hits.push({ y: block.top + block.height, char: found + spread });
+      searchFrom = found + 1;
+    }
+    if (hits.length >= Math.max(3, Math.floor(pageBlocks.length * 0.4))) {
+      // Text search won: use it, plus the end of the document for the tail.
+      hits.sort((left, right) => left.y - right.y || left.char - right.char);
+      for (let index = 1; index < hits.length; index += 1) {
+        if (hits[index].char < hits[index - 1].char) hits[index].char = hits[index - 1].char;
+      }
+      const lastBlock = pageBlocks[pageBlocks.length - 1];
+      if (lastBlock) hits.push({ y: lastBlock.top + lastBlock.height, char: totalChars });
+      Object.defineProperty(data as object, "_inkDebug", { configurable: true, enumerable: false, value: { path: "hits", hits: hits.map((h) => [Math.round(h.y * 10000) / 10000, Math.round(h.char)]) } });
+      return this.applyInkLineAnchors(strokes, hits, totalChars, lineChars, cumulative, markdownLines, metrics);
+    }
     // Blocks that share one Markdown block split its characters by rank, so a
     // sixty-row table gives each row its own slice instead of the whole range.
     const groups = new Map<number, number[]>();
@@ -19642,7 +19820,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       list.push(pageIndex);
       groups.set(markdownIndex, list);
     }
-    const anchors: Array<{ y: number; char: number }> = [];
+    const anchors: InkVAnchor[] = [];
     for (const [markdownIndex, pageIndexes] of Array.from(groups.entries())) {
       const markdownBlock = markdownBlocks[markdownIndex];
       if (!markdownBlock) continue;
@@ -19663,6 +19841,14 @@ export default class MobileWebviewerPlugin extends Plugin {
     }
     if (!anchors.length) return 0;
     anchors.sort((left, right) => left.y - right.y || left.char - right.char);
+    return this.applyInkLineAnchors(strokes, anchors, totalChars, lineChars, cumulative, markdownLines, metrics);
+  }
+
+  /**
+   * Turn a monotone "page row -> character offset" map into a line anchor on
+   * every stroke, and report how many were anchored.
+   */
+  applyInkLineAnchors(strokes: unknown[], anchors: InkVAnchor[], totalChars: number, lineChars: string[], cumulative: number[], markdownLines: string[], metrics?: InkRenderMetrics): number {
     // The map must be non-decreasing: a lower row of the page can never be an
     // earlier passage of the note.
     for (let index = 1; index < anchors.length; index += 1) {
@@ -19721,29 +19907,64 @@ export default class MobileWebviewerPlugin extends Plugin {
         .filter((value) => Number.isFinite(value));
       if (!ys.length) continue;
       const inkCenter = (Math.min(...ys) + Math.max(...ys)) / 2;
-      const mapped = charAt(inkCenter);
-      if (mapped === null) continue;
-      const line = Math.min(lastLine, Math.max(0, lineAt(mapped)));
+      if (charAt(inkCenter) === null) continue;
+      // Each corner is mapped on its own row, so a stroke keeps its height: the
+      // top edge lands on the line it starts at and the bottom edge on the line
+      // it ends at, instead of the whole stroke collapsing onto one row.
+      const mappedCorners: number[] = [];
       for (const corner of Object.values(corners)) {
         if (!corner || typeof corner !== "object") continue;
+        const mapped = charAt(Number(corner.y));
+        if (mapped === null) continue;
+        const line = Math.min(lastLine, Math.max(0, lineAt(mapped)));
         corner.line = line;
         // NoteDraw only trusts a line anchor at 0.75 or above; this one comes
         // from matched text in the same document, so it is as good as it gets.
         corner.lineConfidence = 0.95;
+        if (metrics) corner.y = this.inkLineToFraction(line, metrics);
+        mappedCorners.push(Number(corner.y));
+      }
+      if (!mappedCorners.length) continue;
+      const cornerYs = Object.values(corners)
+        .map((corner) => Number(corner?.y))
+        .filter((value) => Number.isFinite(value));
+      const box = layout?.box as Record<string, unknown> | undefined;
+      if (metrics && box && cornerYs.length) {
+        box.y = Math.min(...cornerYs);
+        box.height = Math.max(0.001, Math.max(...cornerYs) - Math.min(...cornerYs));
       }
       if (Array.isArray(stroke.points)) {
         for (const point of stroke.points) {
           if (!point || typeof point !== "object") continue;
-          const anchor = (point as Record<string, unknown>).anchor as Record<string, unknown> | undefined;
-          if (!anchor || typeof anchor !== "object") continue;
-          anchor.line = line;
-          anchor.lineConfidence = 0.95;
+          const record = point as Record<string, unknown>;
+          const anchor = record.anchor as Record<string, unknown> | undefined;
+          const sourceY = anchor && Number.isFinite(Number(anchor.y)) ? Number(anchor.y) : Number(record.y);
+          const mapped = charAt(sourceY);
+          if (mapped === null) continue;
+          const line = Math.min(lastLine, Math.max(0, lineAt(mapped)));
+          const fraction = metrics ? this.inkLineToFraction(line, metrics) : sourceY;
+          record.y = fraction;
+          if (anchor && typeof anchor === "object") {
+            anchor.line = line;
+            anchor.lineConfidence = 0.95;
+            anchor.y = fraction;
+            if (metrics) anchor.docY = fraction * metrics.totalPx;
+          }
         }
+      }
+      const frame = layout?.sourceFrame as Record<string, unknown> | undefined;
+      if (metrics && frame) {
+        // Keep the frame the ink claims consistent with the coordinates just
+        // written; NoteDraw measures ink against its own document height, and a
+        // frame describing the web page is what made it look mis-scaled.
+        frame.documentHeight = metrics.totalPx;
+        frame.viewportHeight = Math.min(metrics.totalPx, Math.max(1, Number(frame.viewportHeight) || metrics.totalPx));
       }
       anchored += 1;
     }
     return anchored;
   }
+
 
   /**
    * Put that ink on the saved note. Every anchor has to be re-pointed at the
@@ -19769,6 +19990,16 @@ export default class MobileWebviewerPlugin extends Plugin {
     carried.sourcePath = markdownPath;
     carried.updatedAt = new Date().toISOString();
     carried.strokes = (carried.strokes ?? []).map((item) => this.rebaseLegacyNoteDrawStroke(item, markdownPath));
+    // Ask NoteDraw for one corrective pass on this note.
+    //
+    // NoteDraw projects `corner.y` onto the document height on every ordinary
+    // paint and only consults the line anchor after the note's own words change
+    // (`noteTextChanged` needs two non-empty, different hashes). A deliberately
+    // stale hash is therefore exactly one re-anchor: on the next open the ink is
+    // projected through NoteDraw's *own* rendered line positions, measured in the
+    // real note, and then stored as absolute geometry. That beats any estimate
+    // this side can make about how tall a property panel or an image will be.
+    carried.sourceTextHash = "1:1";
     // Pin the ink to the text it was drawn beside before it is written, so the
     // note renders it where the page showed it instead of at a pixel row that
     // means something else in a different layout.
@@ -19778,9 +20009,20 @@ export default class MobileWebviewerPlugin extends Plugin {
         const frame = (first?.layout as Record<string, unknown> | undefined)?.sourceFrame as Record<string, unknown> | undefined;
         const hint = Number(frame?.documentHeight) || 0;
         const pageBlocks = this.webPageTextBlocks(embed, hint);
-        const anchored = this.anchorInkToMarkdownLines(carried, markdown, pageBlocks);
+        // How tall one image should be in the note, solved from the page: if the
+        // page's images take `ratio` of its height, the note's images must take
+        // the same share of the note's text height.
+        const profile = this.pageImageProfile(embed);
+        const probe = this.markdownRenderMetrics(markdown, 1);
+        let imageWeight = 9;
+        if (profile.ratio > 0.02 && probe.imageCount > 0) {
+          const textUnits = Math.max(1, probe.total - probe.imageCount);
+          const ratio = Math.min(0.8, profile.ratio);
+          imageWeight = Math.max(2, Math.min(120, (ratio * textUnits) / (probe.imageCount * (1 - ratio))));
+        }
+        const anchored = this.anchorInkToMarkdownLines(carried, markdown, pageBlocks, imageWeight);
         if (anchored > 0) {
-          console.info(`[mobile-webviewer] anchored ${anchored}/${carried.strokes.length} strokes to Markdown lines`);
+          console.info(`[mobile-webviewer] anchored ${anchored}/${carried.strokes.length} strokes (image weight ${Math.round(imageWeight)})`);
         }
       } catch (error) {
         console.warn("[mobile-webviewer] NoteDraw ink line anchoring skipped", error);
