@@ -13997,6 +13997,10 @@ export default class MobileWebviewerPlugin extends Plugin {
   installNoteDrawTwoFingerScroll(): void {
     const doc = appDocument();
     const win = doc.defaultView;
+    // Scrolling a page with two fingers must not draw. Canvas hit-testing is
+    // switched off through a stylesheet rule (see styles.css) instead of inline
+    // styles, so the gesture is muted and restored with one class toggle.
+    const mutedGestureClass = "mwv-canvas-gesture-muted";
     let scroller: HTMLElement | null = null;
     let surface: HTMLElement | null = null;
     let mutedCanvases: HTMLElement[] = [];
@@ -14013,7 +14017,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       }
     };
     const restoreCanvases = () => {
-      for (const canvas of mutedCanvases) canvas.style.removeProperty("pointer-events");
+      for (const canvas of mutedCanvases) canvas.removeClass(mutedGestureClass);
       mutedCanvases = [];
     };
     const reset = () => {
@@ -14074,7 +14078,7 @@ export default class MobileWebviewerPlugin extends Plugin {
       for (const canvas of Array.from(host.querySelectorAll<HTMLElement>(".notedraw-canvas, .notedraw-static-canvas"))) {
         // Rendering is unaffected; only the gesture is taken away, so a second
         // finger cannot paint while the page is being panned.
-        canvas.style.setProperty("pointer-events", "none", "important");
+        canvas.addClass(mutedGestureClass);
         mutedCanvases.push(canvas);
       }
     };

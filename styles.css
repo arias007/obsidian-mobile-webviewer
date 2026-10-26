@@ -4490,3 +4490,8 @@
     "tabstrip actions"
     "address address" !important;
 }
+
+/* Two-finger pan: mute canvas hit-testing without inline styles. */
+.mwv-canvas-gesture-muted {
+  pointer-events: none !important;
+}

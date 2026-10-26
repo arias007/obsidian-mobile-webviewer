@@ -428,14 +428,14 @@ scroller.scrollTop = 200;
 fire("touchstart", [200, 300]);
 fire("touchmove", [180, 280]);
 check("a pan cancels the drawing gesture already in flight", cancelled.includes(7));
-check("the canvas is muted while panning", canvas.style.pointerEvents === "none");
+check("the canvas is muted while panning", canvas.classList.contains("mwv-canvas-gesture-muted"));
 // touchend still reports the fingers that remain: none.
 for (const handler of listeners.get("touchend") ?? []) {
   const event = new window.Event("touchend", { bubbles: true });
   Object.defineProperty(event, "touches", { value: [] });
   handler(event);
 }
-check("the canvas is restored when the pan ends", canvas.style.pointerEvents === "");
+check("the canvas is restored when the pan ends", !canvas.classList.contains("mwv-canvas-gesture-muted"));
 
 /* ------------------------------------------------------------------ *
  * 3. Markdown export keeps the page's shape  (存 MD 原样)
