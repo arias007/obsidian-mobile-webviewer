@@ -1,5 +1,8 @@
 # Mobile Webviewer
 
+<!-- hire-line -->
+> **Need this adapted, extended, or built from scratch?** I wrote this plugin — [custom work available](https://github.com/arias007/arias007#hire-me). Working proof first, payment after.
+
 Mobile Webviewer is a lightweight, mobile-first web viewer for Obsidian.
 
 It now has two clearly named modes:
